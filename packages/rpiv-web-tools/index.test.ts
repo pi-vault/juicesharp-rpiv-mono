@@ -265,6 +265,68 @@ describe("web_fetch.execute — happy path", () => {
 			?.execute?.("tc", { url: "https://x.com" }, undefined as never, undefined as never, createMockCtx());
 		expect((r?.details as { contentLength: number }).contentLength).toBe(100);
 	});
+
+	it("falls back to defaults when config file is malformed JSON", async () => {
+		mkdirSync(dirname(CONFIG_PATH), { recursive: true });
+		writeFileSync(CONFIG_PATH, "not valid json {", "utf-8");
+		stubFetch([
+			{
+				match: () => true,
+				response: () => new Response("<p>hi</p>", { status: 200, headers: { "content-type": "text/html" } }),
+			},
+		]);
+		const { captured } = registerAndCapture();
+		// If loadConfig threw, registration would have crashed. Surviving registration
+		// + executing without "BRAVE_SEARCH_API_KEY is not set" trip means we hit the
+		// catch and returned {}.
+		const r = await captured.tools
+			.get("web_fetch")
+			?.execute?.("tc", { url: "https://x.com" }, undefined as never, undefined as never, createMockCtx());
+		expect((r?.content[0] as { text: string }).text).toContain("hi");
+	});
+
+	it("decodes numeric HTML entities in text/html bodies", async () => {
+		stubFetch([
+			{
+				match: () => true,
+				response: () =>
+					new Response("<p>&#65;&#66;&#67;</p>", { status: 200, headers: { "content-type": "text/html" } }),
+			},
+		]);
+		const { captured } = registerAndCapture();
+		const r = await captured.tools
+			.get("web_fetch")
+			?.execute?.("tc", { url: "https://x.com" }, undefined as never, undefined as never, createMockCtx());
+		expect((r?.content[0] as { text: string }).text).toContain("ABC");
+	});
+
+	it("spills full body to temp file and appends truncation footer when truncated", async () => {
+		const fullBody = Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`).join("\n");
+		stubFetch([
+			{
+				match: () => true,
+				response: () => new Response(fullBody, { status: 200, headers: { "content-type": "text/plain" } }),
+			},
+		]);
+		const { captured } = registerAndCapture();
+		const r = await captured.tools
+			.get("web_fetch")
+			?.execute?.("tc", { url: "https://big.com" }, undefined as never, undefined as never, createMockCtx());
+
+		const text = (r?.content[0] as { text: string }).text;
+		expect(text).toContain("Content truncated:");
+		expect(text).toContain("Full content saved to:");
+
+		const details = r?.details as {
+			truncation?: { truncated: boolean; totalLines: number };
+			fullOutputPath?: string;
+		};
+		expect(details.truncation?.truncated).toBe(true);
+		expect(details.truncation?.totalLines).toBe(3000);
+		expect(details.fullOutputPath).toBeDefined();
+		const spilled = readFileSync(details.fullOutputPath!, "utf-8");
+		expect(spilled).toBe(fullBody);
+	});
 });
 
 describe("/web-search-config command", () => {
