@@ -34,13 +34,22 @@ const visible = headings.filter((h) => h.depth >= 2 && h.depth <= 3);
 		gap: var(--space-3);
 	}
 
+	/* Local override: the global .kicker is text-distant by default; here we
+	   lift it to sage so it reads as a distinct label above the link list
+	   (the list itself sits at text-quiet — making the kicker the dimmest
+	   thing collapses the hierarchy, which is what the original TOC did). */
+	.docs-toc__nav .kicker {
+		color: var(--sage);
+		margin-bottom: var(--space-2);
+	}
+
 	.docs-toc__list {
 		list-style: none;
 		padding: 0;
 		margin: 0;
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-2);
+		gap: var(--space-1);
 	}
 
 	.docs-toc__item {
@@ -48,23 +57,32 @@ const visible = headings.filter((h) => h.depth >= 2 && h.depth <= 3);
 	}
 
 	.docs-toc__item--indent {
-		padding-left: var(--space-4);
+		padding-left: var(--space-3);
 	}
 
+	/* Link — quiet by default, washi + sage hairline when active.
+	   border-inline-start reserves space at rest so the active state doesn't
+	   shift the row; transparent → sage on activation, no layout jump. */
 	.docs-toc__link {
+		display: block;
 		font-family: var(--font-mono);
 		font-size: var(--type-tiny);
 		line-height: var(--leading-relaxed);
-		color: var(--text-distant);
+		color: var(--text-quiet);
 		text-decoration: none;
 		border-bottom: none;
-		transition: color var(--dur-ink) var(--ease-ink);
+		border-inline-start: 1px solid transparent;
+		padding-inline-start: var(--space-3);
+		transition:
+			color var(--dur-quick) var(--ease-ink),
+			border-color var(--dur-quick) var(--ease-ink);
 	}
 	.docs-toc__link:hover {
 		color: var(--sage);
 	}
 	.docs-toc__link.is-active {
 		color: var(--washi);
+		border-inline-start-color: var(--sage);
 	}
 </style>
 
