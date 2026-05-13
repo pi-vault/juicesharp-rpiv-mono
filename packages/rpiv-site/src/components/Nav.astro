@@ -276,23 +276,14 @@ const isHome = Astro.url.pathname === "/";
 			gap: var(--space-3);
 		}
 
+		/* On mobile the utility links (github · docs · blog) overflow the
+		   brand-group flex row by ~127px. They're available in the footer,
+		   so hide them entirely rather than merging via display:contents. */
 		.nav__utility {
-			display: contents;
-		}
-		/* On mobile, github carries the hairline divider (replaces the
-		   version's divider which is hidden at this breakpoint). */
-		.nav__github {
-			padding-left: var(--space-2);
-			border-left: 1px solid var(--rule);
-		}
-		.nav__dot {
-			/* middot stays inline between github and blog in the brand-group flex */
+			display: none;
 		}
 
-		.nav__version {
-			border-left: none;
-			padding-left: 0;
-		}
+		.nav__version { display: none; }
 
 		.nav__counter { display: inline-flex; }
 
@@ -325,13 +316,6 @@ const isHome = Astro.url.pathname === "/";
 
 	/* ── Sub-480px ── */
 	@media (max-width: 480px) {
-		.nav__version { display: none; }
-
-		.nav__github {
-			border-left: none;
-			padding-left: 0;
-		}
-
 		.nav__links {
 			grid-template-columns: repeat(3, 1fr);
 			row-gap: var(--space-3);

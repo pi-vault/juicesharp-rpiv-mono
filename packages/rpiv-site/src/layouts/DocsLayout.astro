@@ -111,9 +111,13 @@ const currentPath = Astro.url.pathname;
 		border-color: var(--rule-strong);
 	}
 
-	/* Mobile: sidebar becomes a drawer */
+	/* Mobile: sidebar becomes a drawer.
+	   Both selectors needed — .has-toc has (0,2,0) specificity which
+	   would win over a bare .docs-layout (0,1,0) inside this media query,
+	   keeping the 3-column grid active on narrow screens. */
 	@media (max-width: 720px) {
-		.docs-layout {
+		.docs-layout,
+		.docs-layout.has-toc {
 			grid-template-columns: 1fr;
 			max-width: 100%;
 			padding: 0 var(--space-4);
@@ -153,11 +157,7 @@ const currentPath = Astro.url.pathname;
 		}
 
 		.docs-toc {
-			border-left: none;
-			padding-left: 0;
-			margin-left: 0;
-			position: static;
-			max-height: none;
+			display: none;
 		}
 	}
 </style>
