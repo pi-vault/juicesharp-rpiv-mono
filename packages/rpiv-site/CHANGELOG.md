@@ -7,9 +7,16 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Structured reference pages for skills at `/docs/reference/skills/<slug>` with numbered editorial sections, input/output tables, and key-step rationales.
+- Blog post on the discover skill's dialectic A/B study.
+
+### Changed
+- `/docs` pages use unified typography tokens and consistent kicker styles across all surfaces.
+- Mobile navigation restructured as a three-row grid (brand, utility links, section links) so `/docs` is reachable from phones.
+
 ### Fixed
-- Mobile header nav at ≤720px now lays out as three full-width rows (masthead, utility, section links). The utility cluster (`github · docs · blog`) previously used `display: contents` to merge into the brand row, which collided with the inner grid's auto-flow and rendered the links as a stacked block with stray middots and hairlines.
-- Mobile `/docs` layout no longer keeps the 3-column desktop grid alive on articles that have a table of contents. The media-query override now matches both `.docs-layout` and `.docs-layout.has-toc`, and the right-rail TOC is hidden at ≤720px instead of being shoved beneath the article body.
+- Mobile `/docs` layout no longer leaks the 3-column desktop grid on articles with a table of contents.
 
 ## [1.5.2] - 2026-05-13
 

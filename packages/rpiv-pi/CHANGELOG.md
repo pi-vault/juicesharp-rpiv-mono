@@ -7,6 +7,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `discover` skill frames shape-tier questions as explicit tradeoff tensions with three scope-drift guardrails and a new Suggested Follow-ups section in the FRD output.
+
 ## [1.5.2] - 2026-05-13
 
 ## [1.5.1] - 2026-05-13
