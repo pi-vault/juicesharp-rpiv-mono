@@ -7,6 +7,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- `advisor` now uses Pi's resolved session context after a `session_compact`, so escalations no longer replay stale pre-compaction history.
+
 ## [1.6.0] - 2026-05-14
 
 ## [1.5.2] - 2026-05-13
