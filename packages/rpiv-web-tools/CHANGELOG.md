@@ -5,7 +5,7 @@ All notable changes to `@juicesharp/rpiv-web-tools` are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.8.0] - 2026-05-16
 
 ### Added
 - Multi-provider web search with support for Tavily, Exa, Jina, and Firecrawl alongside Brave and Serper.
