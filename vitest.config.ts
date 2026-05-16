@@ -18,6 +18,12 @@ export default defineConfig({
 			provider: "v8",
 			reporter: ["text", "html", "lcov"],
 			include: ["packages/*/**/*.ts"],
+			thresholds: {
+				statements: 94,
+				branches: 87,
+				functions: 92,
+				lines: 95,
+			},
 			exclude: [
 				"**/node_modules/**",
 				"**/.pi/**",
@@ -25,8 +31,10 @@ export default defineConfig({
 				"**/thoughts/**",
 				"**/docs/**",
 				"**/*.test.ts",
+				"**/*.d.ts",
 				"**/index.ts",
 				"packages/test-utils/**",
+				"packages/rpiv-site/**",
 			],
 		},
 	},
