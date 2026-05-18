@@ -14,6 +14,7 @@ import {
 	registerAdvisorBeforeAgentStart,
 	registerAdvisorCommand,
 	registerModelSelectHandler,
+	registerThinkingLevelSelectHandler,
 	restoreAdvisorState,
 	setAdvisorModel,
 	setDisabledForModels,
@@ -414,5 +415,209 @@ describe("/advisor — blocked executor notification", () => {
 		const [msg, severity] = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls.at(-1) ?? [];
 		expect(msg).toBe("Advisor: anthropic:opus");
 		expect(severity).toBe("info");
+	});
+});
+
+describe("registerAdvisorBeforeAgentStart — effort-aware blocklist", () => {
+	it("strips advisor when effort at threshold", async () => {
+		setAdvisorModel(modelA);
+		setDisabledForModels([{ model: "anthropic:sonnet", minEffort: "high" }]);
+		const { pi, captured } = createMockPi();
+		vi.mocked(pi.getThinkingLevel).mockReturnValue("high");
+		pi.setActiveTools([ADVISOR_TOOL_NAME]);
+		vi.mocked(pi.setActiveTools).mockClear();
+		registerAdvisorBeforeAgentStart(pi);
+		const handler = captured.events.get("before_agent_start")?.[0];
+		const ctx = createMockCtx({ model: modelBlocked });
+		await handler?.({} as never, ctx as never);
+		expect(pi.setActiveTools).toHaveBeenLastCalledWith([]);
+	});
+
+	it("re-adds advisor when effort drops below threshold", async () => {
+		setAdvisorModel(modelA);
+		setDisabledForModels([{ model: "anthropic:sonnet", minEffort: "high" }]);
+		const { pi, captured } = createMockPi();
+		vi.mocked(pi.getThinkingLevel).mockReturnValue("low");
+		registerAdvisorBeforeAgentStart(pi);
+		const handler = captured.events.get("before_agent_start")?.[0];
+		const ctx = createMockCtx({ model: modelBlocked });
+		await handler?.({} as never, ctx as never);
+		expect(pi.setActiveTools).toHaveBeenCalledWith(expect.arrayContaining([ADVISOR_TOOL_NAME]));
+	});
+
+	it("no-ops when effort at threshold but model is not blocked", async () => {
+		setAdvisorModel(modelA);
+		setDisabledForModels([{ model: "anthropic:sonnet", minEffort: "high" }]);
+		const { pi, captured } = createMockPi();
+		vi.mocked(pi.getThinkingLevel).mockReturnValue("high");
+		pi.setActiveTools([ADVISOR_TOOL_NAME]);
+		vi.mocked(pi.setActiveTools).mockClear();
+		registerAdvisorBeforeAgentStart(pi);
+		const handler = captured.events.get("before_agent_start")?.[0];
+		const ctx = createMockCtx({ model: modelA });
+		await handler?.({} as never, ctx as never);
+		expect(pi.setActiveTools).not.toHaveBeenCalled();
+	});
+
+	it("does not block when thinking level is off", async () => {
+		setAdvisorModel(modelA);
+		setDisabledForModels([{ model: "anthropic:sonnet", minEffort: "high" }]);
+		const { pi, captured } = createMockPi();
+		vi.mocked(pi.getThinkingLevel).mockReturnValue("off");
+		pi.setActiveTools([ADVISOR_TOOL_NAME]);
+		vi.mocked(pi.setActiveTools).mockClear();
+		registerAdvisorBeforeAgentStart(pi);
+		const handler = captured.events.get("before_agent_start")?.[0];
+		const ctx = createMockCtx({ model: modelBlocked });
+		await handler?.({} as never, ctx as never);
+		expect(pi.setActiveTools).not.toHaveBeenCalled();
+	});
+
+	it("blocks when effort is one above threshold", async () => {
+		setAdvisorModel(modelA);
+		setDisabledForModels([{ model: "anthropic:sonnet", minEffort: "medium" }]);
+		const { pi, captured } = createMockPi();
+		vi.mocked(pi.getThinkingLevel).mockReturnValue("high");
+		pi.setActiveTools([ADVISOR_TOOL_NAME]);
+		vi.mocked(pi.setActiveTools).mockClear();
+		registerAdvisorBeforeAgentStart(pi);
+		const handler = captured.events.get("before_agent_start")?.[0];
+		const ctx = createMockCtx({ model: modelBlocked });
+		await handler?.({} as never, ctx as never);
+		expect(pi.setActiveTools).toHaveBeenLastCalledWith([]);
+	});
+
+	it("does not block when effort is one below threshold", async () => {
+		setAdvisorModel(modelA);
+		setDisabledForModels([{ model: "anthropic:sonnet", minEffort: "high" }]);
+		const { pi, captured } = createMockPi();
+		vi.mocked(pi.getThinkingLevel).mockReturnValue("medium");
+		pi.setActiveTools([ADVISOR_TOOL_NAME]);
+		vi.mocked(pi.setActiveTools).mockClear();
+		registerAdvisorBeforeAgentStart(pi);
+		const handler = captured.events.get("before_agent_start")?.[0];
+		const ctx = createMockCtx({ model: modelBlocked });
+		await handler?.({} as never, ctx as never);
+		expect(pi.setActiveTools).not.toHaveBeenCalled();
+	});
+});
+
+describe("registerModelSelectHandler — effort-aware blocklist", () => {
+	it("strips advisor when model matches and effort at threshold", async () => {
+		setAdvisorModel(modelA);
+		setDisabledForModels([{ model: "anthropic:sonnet", minEffort: "high" }]);
+		const { pi, captured } = createMockPi();
+		vi.mocked(pi.getThinkingLevel).mockReturnValue("high");
+		pi.setActiveTools([ADVISOR_TOOL_NAME]);
+		registerModelSelectHandler(pi);
+		const handler = captured.events.get("model_select")?.[0];
+		const ctx = createMockCtx({ hasUI: true });
+		await handler?.({ model: modelBlocked, previousModel: modelA, source: "set" } as never, ctx as never);
+		expect(pi.setActiveTools).toHaveBeenLastCalledWith([]);
+	});
+
+	it("does not strip when model matches but effort is below threshold", async () => {
+		setAdvisorModel(modelA);
+		setDisabledForModels([{ model: "anthropic:sonnet", minEffort: "high" }]);
+		const { pi, captured } = createMockPi();
+		vi.mocked(pi.getThinkingLevel).mockReturnValue("low");
+		pi.setActiveTools([ADVISOR_TOOL_NAME]);
+		vi.mocked(pi.setActiveTools).mockClear();
+		registerModelSelectHandler(pi);
+		const handler = captured.events.get("model_select")?.[0];
+		const ctx = createMockCtx({ hasUI: true });
+		await handler?.({ model: modelBlocked, previousModel: modelA, source: "set" } as never, ctx as never);
+		expect(pi.setActiveTools).not.toHaveBeenCalled();
+	});
+});
+
+describe("registerThinkingLevelSelectHandler", () => {
+	it("strips advisor when effort rises above threshold", async () => {
+		setAdvisorModel(modelA);
+		setDisabledForModels([{ model: "anthropic:sonnet", minEffort: "high" }]);
+		const { pi, captured } = createMockPi();
+		pi.setActiveTools([ADVISOR_TOOL_NAME]);
+		registerThinkingLevelSelectHandler(pi);
+		const handler = captured.events.get("thinking_level_select")?.[0];
+		const ctx = createMockCtx({ hasUI: true, model: modelBlocked });
+		await handler?.({ type: "thinking_level_select", level: "high", previousLevel: "low" } as never, ctx as never);
+		expect(pi.setActiveTools).toHaveBeenLastCalledWith([]);
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("disabled for"), "info");
+	});
+
+	it("re-adds advisor when effort drops below threshold", async () => {
+		setAdvisorModel(modelA);
+		setDisabledForModels([{ model: "anthropic:sonnet", minEffort: "high" }]);
+		const { pi, captured } = createMockPi();
+		registerThinkingLevelSelectHandler(pi);
+		const handler = captured.events.get("thinking_level_select")?.[0];
+		const ctx = createMockCtx({ hasUI: true, model: modelBlocked });
+		await handler?.({ type: "thinking_level_select", level: "low", previousLevel: "high" } as never, ctx as never);
+		expect(pi.setActiveTools).toHaveBeenCalledWith(expect.arrayContaining([ADVISOR_TOOL_NAME]));
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("restored"), "info");
+	});
+
+	it("no-ops when no advisor model is configured", async () => {
+		setDisabledForModels([{ model: "anthropic:sonnet", minEffort: "high" }]);
+		const { pi, captured } = createMockPi();
+		pi.setActiveTools([ADVISOR_TOOL_NAME]);
+		vi.mocked(pi.setActiveTools).mockClear();
+		registerThinkingLevelSelectHandler(pi);
+		const handler = captured.events.get("thinking_level_select")?.[0];
+		const ctx = createMockCtx({ hasUI: true, model: modelBlocked });
+		await handler?.({ type: "thinking_level_select", level: "high", previousLevel: "low" } as never, ctx as never);
+		expect(pi.setActiveTools).not.toHaveBeenCalled();
+	});
+});
+
+describe("restoreAdvisorState — effort-aware blocklist", () => {
+	it("skips tool activation when effort at threshold", async () => {
+		const { writeFileSync, mkdirSync } = await import("node:fs");
+		const { dirname, join } = await import("node:path");
+		const configPath = join(process.env.HOME!, ".config", "rpiv-advisor", "advisor.json");
+		mkdirSync(dirname(configPath), { recursive: true });
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				modelKey: "anthropic:opus",
+				disabledForModels: [{ model: "anthropic:sonnet", minEffort: "high" }],
+			}),
+		);
+
+		const { pi } = createMockPi();
+		vi.mocked(pi.getThinkingLevel).mockReturnValue("high");
+		const ctx = createMockCtx({
+			hasUI: true,
+			model: modelBlocked,
+			models: [modelA],
+		});
+		restoreAdvisorState(ctx as never, pi);
+		expect(getAdvisorModel()).toBe(modelA);
+		expect(pi.setActiveTools).not.toHaveBeenCalled();
+	});
+
+	it("activates tool when effort below threshold", async () => {
+		const { writeFileSync, mkdirSync } = await import("node:fs");
+		const { dirname, join } = await import("node:path");
+		const configPath = join(process.env.HOME!, ".config", "rpiv-advisor", "advisor.json");
+		mkdirSync(dirname(configPath), { recursive: true });
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				modelKey: "anthropic:opus",
+				disabledForModels: [{ model: "anthropic:sonnet", minEffort: "high" }],
+			}),
+		);
+
+		const { pi } = createMockPi();
+		vi.mocked(pi.getThinkingLevel).mockReturnValue("low");
+		const ctx = createMockCtx({
+			hasUI: true,
+			model: modelBlocked,
+			models: [modelA],
+		});
+		restoreAdvisorState(ctx as never, pi);
+		expect(getAdvisorModel()).toBe(modelA);
+		expect(pi.setActiveTools).toHaveBeenCalledWith(expect.arrayContaining([ADVISOR_TOOL_NAME]));
 	});
 });

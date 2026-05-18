@@ -58,6 +58,7 @@ export function createMockPi(overrides: Partial<ExtensionAPI> = {}): MockPi {
 			captured.activeTools = [...names];
 		}),
 		getAllTools: vi.fn(() => [...captured.allTools]),
+		getThinkingLevel: vi.fn(() => "medium" as unknown as string),
 		...overrides,
 	} as unknown as ExtensionAPI;
 

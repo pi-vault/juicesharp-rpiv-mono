@@ -50,6 +50,7 @@ const OFF_VALUE = "__off__";
 // Effort levels
 const BASE_EFFORT_LEVELS: ThinkingLevel[] = ["minimal", "low", "medium", "high"];
 const XHIGH_EFFORT_LEVEL: ThinkingLevel = "xhigh";
+const EFFORT_ORDINAL: readonly ThinkingLevel[] = ["minimal", "low", "medium", "high", "xhigh"];
 const DEFAULT_EFFORT: ThinkingLevel = "high";
 const RECOMMENDED_EFFORT_SUFFIX = "  (recommended)";
 
@@ -98,7 +99,7 @@ interface AdvisorConfig {
 	modelKey?: string;
 	effort?: ThinkingLevel;
 	guidance?: GuidanceFields;
-	disabledForModels?: string[];
+	disabledForModels?: Array<string | { model: string; minEffort?: ThinkingLevel }>;
 }
 
 export function loadAdvisorConfig(): AdvisorConfig {
@@ -107,9 +108,16 @@ export function loadAdvisorConfig(): AdvisorConfig {
 
 // validateGuidanceFields is now imported from @juicesharp/rpiv-config
 
-function validateDisabledForModels(value: unknown): string[] {
+function validateDisabledForModels(value: unknown): Array<string | { model: string; minEffort?: ThinkingLevel }> {
 	if (!Array.isArray(value)) return [];
-	return value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+	return value.filter((entry): entry is string | { model: string; minEffort?: ThinkingLevel } => {
+		if (typeof entry === "string") return entry.length > 0;
+		if (typeof entry !== "object" || entry === null) return false;
+		const obj = entry as Record<string, unknown>;
+		if (typeof obj.model !== "string" || obj.model.length === 0) return false;
+		if (obj.minEffort !== undefined && !EFFORT_ORDINAL.includes(obj.minEffort as ThinkingLevel)) return false;
+		return true;
+	});
 }
 
 export function saveAdvisorConfig(key: string | undefined, effort: ThinkingLevel | undefined): boolean {
@@ -271,9 +279,9 @@ export function setAdvisorEffort(effort: ThinkingLevel | undefined): void {
 	selectedAdvisorEffort = effort;
 }
 
-let disabledForModelsCache: string[] = [];
+let disabledForModelsCache: Array<string | { model: string; minEffort?: ThinkingLevel }> = [];
 
-export function setDisabledForModels(models: string[]): void {
+export function setDisabledForModels(models: Array<string | { model: string; minEffort?: ThinkingLevel }>): void {
 	disabledForModelsCache = models;
 }
 
@@ -304,7 +312,7 @@ export function restoreAdvisorState(ctx: ExtensionContext, pi: ExtensionAPI): vo
 		setAdvisorEffort(config.effort);
 	}
 
-	if (isExecutorBlocked(ctx)) {
+	if (isExecutorBlocked(ctx, pi.getThinkingLevel())) {
 		if (ctx.hasUI) {
 			const advisorLabel = `${model.provider}:${model.id}`;
 			ctx.ui.notify(msgAdvisorRestoredInactive(advisorLabel, config.effort), "info");
@@ -503,12 +511,21 @@ export function registerAdvisorTool(pi: ExtensionAPI): void {
 
 export function registerAdvisorBeforeAgentStart(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", async (_event, ctx) => {
-		const shouldStrip = !getAdvisorModel() || isExecutorBlocked(ctx);
-		if (shouldStrip) {
+		const advisor = getAdvisorModel();
+		if (!advisor) {
 			const active = pi.getActiveTools();
 			if (active.includes(ADVISOR_TOOL_NAME)) {
 				pi.setActiveTools(active.filter((n) => n !== ADVISOR_TOOL_NAME));
 			}
+			return;
+		}
+		const blocked = isExecutorBlocked(ctx, pi.getThinkingLevel());
+		const active = pi.getActiveTools();
+		const hasTool = active.includes(ADVISOR_TOOL_NAME);
+		if (blocked && hasTool) {
+			pi.setActiveTools(active.filter((n) => n !== ADVISOR_TOOL_NAME));
+		} else if (!blocked && !hasTool) {
+			pi.setActiveTools([...active, ADVISOR_TOOL_NAME]);
 		}
 	});
 }
@@ -527,7 +544,7 @@ export function registerModelSelectHandler(pi: ExtensionAPI): void {
 		const advisor = getAdvisorModel();
 		if (!advisor) return;
 
-		const blocked = isModelBlocked(event.model);
+		const blocked = isModelBlocked(event.model, pi.getThinkingLevel());
 		const active = pi.getActiveTools();
 		const hasTool = active.includes(ADVISOR_TOOL_NAME);
 
@@ -546,6 +563,33 @@ export function registerModelSelectHandler(pi: ExtensionAPI): void {
 }
 
 // ---------------------------------------------------------------------------
+// thinking_level_select handler — mid-session effort changes strip/re-add advisor
+// ---------------------------------------------------------------------------
+
+export function registerThinkingLevelSelectHandler(pi: ExtensionAPI): void {
+	pi.on("thinking_level_select", async (event, ctx) => {
+		const advisor = getAdvisorModel();
+		if (!advisor) return;
+
+		const blocked = isModelBlocked(ctx?.model, event.level);
+		const active = pi.getActiveTools();
+		const hasTool = active.includes(ADVISOR_TOOL_NAME);
+
+		if (blocked && hasTool) {
+			pi.setActiveTools(active.filter((n) => n !== ADVISOR_TOOL_NAME));
+			if (ctx.hasUI) {
+				ctx.ui.notify(`Advisor disabled for ${modelKey(ctx.model ?? { provider: "", id: "" })}`, "info");
+			}
+		} else if (!blocked && !hasTool) {
+			pi.setActiveTools([...active, ADVISOR_TOOL_NAME]);
+			if (ctx.hasUI) {
+				ctx.ui.notify(msgAdvisorRestored(modelKey(advisor), getAdvisorEffort()), "info");
+			}
+		}
+	});
+}
+
+// ---------------------------------------------------------------------------
 // /advisor slash command — opens selector panel for picking the advisor model
 // ---------------------------------------------------------------------------
 
@@ -553,13 +597,25 @@ function modelKey(m: { provider: string; id: string }): string {
 	return `${m.provider}:${m.id}`;
 }
 
-function isModelBlocked(model: Model<Api> | undefined): boolean {
+function isModelBlocked(model: Model<Api> | undefined, thinkingLevel?: string): boolean {
 	if (!model) return false;
-	return disabledForModelsCache.includes(modelKey(model));
+	const key = modelKey(model);
+	for (const entry of disabledForModelsCache) {
+		if (typeof entry === "string") {
+			if (entry === key) return true;
+		} else {
+			if (entry.model !== key) continue;
+			if (entry.minEffort === undefined) return true;
+			const thresholdOrdinal = EFFORT_ORDINAL.indexOf(entry.minEffort);
+			const executorOrdinal = EFFORT_ORDINAL.indexOf(thinkingLevel as ThinkingLevel);
+			if (executorOrdinal >= thresholdOrdinal) return true;
+		}
+	}
+	return false;
 }
 
-function isExecutorBlocked(ctx: ExtensionContext): boolean {
-	return isModelBlocked(ctx?.model);
+function isExecutorBlocked(ctx: ExtensionContext, thinkingLevel?: string): boolean {
+	return isModelBlocked(ctx?.model, thinkingLevel);
 }
 
 export function registerAdvisorCommand(pi: ExtensionAPI): void {
@@ -652,7 +708,7 @@ export function registerAdvisorCommand(pi: ExtensionAPI): void {
 			// `showEffortPicker` is stale once execution yields.
 			const activeToolsNow = pi.getActiveTools();
 			const activeHasNow = activeToolsNow.includes(ADVISOR_TOOL_NAME);
-			const blocked = isExecutorBlocked(ctx);
+			const blocked = isExecutorBlocked(ctx, pi.getThinkingLevel());
 			if (!activeHasNow && !blocked) {
 				pi.setActiveTools([...activeToolsNow, ADVISOR_TOOL_NAME]);
 			}

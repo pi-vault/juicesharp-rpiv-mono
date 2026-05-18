@@ -137,3 +137,25 @@ describe("saveAdvisorConfig — preserves disabledForModels field", () => {
 		expect(config.disabledForModels).toEqual(["anthropic:claude-opus-4-7", "openai:o3"]);
 	});
 });
+
+describe("saveAdvisorConfig — preserves disabledForModels with object entries", () => {
+	it("preserves object entries with minEffort when saving model selection", () => {
+		writeConfig({
+			disabledForModels: ["anthropic:haiku", { model: "anthropic:sonnet", minEffort: "high" }],
+		});
+		saveAdvisorConfig("anthropic:opus", "high");
+		const config = loadAdvisorConfig();
+		expect(config.disabledForModels).toEqual(["anthropic:haiku", { model: "anthropic:sonnet", minEffort: "high" }]);
+	});
+
+	it("preserves object entries without minEffort when resetting advisor", () => {
+		writeConfig({
+			modelKey: "anthropic:opus",
+			disabledForModels: [{ model: "anthropic:sonnet" }],
+		});
+		saveAdvisorConfig(undefined, undefined);
+		const config = loadAdvisorConfig();
+		expect(config.modelKey).toBeUndefined();
+		expect(config.disabledForModels).toEqual([{ model: "anthropic:sonnet" }]);
+	});
+});

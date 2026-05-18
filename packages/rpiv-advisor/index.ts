@@ -15,6 +15,7 @@ import {
 	registerAdvisorCommand,
 	registerAdvisorTool,
 	registerModelSelectHandler,
+	registerThinkingLevelSelectHandler,
 	restoreAdvisorState,
 } from "./advisor.js";
 
@@ -23,6 +24,7 @@ export default function (pi: ExtensionAPI) {
 	registerAdvisorCommand(pi);
 	registerAdvisorBeforeAgentStart(pi);
 	registerModelSelectHandler(pi);
+	registerThinkingLevelSelectHandler(pi);
 
 	pi.on("session_start", async (_event, ctx) => {
 		restoreAdvisorState(ctx, pi);
