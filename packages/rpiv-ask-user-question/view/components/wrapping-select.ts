@@ -173,6 +173,11 @@ export class WrappingSelect implements Component {
 		return [0, 1];
 	}
 
+	/**
+	 * Per-item row count. Delegates to `renderItem().length` so `renderItem` remains
+	 * the single source of truth for per-item row math — eliminates the prior shadow-copy
+	 * that risked silent miscounts when new `kind` values branch in `renderItem` but not here.
+	 */
 	private computeItemRowCount(
 		item: WrappingSelectItem,
 		index: number,
@@ -180,21 +185,7 @@ export class WrappingSelect implements Component {
 		width: number,
 		numberWidth: number,
 	): number {
-		const rowPrefix = this.buildRowPrefix(index, isActive, numberWidth);
-		const contentWidth = Math.max(WrappingSelect.MIN_CONTENT_WIDTH, width - visibleWidth(rowPrefix));
-
-		if (this.shouldRenderAsInlineInput(item, isActive)) {
-			const raw = `${this.inputBuffer}${WrappingSelect.INPUT_CURSOR}`;
-			return wrapTextWithAnsi(raw, contentWidth).length;
-		}
-
-		const isConfirmed = index === this.confirmedIndex;
-		const label = isConfirmed
-			? `${this.confirmedLabelOverride ?? item.label}${WrappingSelect.CONFIRMED_MARK}`
-			: item.label;
-		const labelLines = wrapTextWithAnsi(label, contentWidth).length;
-		const descLines = item.description ? wrapTextWithAnsi(item.description, contentWidth).length : 0;
-		return labelLines + descLines;
+		return this.renderItem(item, index, isActive, width, numberWidth).length;
 	}
 
 	private computeVisibleWindow(): { startIndex: number; endIndex: number } {

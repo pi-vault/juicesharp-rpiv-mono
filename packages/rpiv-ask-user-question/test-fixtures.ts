@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import type { QuestionnaireState } from "./state/state.js";
 import type { ApplyContext } from "./state/state-reducer.js";
 import type { QuestionData } from "./tool/types.js";
-import type { MultiSelectViewProps } from "./view/components/multi-select-view.js";
+import type { MultiSelectView, MultiSelectViewProps } from "./view/components/multi-select-view.js";
 import type { PreviewPane, PreviewPaneProps } from "./view/components/preview/preview-pane.js";
 import type { SubmitPickerProps } from "./view/components/submit-picker.js";
 import type { WrappingSelectItem } from "./view/components/wrapping-select.js";
@@ -76,6 +76,19 @@ export function makeFakePreviewPane(): PreviewPane {
 		...makeStatefulView<PreviewPaneProps>(),
 		setGlobalLeftWidth: vi.fn(),
 	} as unknown as PreviewPane;
+}
+
+/**
+ * Mock MultiSelectView for test fixtures. Mirrors makeFakePreviewPane — provides
+ * the concrete methods (focusedItemRowRange, naturalHeight) that TabComponents.multiSelect
+ * requires now that it's typed as MultiSelectView instead of StatefulView<MultiSelectViewProps>.
+ */
+export function makeFakeMultiSelectView(): MultiSelectView {
+	return {
+		...makeStatefulView<MultiSelectViewProps>(),
+		focusedItemRowRange: (_w: number) => [0, 0] as [number, number],
+		naturalHeight: (_w: number) => 0,
+	} as unknown as MultiSelectView;
 }
 
 export function makeTabComponents(over: Partial<TabComponents> = {}): TabComponents {

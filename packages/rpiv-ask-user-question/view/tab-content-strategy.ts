@@ -4,7 +4,6 @@ import { t } from "../state/i18n-bridge.js";
 import { formatAnswerScalar } from "../tool/format-answer.js";
 import type { QuestionData } from "../tool/types.js";
 import type { ChatRowView } from "./components/chat-row-view.js";
-import type { MultiSelectView } from "./components/multi-select-view.js";
 import type { PreviewPane, PreviewPaneProps } from "./components/preview/preview-pane.js";
 import {
 	type DialogState,
@@ -116,7 +115,7 @@ export class QuestionTabStrategy implements TabContentStrategy {
 	focusedItemRowRange(width: number, state: DialogState): [number, number] | undefined {
 		const question = this.config.questions[state.currentTab];
 		const mso = this.config.tabsByIndex[state.currentTab]?.multiSelect;
-		if (question?.multiSelect === true && mso) return (mso as unknown as MultiSelectView).focusedItemRowRange(width);
+		if (question?.multiSelect === true && mso) return mso.focusedItemRowRange(width);
 		return (this.config.getPreviewPane() as unknown as PreviewPane).focusedItemRowRange(width);
 	}
 }

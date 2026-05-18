@@ -11,6 +11,7 @@ import {
 	selectTabBarProps,
 } from "../state/selectors/projections.js";
 import {
+	makeFakeMultiSelectView,
 	makeFakePreviewPane,
 	makeQuestion,
 	makeQuestionnaireState as makeState,
@@ -20,7 +21,6 @@ import {
 import type { QuestionAnswer, QuestionData } from "../tool/types.js";
 import { type BoundGlobalBinding, type BoundPerTabBinding, globalBinding, perTabBinding } from "./component-binding.js";
 import type { ChatRowViewProps } from "./components/chat-row-view.js";
-import type { MultiSelectViewProps } from "./components/multi-select-view.js";
 import type { OptionListViewProps } from "./components/option-list-view.js";
 import type { SubmitPickerProps } from "./components/submit-picker.js";
 import type { TabBarProps } from "./components/tab-bar.js";
@@ -40,7 +40,7 @@ function makeFixture(overQuestions?: QuestionData[]) {
 		makeTabComponents({
 			optionList: makeStatefulView<OptionListViewProps>(),
 			preview: makeFakePreviewPane(),
-			multiSelect: q.multiSelect ? makeStatefulView<MultiSelectViewProps>() : undefined,
+			multiSelect: q.multiSelect ? makeFakeMultiSelectView() : undefined,
 		}),
 	);
 

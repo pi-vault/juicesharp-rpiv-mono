@@ -22,14 +22,16 @@ import type { TabComponents } from "./tab-components.js";
 
 const theme = makeTheme() as unknown as Theme;
 
+const stripAnsi = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, "").trim();
+
 function stubComponent(lines: string[]): Component {
 	return { render: () => lines, handleInput() {}, invalidate() {} };
 }
 
-function stubPreviewPane(lines: string[]): PreviewPane {
+function stubPreviewPane(lines: string[], rowRange?: (w: number) => [number, number]): PreviewPane {
 	return {
 		...stubComponent(lines),
-		focusedItemRowRange: (_w: number) => [0, 1] as [number, number],
+		focusedItemRowRange: rowRange ?? ((_w: number) => [0, 1] as [number, number]),
 	} as unknown as PreviewPane;
 }
 
@@ -219,9 +221,8 @@ describe("Dialog overflow — overflow indicators", () => {
 		// Overflow indicators are emitted as a row whose entire visible content is just "↑" or "↓"
 		// (theme.fg("dim", …)). The HINT line legitimately contains "↑/↓ to navigate", so this
 		// scans for indicator-only rows rather than any occurrence.
-		const stripped = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, "").trim();
-		expect(lines.some((l) => stripped(l) === "↑")).toBe(false);
-		expect(lines.some((l) => stripped(l) === "↓")).toBe(false);
+		expect(lines.some((l) => stripAnsi(l) === "↑")).toBe(false);
+		expect(lines.some((l) => stripAnsi(l) === "↓")).toBe(false);
 	});
 
 	it("renders within terminal bounds under heavy overflow with focus at index 0", () => {
@@ -300,5 +301,115 @@ describe("Dialog overflow — submit tab", () => {
 		const joined = lines.join("\n");
 		// With top-anchored scroll on submit, the REVIEW heading should be visible.
 		expect(joined).toContain(REVIEW_HEADING);
+	});
+});
+
+describe("Dialog overflow — indicator content", () => {
+	it("shows combined ↕ when availableMiddle === 1 with both overflow directions", () => {
+		// topFixed=4, bottomFixed=5, termRows=10 → availableMiddle=1.
+		// Body=20 rows, focus at [0,1] → focusedRowInMiddle=2, idealStart=2, scrollStart=2.
+		// hasUp=true, hasDown=true, availableMiddle===1 → combined ↕.
+		const dlg = makeDialog(
+			makeConfig({
+				getTerminalRows: () => 10,
+				getBodyHeight: () => 20,
+				getCurrentBodyHeight: () => 10,
+				previewPane: stubPreviewPane(Array(20).fill("<LINE>")),
+			}),
+		);
+		const lines = dlg.render(80);
+		expect(lines.length).toBeLessThanOrEqual(10);
+		// Middle row at index topFixed=4 carries the combined glyph.
+		expect(stripAnsi(lines[4])).toBe("↕");
+		// And no separate ↑/↓ leak through.
+		expect(lines.some((l) => stripAnsi(l) === "↑")).toBe(false);
+		expect(lines.some((l) => stripAnsi(l) === "↓")).toBe(false);
+	});
+
+	it("shows individual ↑ and ↓ when availableMiddle > 1 with centering", () => {
+		// termRows=14, availableMiddle=5. focusedItemRowRange=[5,8] → focusedRowInMiddle=7,
+		// focusedHeight=3, idealStart=6 → both up and down overflow at scrollStart=6.
+		const dlg = makeDialog(
+			makeConfig({
+				getTerminalRows: () => 14,
+				getBodyHeight: () => 20,
+				getCurrentBodyHeight: () => 10,
+				previewPane: stubPreviewPane(Array(20).fill("<LINE>"), (_w: number) => [5, 8] as [number, number]),
+			}),
+		);
+		const lines = dlg.render(80);
+		expect(lines.length).toBeLessThanOrEqual(14);
+		// Top of middle region (index 4) is ↑, bottom (index 8 = 4+5-1) is ↓.
+		expect(stripAnsi(lines[4])).toBe("↑");
+		expect(stripAnsi(lines[8])).toBe("↓");
+		// No combined glyph when there's room for two separate indicators.
+		expect(lines.some((l) => stripAnsi(l) === "↕")).toBe(false);
+	});
+
+	it("shows only ↓ when focused item is at top (scrollStart=0)", () => {
+		// Default [0,1] range → focusedRowInMiddle=2, idealStart=0 → scrollStart=0 → only ↓.
+		const dlg = makeDialog(
+			makeConfig({
+				getTerminalRows: () => 14,
+				getBodyHeight: () => 20,
+				getCurrentBodyHeight: () => 10,
+				previewPane: stubPreviewPane(Array(20).fill("<LINE>")),
+			}),
+		);
+		const lines = dlg.render(80);
+		expect(lines.length).toBeLessThanOrEqual(14);
+		expect(lines.some((l) => stripAnsi(l) === "↑")).toBe(false);
+		expect(lines.some((l) => stripAnsi(l) === "↓")).toBe(true);
+		expect(lines.some((l) => stripAnsi(l) === "↕")).toBe(false);
+	});
+
+	it("shows only ↑ when focused item is at bottom (scrollStart pinned to max)", () => {
+		// Body=30 rows, focus at last row [29,30]. focusedRowInMiddle=31, idealStart=29,
+		// scrollStart pinned to middleRows-availableMiddle = 28. hasUp=true, hasDown=false.
+		const dlg = makeDialog(
+			makeConfig({
+				getTerminalRows: () => 14,
+				getBodyHeight: () => 30,
+				getCurrentBodyHeight: () => 30,
+				previewPane: stubPreviewPane(Array(30).fill("<LINE>"), (_w: number) => [29, 30] as [number, number]),
+			}),
+		);
+		const lines = dlg.render(80);
+		expect(lines.length).toBeLessThanOrEqual(14);
+		expect(lines.some((l) => stripAnsi(l) === "↑")).toBe(true);
+		expect(lines.some((l) => stripAnsi(l) === "↓")).toBe(false);
+		expect(lines.some((l) => stripAnsi(l) === "↕")).toBe(false);
+	});
+});
+
+describe("Dialog overflow — centering with non-trivial focusedItemRowRange", () => {
+	it("centers 3-row focused item in scroll window", () => {
+		// focusedItemRowRange=[5,8] → 3-row item, should be centered.
+		const dlg = makeDialog(
+			makeConfig({
+				getTerminalRows: () => 14,
+				getBodyHeight: () => 20,
+				getCurrentBodyHeight: () => 10,
+				previewPane: stubPreviewPane(Array(20).fill("<LINE>"), (_w: number) => [5, 8] as [number, number]),
+			}),
+		);
+		const lines = dlg.render(80);
+		expect(lines.length).toBeLessThanOrEqual(14);
+		// Focused item content should be visible in the middle region (between indicators).
+		expect(lines.slice(4, 9).some((l) => l.includes("<LINE>"))).toBe(true);
+	});
+
+	it("handles focusedHeight > availableMiddle (top-anchored fallback)", () => {
+		// focusedItemRowRange=[2,8] → focusedHeight=6 > availableMiddle=5. idealStart=4 → top-anchored.
+		const dlg = makeDialog(
+			makeConfig({
+				getTerminalRows: () => 14,
+				getBodyHeight: () => 20,
+				getCurrentBodyHeight: () => 10,
+				previewPane: stubPreviewPane(Array(20).fill("<LINE>"), (_w: number) => [2, 8] as [number, number]),
+			}),
+		);
+		const lines = dlg.render(80);
+		expect(lines.length).toBeLessThanOrEqual(14);
 	});
 });

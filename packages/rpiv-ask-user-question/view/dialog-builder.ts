@@ -25,6 +25,7 @@ export const INCOMPLETE_WARNING_PREFIX = "⚠ Answer remaining questions before 
 
 const OVERFLOW_UP = "↑";
 const OVERFLOW_DOWN = "↓";
+const OVERFLOW_BOTH = "↕";
 
 export type DialogState = QuestionnaireState;
 
@@ -161,11 +162,18 @@ export class DialogView implements StatefulView<DialogProps> {
 
 		const scrollableMiddle = natural.slice(topFixed + scrollStart, topFixed + scrollStart + availableMiddle);
 
-		if (scrollStart > 0 && scrollableMiddle.length > 0) {
-			scrollableMiddle[0] = this.config.theme.fg("dim", OVERFLOW_UP);
-		}
-		if (scrollStart + availableMiddle < middleRows && scrollableMiddle.length > 0) {
-			scrollableMiddle[scrollableMiddle.length - 1] = this.config.theme.fg("dim", OVERFLOW_DOWN);
+		const hasUp = scrollStart > 0;
+		const hasDown = scrollStart + availableMiddle < middleRows;
+		if (hasUp && hasDown && scrollableMiddle.length === 1) {
+			// Single-row middle: combined ↕ avoids the prior collision where ↓ overwrote ↑.
+			scrollableMiddle[0] = this.config.theme.fg("dim", OVERFLOW_BOTH);
+		} else {
+			if (hasUp && scrollableMiddle.length > 0) {
+				scrollableMiddle[0] = this.config.theme.fg("dim", OVERFLOW_UP);
+			}
+			if (hasDown && scrollableMiddle.length > 0) {
+				scrollableMiddle[scrollableMiddle.length - 1] = this.config.theme.fg("dim", OVERFLOW_DOWN);
+			}
 		}
 
 		const result = [
