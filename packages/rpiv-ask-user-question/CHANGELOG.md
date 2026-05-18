@@ -7,6 +7,12 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Terminal-row-aware overflow scroll for dialogs — content is rendered at full height then sliced into a three-region layout (sticky top, scrollable middle, sticky bottom) with scroll-to-focus and overflow indicators.
+
+### Fixed
+- Overflow indicator collision when only a single middle row is available — now shows a combined ↕ indicator instead of silently overwriting the up arrow.
+
 ## [1.8.3] - 2026-05-18
 
 ## [1.8.2] - 2026-05-17

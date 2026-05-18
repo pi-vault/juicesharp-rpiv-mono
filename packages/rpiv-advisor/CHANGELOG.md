@@ -7,6 +7,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Effort-level filtering for `disabledForModels` — block advisor behavior only when the executor's thinking level meets or exceeds a configurable threshold, with immediate strip/re-add on mid-session effort changes.
+
 ## [1.8.3] - 2026-05-18
 
 ## [1.8.2] - 2026-05-17

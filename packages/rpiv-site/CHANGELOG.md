@@ -7,6 +7,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Blog post: "One Morning of the Driver-in-the-Loop Pipeline."
+
 ## [1.8.3] - 2026-05-18
 
 ## [1.8.2] - 2026-05-17
