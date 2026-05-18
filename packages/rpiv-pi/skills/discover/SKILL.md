@@ -164,7 +164,7 @@ Compile interview output into the FRD. The interview's logical order (problem �
    - Timestamp: run `date +"%Y-%m-%dT%H:%M:%S%z"` — raw for `date:` and `last_updated:`, first 19 chars (`T`→`_`, `:`→`-`) for filename slug.
    - Interviewer: from the User in the injected git context (fallback: `unknown`).
 
-2. **Write the FRD** using the Write tool. Frontmatter `status: complete`. All template sections present and filled. The directory `.rpiv/artifacts/discover/` is pre-scaffolded by `session-hooks.ts` — no `mkdir -p` needed in the skill.
+2. **Write the FRD** using the Write tool. Frontmatter `status: complete`. All template sections present and filled. The Write tool creates parent directories automatically — no `mkdir -p` needed in the skill.
 
 3. **Present and chain**:
    ```

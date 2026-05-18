@@ -21,7 +21,7 @@ Skill-based development workflow for [Pi Agent](https://github.com/badlogic/pi-m
 
 - **A pipeline of chained AI skills** - discover → research → design → plan → implement → validate, each producing a reviewable artifact under `.rpiv/artifacts/`.
 - **Named subagents for parallel analysis** - `codebase-analyzer`, `codebase-locator`, `codebase-pattern-finder`, `claim-verifier`, and 8 more, dispatched automatically by skills.
-- **Session lifecycle hooks** - agent profiles, guidance files, and pipeline directories scaffold themselves on first launch.
+- **Session lifecycle hooks** - agent profiles and guidance files install themselves on first launch.
 
 ## Prerequisites
 
@@ -93,7 +93,7 @@ pi install npm:@juicesharp/rpiv-pi
 On first Pi Agent session start, rpiv-pi automatically:
 - Copies agent profiles to `~/.pi/agent/agents/` (user-global, shared across all projects)
 - Detects outdated or removed agents on subsequent starts
-- Migrates legacy pipeline-artifact content into `.rpiv/artifacts/` (one-way) and scaffolds the artifact directories
+- Migrates legacy pipeline-artifact content into `.rpiv/artifacts/` (one-way) when an old `thoughts/shared/` tree is found; otherwise `.rpiv/artifacts/` is created lazily by the first skill that writes an artifact
 - Shows a warning if any sibling plugins are missing
 
 ## Usage

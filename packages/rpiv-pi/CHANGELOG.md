@@ -7,6 +7,11 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Empty `.rpiv/artifacts/` directory tree no longer appears on session start when no migration source exists (closes #31). The 1.8.2 migration removed `thoughts/` scaffolding but reintroduced the same greedy `mkdir` loop under the new path; artifact subdirectories are now created on first write by the Write tool, as the FRD originally specified.
+- Migration is now gated on the source actually containing entries: if `thoughts/shared/` exists but is empty, `.rpiv/artifacts/` is no longer created and the empty source is left in place.
+- Loose files at the `thoughts/shared/` root are now copied alongside subdirectories instead of being dropped on `rmSync`.
+
 ## [1.8.2] - 2026-05-17
 
 ### Changed

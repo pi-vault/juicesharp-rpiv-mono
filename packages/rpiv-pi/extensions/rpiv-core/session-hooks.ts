@@ -30,17 +30,6 @@ import {
 import { ARTIFACTS_SUBDIR, clearInjectionState, handleToolCallGuidance, injectRootGuidance } from "./guidance.js";
 import { findMissingSiblings } from "./package-checks.js";
 
-const ARTIFACTS_ROOT = `.rpiv/${ARTIFACTS_SUBDIR}`;
-const ARTIFACTS_DIRS = [
-	`${ARTIFACTS_ROOT}/discover`,
-	`${ARTIFACTS_ROOT}/research`,
-	`${ARTIFACTS_ROOT}/designs`,
-	`${ARTIFACTS_ROOT}/plans`,
-	`${ARTIFACTS_ROOT}/handoffs`,
-	`${ARTIFACTS_ROOT}/reviews`,
-	`${ARTIFACTS_ROOT}/solutions`,
-] as const;
-
 const msgAgentsAdded = (n: number) => `Copied ${n} rpiv-pi agent(s) to ~/.pi/agent/agents/`;
 const msgAgentsHealed = (parts: string[]) => `Synced bundled agent(s): ${parts.join(", ")}.`;
 const msgAgentsDrift = (parts: string[]) => `${parts.join(", ")} agent(s). Run /rpiv-update-agents to sync.`;
@@ -135,46 +124,40 @@ function resetInjectionState(): void {
 
 function migrateThoughtsToArtifacts(cwd: string): void {
 	const oldShared = join(cwd, "thoughts", "shared");
-	const newArtifacts = join(cwd, ".rpiv", ARTIFACTS_SUBDIR);
+	if (!existsSync(oldShared)) return;
 
-	// Phase 1: Migrate existing thoughts/shared/ → .rpiv/artifacts/
-	if (existsSync(oldShared)) {
-		try {
-			mkdirSync(newArtifacts, { recursive: true });
+	try {
+		const entries = readdirSync(oldShared, { withFileTypes: true });
+		if (entries.length === 0) return; // empty source — nothing to copy, leave on disk
 
-			const entries = readdirSync(oldShared, { withFileTypes: true }).filter((d) => d.isDirectory());
+		const newArtifacts = join(cwd, ".rpiv", ARTIFACTS_SUBDIR);
+		mkdirSync(newArtifacts, { recursive: true });
 
-			for (const entry of entries) {
-				const src = join(oldShared, entry.name);
-				const dest = join(newArtifacts, entry.name);
-				cpSync(src, dest, { recursive: true, errorOnExist: false, force: true });
-				if (!existsSync(dest)) {
-					console.warn(`[rpiv-pi] migration: failed to copy ${src} → ${dest}`);
-					return; // abort — don't delete source if copy failed
-				}
+		for (const entry of entries) {
+			const src = join(oldShared, entry.name);
+			const dest = join(newArtifacts, entry.name);
+			cpSync(src, dest, { recursive: true, errorOnExist: false, force: true });
+			if (!existsSync(dest)) {
+				console.warn(`[rpiv-pi] migration: failed to copy ${src} → ${dest}`);
+				return; // abort — don't delete source if copy failed
 			}
-
-			// All copies verified — safe to remove source
-			rmSync(oldShared, { recursive: true, force: true });
-
-			// Remove thoughts/ root only if empty (preserves thoughts/me/ etc.)
-			const thoughtsRoot = join(cwd, "thoughts");
-			try {
-				if (readdirSync(thoughtsRoot).length === 0) {
-					rmSync(thoughtsRoot, { recursive: true, force: true });
-				}
-			} catch {
-				// thoughts/ already gone or unreadable — not an error
-			}
-		} catch (e) {
-			console.warn(`[rpiv-pi] migration: ${e instanceof Error ? e.message : String(e)}`);
-			// Never crash session_start — migration is best-effort
 		}
-	}
 
-	// Phase 2: Ensure artifact directories exist (mirrors old scaffolding)
-	for (const dir of ARTIFACTS_DIRS) {
-		mkdirSync(join(cwd, dir), { recursive: true });
+		// All copies verified — safe to remove source
+		rmSync(oldShared, { recursive: true, force: true });
+
+		// Remove thoughts/ root only if empty (preserves thoughts/me/ etc.)
+		const thoughtsRoot = join(cwd, "thoughts");
+		try {
+			if (readdirSync(thoughtsRoot).length === 0) {
+				rmSync(thoughtsRoot, { recursive: true, force: true });
+			}
+		} catch {
+			// thoughts/ already gone or unreadable — not an error
+		}
+	} catch (e) {
+		console.warn(`[rpiv-pi] migration: ${e instanceof Error ? e.message : String(e)}`);
+		// Never crash session_start — migration is best-effort
 	}
 }
 
