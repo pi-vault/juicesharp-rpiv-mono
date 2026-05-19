@@ -2,6 +2,7 @@
 name: revise
 description: Surgically update an existing implementation plan in .rpiv/artifacts/plans/ based on review feedback, mid-implementation discoveries, or new constraints, preserving structure and quality rather than rewriting. Use when the user wants a plan adjusted after code-review feedback, has hit a blocker mid-implement, scope changed, or asks to "revise the plan".
 argument-hint: "[plan-path] [feedback]"
+shell-timeout: 10
 ---
 
 # Revise
@@ -42,17 +43,20 @@ When this command is invoked:
    ```
    Wait for user input.
 
-   **If NO plan file provided**:
+   **If NO plan file provided**, present recent plans and ask which to revise:
+
+   ```!
+   node "${SKILL_DIR}/../_shared/list-recent.mjs" .rpiv/artifacts/plans 10
    ```
-   I'll help you iterate on an existing implementation plan.
 
-   Which plan would you like to update? Please provide the path to the plan file (e.g., `.rpiv/artifacts/plans/2025-10-16_09-00-00_feature.md`).
+   Branch on the substituted list above:
+   - **Empty** — no plans under `.rpiv/artifacts/plans/`; tell the user and suggest running `/skill:plan` first.
+   - **Exactly one entry** — confirm with `ask_user_question`: "Revise this plan?" with options "Revise `<filename>` (Recommended)" and "Pick a different path".
+   - **Two or more entries** — present the top 4 filenames as `ask_user_question` options.
 
-   If you're coming from `/skill:code-review`, pass the relevant plan path and summarize which findings should change the plan.
+   If the user is coming from `/skill:code-review`, also ask which findings should change the plan.
 
-   Tip: You can list recent plans with `ls -lt .rpiv/artifacts/plans/ | head`
-   ```
-   Wait for user input, then re-check for feedback.
+   Wait for user selection, then re-check for feedback.
 
    **If plan file provided but NO feedback**:
    ```
@@ -128,6 +132,12 @@ Use the `ask_user_question` tool to confirm before editing. Question: "{Summary 
 
 ### Step 4: Update the Plan
 
+Current ISO timestamp (first tab-separated field below) — use for the `last_updated` frontmatter bump in substep 2:
+
+```!
+node "${SKILL_DIR}/../_shared/now.mjs"
+```
+
 1. **Make focused, precise edits** to the existing plan:
    - Use the Edit tool for surgical changes
    - NEVER use Write tool - plan files already exist, use Edit tool only
@@ -140,7 +150,7 @@ Use the `ask_user_question` tool to confirm before editing. Question: "{Summary 
    - If modifying scope, update "What We're NOT Doing" section
    - If changing approach, update "Implementation Approach" section
    - Maintain the distinction between automated vs manual success criteria
-   - If the plan has YAML frontmatter, run `date +"%Y-%m-%dT%H:%M:%S%z"` once and use the output for `last_updated`; set `last_updated_by` to your name
+   - If the plan has YAML frontmatter, set `last_updated` to the ISO timestamp from the substituted block at the top of step 4 (first tab-separated field); set `last_updated_by` to your name. Copy the offset verbatim — do not reformat.
 
 3. **Preserve quality standards**:
    - Include specific file paths and line numbers for new content
