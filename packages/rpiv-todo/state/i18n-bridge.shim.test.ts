@@ -30,11 +30,16 @@ const BRIDGE = resolve(PACKAGE_DIR, "state/i18n-bridge.ts");
 const ENTRY = resolve(PACKAGE_DIR, "index.ts");
 const SDK_SPECIFIER = "@juicesharp/rpiv-i18n";
 
+// The specifier may carry an optional subpath (e.g. `/loader`) — the entry
+// point uses `@juicesharp/rpiv-i18n/loader` to avoid pulling the UI module
+// into the load graph; the bridge uses the bare `@juicesharp/rpiv-i18n`
+// specifier for runtime lookup. Both forms must be dynamic-imported.
+const SDK_SPECIFIER_PATTERN = String.raw`${SDK_SPECIFIER}(?:/[\w-]+)?`;
 const STATIC_IMPORT = new RegExp(
-	String.raw`^\s*import\s+(?:type\s+)?[\w{},\s*]+\s+from\s+["']${SDK_SPECIFIER}["']`,
+	String.raw`^\s*import\s+(?:type\s+)?[\w{},\s*]+\s+from\s+["']${SDK_SPECIFIER_PATTERN}["']`,
 	"m",
 );
-const DYNAMIC_IMPORT = new RegExp(String.raw`await\s+import\s*\(\s*["']${SDK_SPECIFIER}["']\s*\)`);
+const DYNAMIC_IMPORT = new RegExp(String.raw`await\s+import\s*\(\s*["']${SDK_SPECIFIER_PATTERN}["']\s*\)`);
 
 describe("i18n soft-peer shim — source shape", () => {
 	it("bridge does not statically import the rpiv-i18n SDK", () => {

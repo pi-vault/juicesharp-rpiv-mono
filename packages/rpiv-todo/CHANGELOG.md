@@ -7,6 +7,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Locale registration in `index.ts` now uses `@juicesharp/rpiv-i18n/loader`'s `registerLocalesFromDir` instead of a hand-maintained eight-key `registerStrings` literal. Behavior is identical (per-locale warn + empty-map on missing/malformed files, no crash); adding a new locale no longer requires editing this file — only dropping `locales/<code>.json` next to the others. Soft-peer contract preserved.
+
 ## [1.9.1] - 2026-05-19
 
 ## [1.9.0] - 2026-05-18
