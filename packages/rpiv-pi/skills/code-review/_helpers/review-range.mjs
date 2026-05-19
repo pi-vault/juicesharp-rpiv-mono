@@ -8,7 +8,9 @@
 // Accepted <scope-spec> values:
 //   auto                — empty-scope-default: feature branch vs default branch, first-parent
 //   commit              — review the most recent commit (working-tree-style, HEAD)
-//   staged | working    — uncommitted+staged | uncommitted-only working-tree review
+//   staged              — files staged for commit (git diff --cached)
+//   working             — files with unstaged changes only (git diff)
+//   modified            — every tracked file differing from HEAD (git diff HEAD; staged + unstaged, no untracked)
 //   <hash>              — single commit (~7+ hex chars)
 //   <A>..<B>            — range; A is verified ancestor of B, swapped if reversed
 //   <h1>,<h2>,<h3>      — comma- or whitespace-separated commit list; helper finds endpoints
@@ -183,7 +185,7 @@ if (defaultBranch === "(unresolved)" && (lower === "" || lower === "auto")) {
 	else result.note = `merge-base ${defaultBranch}..HEAD failed`;
 } else if (lower === "commit") {
 	setWorkingTree(safe(["rev-parse", "HEAD"]), safe(["rev-parse", "HEAD"]));
-} else if (lower === "staged" || lower === "working") {
+} else if (lower === "staged" || lower === "working" || lower === "modified") {
 	setWorkingTree();
 } else if (scope.includes("..") && !scope.includes("...")) {
 	const [a, b] = scope.split("..");
@@ -236,11 +238,17 @@ if (result.strategy === "first-parent") {
 	} else if (lower === "staged") {
 		const raw = safe(["diff", "--cached", "--name-only"]);
 		result.changedFiles = formatChangedFiles(dedupChangedFiles(raw));
+	} else if (lower === "modified") {
+		// modified: every tracked file that differs from HEAD (staged + unstaged,
+		// no untracked). Matches `git diff HEAD` semantics — what would be
+		// committed by `git add -u && git commit`.
+		const raw = safe(["diff", "HEAD", "--name-only"]);
+		result.changedFiles = formatChangedFiles(dedupChangedFiles(raw));
 	} else {
-		// working
-		const unstaged = safe(["diff", "--name-only"]);
-		const staged = safe(["diff", "--cached", "--name-only"]);
-		result.changedFiles = formatChangedFiles(dedupChangedFiles(`${unstaged}\n${staged}`));
+		// working: unstaged only (matches git's "working tree" definition and
+		// the skill's `git diff -U30` patch command — both exclude staged).
+		const raw = safe(["diff", "--name-only"]);
+		result.changedFiles = formatChangedFiles(dedupChangedFiles(raw));
 	}
 }
 

@@ -38,7 +38,7 @@ Every Wave-2 agent prompt contains EXACTLY: (a) `Known Context:` followed by the
 
 ### Step 1: Resolve Scope and Assemble the Diff
 
-1. **Resolve scope via the bundled helper.** Determine the scope spec from the value the user supplied (visible in `## Input` above as the substituted argument). If empty, use the literal string `auto`; if ambiguous (prose, mixed list, unrecognised branch name), clarify via `ask_user_question` — options: (A) "review current branch vs default branch (first-parent)" → `auto`, (B) "review uncommitted changes" → `working`, (C) "restate scope" → free-text — then re-invoke. Then run:
+1. **Resolve scope via the bundled helper.** Determine the scope spec from the value the user supplied (visible in `## Input` above as the substituted argument). If empty, use the literal string `auto`; if ambiguous (prose, mixed list, unrecognised branch name), clarify via `ask_user_question` — options: (A) "review current branch vs default branch (first-parent)" → `auto`, (B) "review every tracked change vs HEAD (staged + unstaged)" → `modified`, (C) "review unstaged changes only" → `working`, (D) "restate scope" → free-text — then re-invoke. Then run:
 
    ```bash
    node "${SKILL_DIR}/_helpers/review-range.mjs" "<scope-spec>"
@@ -51,7 +51,7 @@ Every Wave-2 agent prompt contains EXACTLY: (a) `Known Context:` followed by the
    | Argument shape | Pass to helper |
    |---|---|
    | empty (no argument provided) | `auto` |
-   | literal `commit` / `staged` / `working` | same word verbatim |
+   | literal `commit` / `staged` / `working` / `modified` | same word verbatim |
    | hex commit hash (4-40 chars, e.g. `abc1234`) | the hash verbatim |
    | `<A>..<B>` (e.g. `HEAD~5..HEAD`, `main..feature`) | the range verbatim |
    | comma- or whitespace-separated hashes (`h1,h2,h3` or `h1 h2 h3`) | the list verbatim |
@@ -70,7 +70,7 @@ Every Wave-2 agent prompt contains EXACTLY: (a) `Known Context:` followed by the
    - `git log "<range>" <fp_flag> --stat --reverse` → per-commit size summary
    - `git log "<range>" <fp_flag> --patch --reverse --no-merges -U30 > .git/code-review-patch.diff` → union patches with **30 lines of surrounding context per hunk** (function-level context inline)
    - `git log "<range>" --reverse --format="%H %s%n%n%b%n---"` → commit-message context
-   - **Working-tree branch** (`strategy: working-tree`, no `<range>`): for `staged` use `git diff --cached --stat` + `git diff --cached -U30 > .git/code-review-patch.diff`; for `working` use `git diff --stat` + `git diff -U30 > .git/code-review-patch.diff`; for `commit` use `git show HEAD --stat` + `git show HEAD -U30 > .git/code-review-patch.diff`. Commit-message context is N/A for `staged`/`working`; for `commit` use `git show HEAD --format="%H %s%n%n%b%n---" --no-patch`. ChangedFiles still comes from the helper.
+   - **Working-tree branch** (`strategy: working-tree`, no `<range>`): for `staged` use `git diff --cached --stat` + `git diff --cached -U30 > .git/code-review-patch.diff`; for `working` use `git diff --stat` + `git diff -U30 > .git/code-review-patch.diff` (unstaged only); for `modified` use `git diff HEAD --stat` + `git diff HEAD -U30 > .git/code-review-patch.diff` (every tracked change vs HEAD — staged + unstaged, no untracked); for `commit` use `git show HEAD --stat` + `git show HEAD -U30 > .git/code-review-patch.diff`. Commit-message context is N/A for `staged` / `working` / `modified`; for `commit` use `git show HEAD --format="%H %s%n%n%b%n---" --no-patch`. ChangedFiles still comes from the helper.
    - **Patch-size fallback**: `-U30` produces ~2–3× the size of `-U0`. If the resulting patch exceeds ~1MB, drop to `-U10` for this run; never use `-U0` — it defeats the skill's design.
 
 3. **Bail-out**: if `ChangedFiles` is empty, print `No changes in scope {scope}. Exiting.` and STOP. Do not write an artifact.
