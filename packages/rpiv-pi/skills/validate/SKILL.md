@@ -3,6 +3,7 @@ name: validate
 description: Verify that an implementation plan was correctly executed by running each phase's success criteria against the working tree and producing a validation report. Use after the implement skill completes, when the user asks to "validate the plan", wants a post-implementation audit, or needs to confirm a feature is fully shipped per its plan.
 argument-hint: "[plan-path]"
 allowed-tools: Read, Bash(git *), Bash(make *), Glob, Grep, Agent
+shell-timeout: 10
 ---
 
 # Validate
@@ -11,7 +12,18 @@ You are tasked with validating that an implementation plan was correctly execute
 
 ## Input
 
-`$ARGUMENTS` — optional path to a plan in `.rpiv/artifacts/plans/`. If omitted, the skill searches recent commits for plan references or asks for the path.
+`$ARGUMENTS` — optional path to a plan in `.rpiv/artifacts/plans/`. If omitted, branch on the recent-plans list in the Metadata block.
+
+## Metadata
+
+```!
+node "${SKILL_DIR}/../_shared/git-context.mjs"
+echo
+node "${SKILL_DIR}/../_shared/list-recent.mjs" .rpiv/artifacts/plans 10
+```
+
+- `git-context.mjs` — `branch:` / `commit:` / `repo:` / `root:` / `in_repo:` / `author:`. Used by Step 1.5 to gate git-history gathering.
+- `list-recent.mjs` (lines after the blank line) — recent plan filenames, used by Step 1.2 when no plan path is given.
 
 ## Steps
 
@@ -24,8 +36,11 @@ When invoked:
    - If fresh: continue with the substeps below.
 
 2. **Locate the plan**:
-   - If plan path provided, use it
-   - Otherwise, search recent commits for plan references or ask user
+   - If plan path provided, use it.
+   - Otherwise, branch on the `list-recent.mjs` output in the Metadata block:
+     - **Empty** — no plans under `.rpiv/artifacts/plans/`; ask the user for a path in prose.
+     - **Exactly one entry** — confirm with `ask_user_question`: "Validate this plan?" with options "Validate `<filename>` (Recommended)" and "Pick a different path".
+     - **Two or more entries** — present the top 4 filenames as `ask_user_question` options (a free-text "Other" row is appended automatically).
 
 3. **Read the implementation plan** completely
 
@@ -36,20 +51,15 @@ When invoked:
 
 5. **Gather implementation evidence**:
 
-   **If the injected git context shows "not a git repo":**
-   - Skip git-based evidence gathering (git log, git diff)
-   - Validate via file inspection, automated test commands, and plan checklist
-   - Note in report: "Git history unavailable — validation based on file inspection only"
+   **If `in_repo:` in the Metadata block is `no`:**
+   - Skip git-based evidence gathering (git log, git diff).
+   - Validate via file inspection, the plan's `#### Automated Verification:` commands, and the plan checklist.
+   - Note in report: "Git history unavailable — validation based on file inspection only".
 
-   Otherwise, run:
-   ```bash
-   # Check recent commits
-   git log --oneline -n 20
-   git diff HEAD~N..HEAD  # Where N covers implementation commits
-
-   # Run comprehensive checks
-   cd $(git rev-parse --show-toplevel) && make check test
-   ```
+   Otherwise:
+   - `git log --oneline -n 20` — recent commits for implementation context.
+   - `git diff <base>..HEAD` — where `<base>` covers the implementation commits (determine from `git log` above). Scope to specific paths if the diff is large.
+   - The plan's own `#### Automated Verification:` commands — read them out of the plan and run them as-written. Do NOT hardcode `make` or any project-specific build tool here; the plan encodes the right commands per project (e.g. `npm run check`, `npm test`, `cargo test`, `pytest`).
 
 6. **Spawn parallel research agents** to verify implementation:
 

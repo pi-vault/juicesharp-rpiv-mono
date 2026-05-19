@@ -3,6 +3,7 @@ name: changelog
 description: Regenerate the [Unreleased] section of every affected CHANGELOG.md in Keep a Changelog style. Reads commits since the last release tag plus any uncommitted or staged changes, classifies them by Conventional Commit prefix, and rewrites each [Unreleased] block. Works in single-package repos and monorepos (one CHANGELOG.md per package). Use when preparing a release or drafting changelog entries. Idempotent — safe to re-run as work lands.
 argument-hint: [--since <ref>]
 allowed-tools: Bash(git *), Read, Edit
+shell-timeout: 10
 ---
 
 # Generate CHANGELOG entries
@@ -11,7 +12,17 @@ You are tasked with regenerating the `## [Unreleased]` section of every affected
 
 ## Input
 
-`$ARGUMENTS` — optional `--since <ref>` flag. Empty/literal → range starts at the last release tag from `git describe --tags --abbrev=0`.
+`$ARGUMENTS` — optional `--since <ref>` flag. Empty/literal → range starts at `last_tag:` from the Metadata block.
+
+## Metadata
+
+```!
+node "${SKILL_DIR}/../_shared/changelog-bootstrap.mjs"
+```
+
+- `in_repo:` — `yes` or `no`. Used by Step 1.1.
+- `last_tag:` — last release tag, or `(no tags)`. Used by Step 1.3 and Step 2.1 when no `--since` is supplied.
+- `---changelogs---` block — paths of every tracked `CHANGELOG.md` (one per line, empty if none). Used by Step 1.2.
 
 ## Workflow
 
@@ -24,13 +35,13 @@ You are tasked with regenerating the `## [Unreleased]` section of every affected
 
 ## Step 1: Bail-out checks
 
-1. Run `git rev-parse --is-inside-work-tree`. If not a git repo, tell the user "This directory is not a git repository." and stop.
-2. Run `git ls-files 'CHANGELOG.md' '**/CHANGELOG.md'` to discover every tracked changelog. If zero results, tell the user "No `CHANGELOG.md` found in the repository — create one (root or per-package) before running this skill." and stop.
-3. Run `git describe --tags --abbrev=0` to confirm at least one release tag exists. If none, ask the user to supply `--since <ref>` and stop until they do.
+1. If `in_repo:` is `no`, tell the user "This directory is not a git repository." and stop.
+2. If the `---changelogs---` block is empty, tell the user "No `CHANGELOG.md` found in the repository — create one (root or per-package) before running this skill." and stop.
+3. If `last_tag:` is `(no tags)` AND `$ARGUMENTS` lacks `--since <ref>`, ask the user to supply `--since <ref>` and stop until they do.
 
 ## Step 2: Determine the change range
 
-1. Parse the input for a `--since <ref>` flag. If absent, set `SINCE=$(git describe --tags --abbrev=0)`.
+1. Parse the input for a `--since <ref>` flag. If absent, use `last_tag:` from the Metadata block as `SINCE`.
 2. The range is `$SINCE..HEAD` for committed changes, plus the current uncommitted+staged working tree.
 
 ## Step 3: Determine each CHANGELOG's scope, then collect commits + uncommitted hunks
