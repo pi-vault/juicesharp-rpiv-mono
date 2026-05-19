@@ -1,6 +1,12 @@
 import type { Component } from "@earendil-works/pi-tui";
 import { CURSOR_MARKER, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
+// Grapheme-aware extraction at the cursor: pi-tui's Input advances `cursor` by
+// grapheme-cluster code-unit length, so the cursor can land between code units of
+// one cluster (emoji, ZWJ, combining marks). Single-code-unit slicing would split
+// the cluster across the SGR 7/27 boundary.
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 /**
  * Row-intent discriminated union. `kind` is the single discriminator —
  * pre-1.0.3 boolean flags have been removed (see `banned-flags.test.ts`).
@@ -282,7 +288,8 @@ export class WrappingSelect implements Component {
 		const offset =
 			requested !== undefined && requested >= 0 && requested <= buffer.length ? requested : buffer.length;
 		const before = buffer.slice(0, offset);
-		const rawAt = buffer.slice(offset, offset + 1);
+		const [firstGrapheme] = graphemeSegmenter.segment(buffer.slice(offset));
+		const rawAt = firstGrapheme ? firstGrapheme.segment : "";
 		// Whitespace at cursor (including end-of-buffer fallback) tokenizes as a wrap
 		// break inside `wrapTextWithAnsi`, splitting the line at the cursor. Substitute
 		// U+00A0 (NBSP): visually identical to a space, wrap-safe.

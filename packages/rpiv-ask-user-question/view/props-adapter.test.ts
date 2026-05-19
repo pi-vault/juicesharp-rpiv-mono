@@ -202,6 +202,50 @@ describe("QuestionnairePropsAdapter.apply", () => {
 			expect.objectContaining({ inputBuffer: "typed" }),
 		);
 	});
+
+	describe("getInputCursorOffset fallback branches", () => {
+		const expectUndefined = () => expect.objectContaining({ inputCursorOffset: undefined });
+
+		it("passes inputCursorOffset undefined when cursor field is absent", () => {
+			const { adapter, tabsByIndex, inlineInput } = makeFixture();
+			inlineInput.setValue("hello");
+			delete (inlineInput as unknown as { cursor?: unknown }).cursor;
+			adapter.apply(makeState());
+			expect(tabsByIndex[0]!.optionList.setProps).toHaveBeenLastCalledWith(expectUndefined());
+		});
+
+		it("passes inputCursorOffset undefined when cursor is not a number", () => {
+			const { adapter, tabsByIndex, inlineInput } = makeFixture();
+			inlineInput.setValue("hello");
+			(inlineInput as unknown as { cursor: unknown }).cursor = "0";
+			adapter.apply(makeState());
+			expect(tabsByIndex[0]!.optionList.setProps).toHaveBeenLastCalledWith(expectUndefined());
+		});
+
+		it("passes inputCursorOffset undefined when cursor is not a safe integer", () => {
+			const { adapter, tabsByIndex, inlineInput } = makeFixture();
+			inlineInput.setValue("hello");
+			(inlineInput as unknown as { cursor: unknown }).cursor = 1.5;
+			adapter.apply(makeState());
+			expect(tabsByIndex[0]!.optionList.setProps).toHaveBeenLastCalledWith(expectUndefined());
+		});
+
+		it("passes inputCursorOffset undefined when cursor is negative", () => {
+			const { adapter, tabsByIndex, inlineInput } = makeFixture();
+			inlineInput.setValue("hello");
+			(inlineInput as unknown as { cursor: unknown }).cursor = -1;
+			adapter.apply(makeState());
+			expect(tabsByIndex[0]!.optionList.setProps).toHaveBeenLastCalledWith(expectUndefined());
+		});
+
+		it("passes inputCursorOffset undefined when cursor exceeds buffer length", () => {
+			const { adapter, tabsByIndex, inlineInput } = makeFixture();
+			inlineInput.setValue("hello");
+			(inlineInput as unknown as { cursor: unknown }).cursor = 6;
+			adapter.apply(makeState());
+			expect(tabsByIndex[0]!.optionList.setProps).toHaveBeenLastCalledWith(expectUndefined());
+		});
+	});
 });
 
 describe("QuestionnairePropsAdapter.apply — preview pane resolution", () => {

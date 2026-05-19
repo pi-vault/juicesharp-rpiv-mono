@@ -325,6 +325,27 @@ describe("WrappingSelect.render — cursor position via setInputCursorOffset", (
 		expect(lines[0]).toContain(`hello${cursorOn(NBSP)}`);
 	});
 
+	it("renders cursor on emoji without splitting surrogate pair", () => {
+		const s = new WrappingSelect([{ kind: "other", label: "pick" }], 1, identityTheme);
+		s.setSelectedIndex(0);
+		s.setFocused(true);
+		s.setInputBuffer("hi😀bye");
+		s.setInputCursorOffset(2);
+		const lines = s.render(40);
+		expect(lines[0]).toContain(`hi${cursorOn("😀")}bye`);
+	});
+
+	it("renders cursor on ZWJ emoji sequence without splitting the cluster", () => {
+		const s = new WrappingSelect([{ kind: "other", label: "pick" }], 1, identityTheme);
+		const family = "👨‍👩‍👧";
+		s.setSelectedIndex(0);
+		s.setFocused(true);
+		s.setInputBuffer(`a${family}b`);
+		s.setInputCursorOffset(1);
+		const lines = s.render(40);
+		expect(lines[0]).toContain(`a${cursorOn(family)}b`);
+	});
+
 	it("renders cursor at correct position with wrapping across multiple lines", () => {
 		const s = new WrappingSelect([{ kind: "other", label: "pick" }], 1, identityTheme);
 		s.setSelectedIndex(0);
