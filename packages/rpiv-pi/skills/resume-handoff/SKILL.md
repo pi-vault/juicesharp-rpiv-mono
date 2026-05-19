@@ -36,7 +36,10 @@ When this command is invoked:
    node "${SKILL_DIR}/../_shared/list-recent.mjs" .rpiv/artifacts/handoffs 10
    ```
 
-   If the block above is empty, no handoffs exist under `.rpiv/artifacts/handoffs/` — tell the user and ask for a path. Otherwise, present the listed filenames via `ask_user_question` (top 4 as options; "Other" for older entries or a full path), then wait for selection.
+   Branch on the substituted list above:
+   - **Empty** — no handoffs exist; tell the user and ask for a path in prose.
+   - **Exactly one entry** — confirm with `ask_user_question`: "Resume this handoff?" with options "Resume `<filename>` (Recommended)" and "Pick a different path". Do NOT call `ask_user_question` with a single option (the tool requires ≥2).
+   - **Two or more entries** — present the top 4 filenames as `ask_user_question` options (a free-text "Other" row is appended automatically by the tool; do not list it manually).
 
    Direct invocation alternative: `/skill:resume-handoff .rpiv/artifacts/handoffs/<filename>`
 
