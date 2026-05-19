@@ -1,6 +1,6 @@
 ---
 date: {Current date and time with timezone in ISO format}
-author: {User from injected git context}
+author: {`author:` from Metadata block}
 commit: {Current commit hash}
 branch: {Current branch name}
 repository: {Repository name}
@@ -8,7 +8,7 @@ topic: "{Feature topic}"
 tags: [intent, frd, relevant-component-names]
 status: complete
 last_updated: {Same ISO timestamp as `date:` above}
-last_updated_by: {User from injected git context}
+last_updated_by: {`author:` from Metadata block}
 ---
 
 # FRD: {Feature topic}

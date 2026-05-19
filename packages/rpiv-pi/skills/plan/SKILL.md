@@ -121,7 +121,7 @@ tags: [plan, relevant-component-names]
 status: ready
 parent: "{path to design artifact}"
 last_updated: {Same ISO timestamp as `date:` above}
-last_updated_by: {User from injected git context}
+last_updated_by: {`author:` from Metadata block}
 ---
 
 # {Feature/Task Name} Implementation Plan

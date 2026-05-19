@@ -228,7 +228,7 @@ Findings go into Precedents & Lessons. Otherwise skip and note "git history unav
    tags: [research, codebase, relevant-component-names]
    status: complete
    last_updated: {Same ISO timestamp as `date:` above}
-   last_updated_by: {User from injected git context}
+   last_updated_by: {`author:` from Metadata block}
    ---
 
    # Research: {User's Research Topic}

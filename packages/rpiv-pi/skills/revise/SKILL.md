@@ -17,6 +17,7 @@ You are tasked with updating existing implementation plans based on user feedbac
 
 ```!
 node "${SKILL_DIR}/../_shared/now.mjs"
+echo
 node "${SKILL_DIR}/../_shared/list-recent.mjs" .rpiv/artifacts/plans 10
 ```
 
