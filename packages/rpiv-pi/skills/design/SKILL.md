@@ -34,9 +34,9 @@ Copy values verbatim — do not reformat the timezone offset.
 
 ## Flow
 
-1. Input → 2. Research → 3. Dimension sweep → 4. Checkpoint → 5. Decompose → 6. Generate slices → 7. Finalize → 8. Independent review → 9. Triage & iterate → 10. Follow-ups
+1. Input → 2. Research → 3. Dimension sweep → 4. Checkpoint → 5. Decompose → 6. Generate slices (code + Success Criteria) → 7. Finalize → 8. Present artifact → 9. Handle follow-ups
 
-The final artifact is plan-compatible.
+The final artifact is plan-compatible: `## Slices` boundaries become phase boundaries 1:1, and Success Criteria pass through unchanged. Post-finalization code + coverage review runs inside `/skill:plan` Step 4.
 
 ## Steps
 
@@ -216,6 +216,7 @@ After the design summary is confirmed, decompose the feature into vertical slice
    - **## Scope**: `### Building` — concrete deliverables. `### Not Building` — developer-stated exclusions AND likely scope-creep vectors (alternative architectures not chosen, nearby code that looks related but shouldn't be touched).
    - **## Decisions**: `###` per decision. Complex: Ambiguity → Explored (Option A/B with `file:line` + pro/con) → Decision. Simple: just state decision with evidence.
    - **## Architecture**: `###` per file with NEW/MODIFY label. Empty code fences in skeleton (filled in Step 6.4). NEW files get full implementation. MODIFY files get only modified/added code — no "Current" block.
+   - **## Slices**: `### Slice N: {name}` per slice from the decomposition. In skeleton, each subsection contains a `**Files**:` line listing the slice's file paths AND empty `#### Automated Verification:` / `#### Manual Verification:` subsections (filled in Step 6.4 from 6.1's Success Criteria). This section is the contract handed to `/skill:plan`: slice ≡ phase 1:1, criteria pass through unchanged.
    - **## Desired End State**: Usage examples showing the feature in use from a consumer's perspective — concrete code, not prose.
    - **## File Map**: `path/to/file.ext  # NEW/MODIFY — purpose` per line.
    - **## Ordering Constraints**: What must come before what. What can run in parallel.
@@ -237,27 +238,28 @@ Generate code one slice at a time. Each slice sees the fixed code from all previ
 
 **For each slice in the decomposition (sequential order):**
 
-#### 6.1. Generate slice code (internal)
+#### 6.1. Generate slice code and Success Criteria (internal)
 
-Generate complete, copy-pasteable code for every file in this slice — but **hold it for the artifact, do NOT present full code to the developer**. The developer sees a condensed review in 6.3; the full code goes into the artifact in 6.4.
+Generate complete, copy-pasteable code AND the slice's `### Success Criteria:` for every file in this slice — but **hold both for the artifact, do NOT present full code to the developer**. The developer sees a condensed review in 6.3; the full code and criteria go into the artifact in 6.4.
 
 - **New files**: complete code — imports, types, implementation, exports. Follow the pattern template from Step 2.
 - **Modified files**: read current file FULLY, generate only the modified/added code scoped to changed sections (no full "Current" block — the original is on disk)
 - **Test files**: complete test suites following project patterns
 - **Wiring**: show where new code hooks into existing code
+- **Success Criteria**: derive `### Success Criteria:` from this slice's file changes plus `## Verification Notes` entries that map to this slice's scope. Use the same `- [ ]` format as 6.4 (see template below). Project-baseline checks (`npm run check`, `npm test`) go on the terminal slice only. Commands in backticks. Criteria authored here flow through to plan as the phase's Success Criteria — slice ≡ phase, 1:1.
 
 If additional context is needed, spawn a targeted **codebase-analyzer** agent.
 
-No pseudocode, no TODOs, no placeholders — the code must be copy-pasteable by implement.
+No pseudocode, no TODOs, no placeholders — the code must be copy-pasteable by implement. Success Criteria must be atomic for this slice: no bullets that depend on symbols/files a later slice introduces.
 
-**Context grounding** (after slice 2): Before generating, re-read the artifact's Architecture section for files this slice touches. The artifact is the source of truth — generate code that extends what's already there, not what you remember from conversation.
+**Context grounding** (after slice 2): Before generating, re-read the artifact's Architecture section for files this slice touches AND the `## Slices` section for slices already locked. The artifact is the source of truth — generate code and criteria that extend what's already there, not what you remember from conversation.
 
 #### 6.2. Verify slice
 
 Mandatory for every slice — no skipping, no shortcuts. Dispatch the `slice-verifier` agent with:
 - `artifact_path`: the Step-5 Write `file_path` (contains the skeleton plus locked prior slices)
 - `slice_id`: `Slice N`
-- `current_slice_code`: inline the just-generated slice verbatim — every `### path/...` block under Architecture with its full code fence. Design slices carry no Success Criteria; pass code only.
+- `current_slice_code`: inline the just-generated slice verbatim — every `### path/...` block under Architecture with its full code fence AND the slice's `### Success Criteria:` block (Automated + Manual subsections from 6.1).
 - `target_files`: files this slice modifies, plus key files prior slices introduced
 
 The agent emits a 3-row summary (`Decisions / Cross-slice / Research`). On any VIOLATION, take one of:
@@ -286,11 +288,29 @@ Use the `ask_user_question` tool to confirm. Question: "Slice {N/M}: {slice name
 
 #### 6.4. Incorporate feedback
 
-**Approve**: Lock this slice's code and **Edit the artifact immediately**:
+**Approve**: Lock this slice's code AND Success Criteria and **Edit the artifact immediately**:
 1. For each file in this slice, Edit the skeleton artifact to replace the empty code fence under that file's Architecture heading with the full generated code from 6.1
 2. If a later slice contributes to a file already filled by an earlier slice: **rewrite the entire code fence** with the merged result (do not append alongside existing code)
-3. After merge, verify: no duplicate function definitions, imports deduplicated, exports list complete
-4. Update the Design History section: `- Slice N: {name} — approved as generated`
+3. After merge, verify within Architecture: no duplicate function definitions, imports deduplicated, exports list complete
+4. **Write the slice's `## Slices` entry**: Edit the artifact to add a new `### Slice N: {name}` subsection under the top-level `## Slices` heading, containing:
+
+   ```markdown
+   ### Slice N: {slice name}
+
+   **Files**: `path/to/file1.ext`, `path/to/file2.ext`
+
+   #### Automated Verification:
+   - [ ] Type checking passes: `npm run check`
+   - [ ] Tests pass: `npm test`
+   - [ ] Grep pattern from Verification Note: `grep -r "newApi" packages/ | wc -l` returns >= 3
+
+   #### Manual Verification:
+   - [ ] New widget renders correctly above the editor
+   - [ ] Performance acceptable with 1000+ todo items
+   ```
+
+   This section is the contract handed to `/skill:plan` — slice boundaries become phase boundaries 1:1, and Success Criteria pass through unchanged. The bullets are the same `- [ ]` shape `implement` flips to `- [x]` and `validate` extracts commands from.
+5. Update the Design History section: `- Slice N: {name} — approved as generated`
 - Proceed to next slice
 
 **Revise**: Update code per developer feedback. Re-run verify (6.2). Re-present the same slice (6.3). The artifact is NOT touched — only "Approve" writes to the artifact.
@@ -306,101 +326,30 @@ The artifact was created as a skeleton in Step 5 and filled progressively in Ste
 
 1. **Verify all Architecture entries are filled**: Every file heading from the decomposition must have a non-empty code block. If any are still empty, **return to Step 6** — never fill at finalize time (bypasses 6.2/6.3). Empty here = workflow off-rail.
 
-2. **Verify cross-slice file merges**: For files touched by multiple slices, confirm the Architecture entry contains the final merged code, not just the last slice's contribution.
+2. **Verify all `## Slices` entries are filled**: Every `### Slice N: {name}` subsection must have a `**Files**:` line AND non-empty `#### Automated Verification:` + `#### Manual Verification:` subsections. If any are still empty, **return to Step 6** — Success Criteria authored in 6.1 must be written in 6.4 alongside code. Empty here = workflow off-rail (same invariant as empty code fences).
 
-3. **Update frontmatter** via Edit: `status: in-progress` → `status: in-review` (Step 9 flips to `ready` after triage — keeps consumers off an artifact still being edited). Leave `last_updated` / `last_updated_by` as-is.
+3. **Verify cross-slice file merges**: For files touched by multiple slices, confirm the Architecture entry contains the final merged code, not just the last slice's contribution.
 
-4. **Verify template completeness**: Ensure all sections from the template reference in Step 5 are present and filled. Edit to fix any gaps.
+4. **Update frontmatter** via Edit: `status: in-progress` → `status: ready`. Design owns no post-finalization review — `/skill:plan` runs the artifact-code-reviewer + artifact-coverage-reviewer pair against the phased plan that inherits this design's `## Slices` boundaries 1:1. Leave `last_updated` / `last_updated_by` as-is.
 
-5. **Architecture format reminder**:
+5. **Verify template completeness**: Ensure all sections from the template reference in Step 5 are present and filled. Edit to fix any gaps.
+
+6. **Architecture format reminder**:
    - **NEW files**: `### path/to/file.ext — NEW` + one-line purpose + full implementation code block
    - **MODIFY files**: `### path/to/file.ext:line-range — MODIFY` + code block with only the modified/added code (no "Current" block — the original is on disk, implement reads it)
 
-### Step 8: Independent Design Review
+### Step 8: Present Design Artifact
 
-After Step 7 finalizes the artifact, dispatch an independent code-review subagent to walk every Architecture code fence against the live codebase at HEAD.
+Design owns no post-finalization review. Both `artifact-code-reviewer` and `artifact-coverage-reviewer` run inside `/skill:plan` Step 4 against the phased plan that inherits this design's `## Slices` boundaries 1:1 — that's where code + Success Criteria + phasing are all visible in one artifact for joint review.
 
-#### 8.1. Dispatch the artifact-code-reviewer subagent
+Present the design artifact location to the developer:
 
-Reuse the exact `file_path` string passed to `Write` at Step 5 — the runtime already resolved it for this platform; do not rebuild it from `pwd`. `ls` to verify it still exists; abort dispatch on miss.
-
-```
-Agent({
-  subagent_type: "artifact-code-reviewer",
-  description: "post-finalization design review",
-  prompt: `Design artifact: {Step-5 Write file_path, ls-verified}
-
-Review the finalized design against the live codebase at HEAD. Walk every Architecture code fence, audit against code-quality / codebase-fit / actionability, emit one severity-tagged row per finding.`
-})
-```
-
-Verification-coverage review is owned by `/skill:plan`.
-
-#### 8.2. Persist the review table to the artifact
-
-The agent returns a markdown table with columns `plan-loc | codebase-loc | severity | dimension | finding | recommendation`. Append it to the design artifact as a new section, with a `resolution` column appended (initially blank, filled progressively at Step 9):
-
-```markdown
-## Design Review (Step 8)
-
-_Independent post-finalization code review. Findings triaged at Step 9._
-
-| plan-loc          | codebase-loc                | severity   | dimension      | finding   | recommendation   | resolution         |
-| ----------------- | --------------------------- | ---------- | -------------- | --------- | ---------------- | ------------------ |
-| {plan-loc}        | {codebase-loc}              | {severity} | {dimension}    | {finding} | {recommendation} | (filled at Step 9) |
-| ...               |                             |            |                |           |                  |                    |
-```
-
-If the agent emits zero rows, still emit the section with a single line: `_No findings — code reviewer cleared the artifact._`. Persistence is mandatory regardless of finding count — the section is the durable audit trail.
-
-#### 8.3. Tally findings for Step 9's prompt
-
-Count rows by severity. Store the counts in main context for Step 9's developer prompt:
-
-```
-{B} blockers, {C} concerns, {S} suggestions
-```
-
-Do NOT auto-apply any finding. The orchestrator never makes the apply / defer / dismiss judgment alone — that lives with the developer at Step 9. The reviewer's role is to surface; the developer's role is to triage.
-
-#### 8.4. Failure handling
-
-If artifact-code-reviewer errors out (subprocess crash, malformed output, timeout):
-- Skip Step 8's findings; do not block on the failure.
-- Append `_Step 8 code review failed: {one-line cause}._` under the `## Design Review (Step 8)` heading instead of the row table.
-- Record the fallback in `## Developer Context`: `Step 8 review unavailable; proceeded to developer review without reviewer findings.`
-- Proceed to Step 9.
-
-### Step 9: Review & Iterate
-
-1. **Triage Step 8 reviewer findings first** (skip if Step 8 returned no findings):
-
-   Present the Design Review table from Step 8 to the developer with severity-grouped framing:
-
-   ```
-   Design-reviewer findings: {B} blockers, {C} concerns, {S} suggestions
-
-   Triage each row before the freeform review below:
-   - applied — code change made; I'll Edit the affected Architecture code fence and fill the row's resolution as `applied: {one-line summary}`
-   - deferred — noted but not fixing now; resolution cites why (e.g., "out of scope for this design", "follow-up commit")
-   - dismissed — not a real issue; resolution explains why the reviewer was wrong (e.g., "X is intentional because Y")
-   ```
-
-   Use `ask_user_question` with options "applied / deferred / dismissed":
-   - **applied**: Edit the affected Architecture code fence per the recommendation; fill `resolution`.
-   - **deferred** / **dismissed**: fill `resolution` with the reason.
-
-   **Order and batching**: blockers sequentially (resolution may invalidate later rows). Concerns and suggestions: batch up to 4 independent rows per `ask_user_question` call (Step 4's rule). Independent = different files / different intents AND neither recommendation references the other's location; otherwise sequential.
-
-2. **Flip status to ready**: once every row has a `resolution` (or the table is empty per Step 8's no-findings / failure-fallback path), Edit frontmatter `status: in-review` → `status: ready`. Artifact is now plan-ready.
-
-3. **Present the design artifact location** (after triage is complete):
    ```
    Design artifact written to:
    `.rpiv/artifacts/designs/{filename}.md`
 
    {N} architectural decisions fixed, {M} new files designed, {K} existing files modified.
-   {Sl} slices generated, {R} revisions during generation. {T} reviewer findings triaged at Step 9 ({A} applied, {D} deferred, {DD} dismissed).
+   {Sl} slices generated, {R} revisions during generation. Success Criteria authored alongside each slice in 6.1 and verified by slice-verifier in 6.2.
 
    Please review and let me know:
    - Are the architectural decisions correct?
@@ -411,16 +360,16 @@ If artifact-code-reviewer errors out (subprocess crash, malformed output, timeou
 
    💬 Follow-up: describe the change in chat to append a timestamped Follow-up section to this artifact. Re-run `/skill:design` for a fresh artifact.
 
-   **Next step:** `/skill:plan .rpiv/artifacts/designs/{filename}.md` — sequence the design into implementation phases.
+   **Next step:** `/skill:plan .rpiv/artifacts/designs/{filename}.md` — sequence the design into implementation phases (slice ≡ phase, 1:1) and run the artifact reviewer pair.
 
    > 🆕 Tip: start a fresh session with `/new` first — chained skills work best with a clean context window.
    ```
 
-### Step 10: Handle Follow-ups
+### Step 9: Handle Follow-ups
 
 - **Edit in-place.** Use the Edit tool to update the design artifact directly — sliced design code stays one source of truth.
 - **Bump frontmatter.** Update `last_updated` + `last_updated_by`; set `last_updated_note: "Updated <brief description>"`.
-- **Sync decisions ↔ code.** If the change affects decisions, update both the Decisions section AND the Architecture code. Code is source of truth — if they conflict, the code wins, update the prose.
+- **Sync decisions ↔ code ↔ criteria.** If the change affects decisions, update the Decisions section, the Architecture code, AND the relevant `## Slices` Success Criteria. Code is source of truth — if they conflict, the code wins, update the prose and criteria.
 - **Return to checkpoint on new ambiguities.** If new ambiguities surface, return to Step 4 (developer checkpoint) before re-generating slices.
 - **When to re-invoke instead.** If the underlying research is now stale or the feature scope changed materially, re-run `/skill:research` then `/skill:design` for a fresh artifact. The previous block's `Next step:` stays valid for the existing design.
 
@@ -445,8 +394,7 @@ If artifact-code-reviewer errors out (subprocess crash, malformed output, timeou
 | Default (research artifact provided) | codebase-pattern-finder, codebase-analyzer, integration-scanner, precedent-locator |
 | Novel work (new library/pattern) | + web-search-researcher |
 | Step 6.1 mid-generation gap (specific anchor unclear) | targeted codebase-analyzer (max 1) |
-| Step 6.2 per-slice verify (mandatory) | slice-verifier |
-| Step 8 post-finalization review (mandatory) | artifact-code-reviewer |
+| Step 6.2 per-slice verify (mandatory; sees code + Success Criteria) | slice-verifier |
 
 Spawn multiple agents in parallel when they're searching for different things. Each agent runs in isolation — provide complete context in the prompt, including specific directory paths when the feature targets a known module. Don't write detailed prompts about HOW to search — just tell it what you're looking for and where.
 
@@ -460,16 +408,15 @@ Spawn multiple agents in parallel when they're searching for different things. E
   - ALWAYS resolve all ambiguities (Step 4) before decomposing into slices (Step 5)
   - ALWAYS complete holistic decomposition before generating any slice code (Step 6)
   - ALWAYS create the skeleton artifact immediately after decomposition approval (Step 5)
-  - NEVER leave Architecture code fences empty after their slice is approved — fill via Edit in Step 6.4
-  - NEVER fill empty Architecture content at Step 7 — empty at finalize time = return to Step 6 (preserves the 6.3 micro-checkpoint)
-  - ALWAYS dispatch slice-verifier at Step 6.2 for every slice before presenting at 6.3; never skip, never batch across slices
+  - ALWAYS generate Success Criteria in Step 6.1 alongside code; NEVER leave Architecture code fences OR `## Slices` Success Criteria empty after their slice is approved — both are written via Edit in Step 6.4 from what 6.1 produced
+  - NEVER fill empty Architecture content OR empty `## Slices` Success Criteria at Step 7 — empty at finalize time = return to Step 6 (preserves the 6.3 micro-checkpoint)
+  - ALWAYS dispatch slice-verifier at Step 6.2 for every slice before presenting at 6.3; never skip, never batch across slices; slice-verifier sees code AND Success Criteria together
   - NEVER silently dismiss a slice-verifier VIOLATION — either fix and re-dispatch, or surface the verbatim finding to the developer at 6.3 for ratification
-  - ALWAYS dispatch artifact-code-reviewer at Step 8 after Step 7 finalize, BEFORE the developer review at Step 9
-  - NEVER auto-apply a Step 8 reviewer finding; triage is the developer's call at Step 9
-  - ALWAYS hold `status: in-review` from Step 7 through Step 9; flip to `ready` only after every row has a `resolution` (or the table is empty)
+  - Post-finalization code + coverage review runs in `/skill:plan` Step 4 (not here); design's quality gate is per-slice via slice-verifier at 6.2
+  - Design flips `status: in-progress` → `status: ready` directly at Step 7; no `in-review` intermediate (no Step 8 reviewer to wait for)
 - NEVER skip the developer checkpoint — developer input on architectural decisions is the highest-value signal in the design process
 - NEVER edit source files — all code goes into the design document, not the codebase. This skill produces a document, not implementation. Source file editing is implement's job.
-- **Code is source of truth** — if the Architecture code section conflicts with the Decisions prose, the code wins. Update the prose.
+- **Code is source of truth** — if the Architecture code section conflicts with the Decisions prose or the `## Slices` Success Criteria, the code wins. Update the prose and criteria.
 - **Checkpoint recordings**: Record micro-checkpoint interactions in Developer Context with `file:line` references, same as Step 4 questions.
 - **Frontmatter consistency**: Always include frontmatter, use snake_case for multi-word fields, keep tags relevant
 
