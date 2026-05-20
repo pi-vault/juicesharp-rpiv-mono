@@ -7,6 +7,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Refresh npm cover (`docs/cover.{svg,png}`) to align with the unified card layout used across the `@juicesharp/rpiv-*` family.
+
 ## [1.10.1] - 2026-05-19
 
 ### Changed

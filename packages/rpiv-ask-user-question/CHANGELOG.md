@@ -7,6 +7,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Refresh npm cover (`docs/cover.{svg,png}`): tighter card rhythm so all options, the divider, the trailing `4. Chat about this` row, and the keyboard hints sit inside the card; `4.` now aligns with the rest of the option numerals.
+
 ## [1.10.1] - 2026-05-19
 
 ## [1.10.0] - 2026-05-19
