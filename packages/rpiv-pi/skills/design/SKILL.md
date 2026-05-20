@@ -19,10 +19,16 @@ You are tasked with designing how code will be shaped for a feature or change. T
 node "${SKILL_DIR}/../_shared/now.mjs"
 echo
 node "${SKILL_DIR}/../_shared/git-context.mjs"
+echo
+echo "### recent (read only in case of empty user input)"
+echo "recent research:"
+node "${SKILL_DIR}/../_shared/list-recent.mjs" .rpiv/artifacts/research 4
+echo
+echo "recent solutions:"
+node "${SKILL_DIR}/../_shared/list-recent.mjs" .rpiv/artifacts/solutions 4
 ```
 
 - `now.mjs` (line 1) — `<iso>\t<slug>` tab-separated.
-- `git-context.mjs` (lines below) — `branch:` / `commit:` / `repo:` / `root:` / `in_repo:` / `author:`.
 
 Copy values verbatim — do not reformat the timezone offset.
 
@@ -47,15 +53,10 @@ When this command is invoked:
    - These become starting context — no need to re-discover what exists
    - Research Developer Context Q/As = inherited decisions (record in Decisions, never re-ask); Open Questions = starting ambiguity queue, filtered by dimension in Step 3
 
-   **No arguments provided**:
-   ```
-   I'll design a feature iteratively from a research artifact. Please provide:
-
-   `/skill:design [research artifact] [task description]`
-
-   Research artifact is required. Task description is optional.
-   ```
-   Then wait for input.
+   **No arguments provided**, branch on the `recent research:` and `recent solutions:` listings in the Metadata block:
+   - **Both empty** — no upstream artifacts available; tell the user and suggest running `/skill:research` (or `/skill:explore` for option comparison) first.
+   - **Exactly one entry total** — confirm with `ask_user_question`: "Design from this artifact?" with options "Design from `[<source>] <filename>` (Recommended)" and "Pick a different path".
+   - **Two or more entries total** — present up to 4 most-recent across both listings as `ask_user_question` options, each prefixed `[research]` or `[solutions]` to flag source class.
 
 2. **Read any additional files mentioned** — tickets, related designs, existing implementations. Read them FULLY before proceeding.
 
