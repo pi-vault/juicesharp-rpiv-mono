@@ -7,6 +7,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Relocate npm + MIT badges from the cover area to the License section in README.
+
 ## [1.10.2] - 2026-05-20
 
 ### Changed

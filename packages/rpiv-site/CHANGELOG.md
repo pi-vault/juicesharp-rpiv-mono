@@ -7,6 +7,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- `src/lib/agents.ts` now lists `artifact-code-reviewer` + `artifact-coverage-reviewer` in place of the retired `artifact-reviewer`.
+
 ## [1.10.2] - 2026-05-20
 
 ## [1.10.1] - 2026-05-19
