@@ -124,44 +124,24 @@ The SSRF guard (which refuses loopback and RFC-1918 addresses) applies to URLs `
 
 ### Running SearXNG locally with Docker
 
-The official `searxng/searxng` image's entrypoint **overwrites** `/etc/searxng/settings.yml` on first start with the bundled default — pre-populating the mounted file before `docker run` will not stick. The reliable flow:
+The `searxng/searxng` entrypoint **overwrites** `/etc/searxng/settings.yml` on first start with the bundled default (ships with `formats: [html]` only). Pre-populating the mounted file doesn't stick — wait for the entrypoint, then patch:
 
 ```bash
-mkdir -p /tmp/searxng
-docker run -d --name searxng \
-  -p 8080:8080 \
-  -v /tmp/searxng:/etc/searxng \
-  -e BASE_URL=http://localhost:8080/ \
-  searxng/searxng:latest
-# Wait ~5s for the entrypoint to populate /tmp/searxng/settings.yml,
-# then enable JSON output (default ships with only `formats: [html]`):
+mkdir -p ~/.searxng
+docker run -d --name searxng --restart unless-stopped \
+  -p 8080:8080 -v "$HOME/.searxng":/etc/searxng \
+  -e BASE_URL=http://localhost:8080/ searxng/searxng:latest
+sleep 5  # wait for entrypoint to write settings.yml
 sed -i.bak '/^  formats:$/,/^[^ ]/ { /- html/a\
     - json
-}' /tmp/searxng/settings.yml
+}' ~/.searxng/settings.yml
 docker restart searxng
 
-# Sanity check
-curl -sf 'http://localhost:8080/search?q=hello&format=json' | head -c 200
+# Sanity check — a number > 0 means it's wired correctly
+curl -sf 'http://localhost:8080/search?q=hello&format=json' | jq '.results | length'
 ```
 
-You should see a JSON document with a `results` array. A `403 Forbidden` here means JSON is still disabled — re-check `/tmp/searxng/settings.yml` and restart.
-
-To wire the local instance into Pi:
-
-```bash
-export SEARXNG_URL=http://localhost:8080
-pi install /path/to/local/rpiv-web-tools   # or: pi install npm:@juicesharp/rpiv-web-tools
-# Inside Pi:
-# /web-search-config  → pick SearXNG → Enter for default URL → Enter for no key
-```
-
-Cleanup when you're done:
-
-```bash
-docker stop searxng && docker rm searxng
-rm -rf /tmp/searxng
-unset SEARXNG_URL SEARXNG_API_KEY
-```
+`403` means JSON is still disabled — re-check `~/.searxng/settings.yml`. Works identically on Docker Desktop or OrbStack. For a throwaway test instance, swap `~/.searxng` for `/tmp/searxng` and drop `--restart unless-stopped`.
 
 ## Executor guidance overrides
 
