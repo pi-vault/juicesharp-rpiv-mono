@@ -28,8 +28,6 @@ echo "recent solutions:"
 node "${SKILL_DIR}/../_shared/list-recent.mjs" .rpiv/artifacts/solutions 4
 ```
 
-- `now.mjs` (line 1) — `<iso>\t<slug>` tab-separated.
-
 Copy values verbatim — do not reformat the timezone offset.
 
 ## Flow
@@ -195,8 +193,8 @@ After the design summary is confirmed, decompose the feature into vertical slice
 3. **Confirm decomposition** using the `ask_user_question` tool. Question: "{N} slices for {feature}. Slice 1: {name} (foundation). Slices 2-N: {brief}. Approve decomposition?". Header: "Slices". Options: "Approve (Recommended)" (Proceed to slice-by-slice code generation); "Adjust slices" (Reorder, merge, or split slices before generating); "Change scope" (Add or remove files from the decomposition).
 
 4. **Create skeleton artifact** — immediately after decomposition is approved:
-   - Determine metadata from the Metadata block above: filename `.rpiv/artifacts/plans/<slug>_<topic>.md` (use `<slug>` from `now.mjs` line 1); `repository:` from `repo:`; `branch:` / `commit:` from matching labels; `author:` ← matching label (fallback: `unknown`).
-   - Timestamp: use `<iso>` from `now.mjs` line 1 for `date:` and `last_updated:` (copy the offset verbatim).
+   - Determine metadata from the Metadata block above: filename `.rpiv/artifacts/plans/<slug>_<topic>.md` (use `<slug>` from line 1 of the Metadata block above); `repository:` from `repo:`; `branch:` / `commit:` from matching labels; `author:` ← matching label (fallback: `unknown`).
+   - Timestamp: use `<iso>` from line 1 of the Metadata block above for `date:` and `last_updated:` (copy the offset verbatim).
    - Write skeleton using the Write tool with `status: in-progress` in frontmatter
    - **Include all prose sections filled** from Steps 1-5: Overview, Requirements, Current State Analysis, Desired End State, What We're NOT Doing, Decisions, Ordering Constraints, Verification Notes, Performance Considerations, Migration Notes, Pattern References, Developer Context, References
    - **Phase sections**: one `## Phase N: {slice name}` heading per slice from the decomposition (in slice order), each with `### Overview`, `### Changes Required:` (one `#### N. path/to/file.ext` subsection per file with empty code fence + NEW/MODIFY label), and `### Success Criteria:` (empty Automated + Manual subsection headers — filled in Step 6.4 on approval)

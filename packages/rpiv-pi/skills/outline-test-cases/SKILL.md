@@ -22,8 +22,6 @@ Two modes: **Fresh** (no existing outline — full discovery and checkpoint) and
 node "${SKILL_DIR}/../_shared/now.mjs"
 ```
 
-`now.mjs` (line 1) — `<iso>\t<slug>` tab-separated. Use `<iso>` for any `date:` frontmatter bump; copy verbatim.
-
 ## Flow
 
 1. Input → 2. Discover features → 3. Determine targets → 4. Checkpoint → 5. Write outline → 6. Follow-ups
@@ -296,7 +294,7 @@ After all questions are answered, present the full feature list summary (same fo
    - Append new Q&A pairs to `## Checkpoint History` under a new date header (`### YYYY-MM-DD`)
    - Update `## Scope Decisions` if changed during checkpoint
    - Update `## Domain Context` if changed
-   - Update frontmatter `date` to `<iso>` from the Metadata block (first tab-separated field on `now.mjs` line 1)
+   - Update frontmatter `date` to `<iso>` from the Metadata block (first tab-separated field on line 1 of the Metadata block above)
 
 2. **Add new feature folders** for newly discovered features:
    - Create directory + write new `_meta.md` from template (same as Fresh mode Step 5.2)

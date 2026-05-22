@@ -21,8 +21,6 @@ echo
 node "${SKILL_DIR}/../_shared/git-context.mjs"
 ```
 
-- `now.mjs` (line 1) — `<iso>\t<slug>` tab-separated. Use `<iso>` for any "current date" field.
-
 ## Flow
 
 1. Input → 2. Discover code → 3. Analyze code → 4. Synthesize → 5. Checkpoint → 6. Generate test cases → 7. Write files → 8. Follow-ups
@@ -267,7 +265,7 @@ What makes these examples good:
 3. **Update _meta.md** (when it exists):
    - Set `tc_count` to the number of TCs written
    - Set `status` to `generated`
-   - Update `date` to `<iso>` from the Metadata block (first tab-separated field on `now.mjs` line 1)
+   - Update `date` to `<iso>` from the Metadata block (first tab-separated field on line 1 of the Metadata block above)
    - Append new checkpoint Q&A pairs to `## Checkpoint History` under a new date header — only if new Q&A occurred during Step 5
 
 4. **Rebuild root coverage map** at `.rpiv/test-cases/_coverage-map.md`:

@@ -23,8 +23,6 @@ echo "recent plans:"
 node "${SKILL_DIR}/../_shared/list-recent.mjs" .rpiv/artifacts/plans 10
 ```
 
-- `now.mjs` (line 1) — `<iso>\t<slug>` tab-separated.
-
 ## Flow
 
 1. Input → 2. Research if needed → 3. Present approach → 4. Update plan → 5. Sync & review → 6. Follow-ups
