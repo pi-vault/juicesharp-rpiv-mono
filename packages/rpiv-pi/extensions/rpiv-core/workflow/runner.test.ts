@@ -1443,10 +1443,15 @@ describe("runWorkflow", () => {
 			expect(result.stagesCompleted).toBe(6); // 3×a + 3×b
 			expect(chain.remaining()).toBe(0); // All steps consumed
 
+			// Every stage that ran completed successfully — the halt is at the
+			// chain layer, not the stage layer, so no "failed" row is written.
+			// (`stages` interleaves stage rows and routing-decision rows; filter
+			// on `stageNumber` to count actual stage rows.)
 			const { stages } = readState(tmpDir);
-			const failedRows = stages.filter((s) => s.status === "failed");
-			expect(failedRows).toHaveLength(1);
-			expect(failedRows[0]?.skill).toBe("b");
+			const stageRows = stages.filter((s) => typeof s.stageNumber === "number");
+			expect(stageRows).toHaveLength(6); // 3×a + 3×b, all completed
+			expect(stageRows.every((s) => s.status === "completed")).toBe(true);
+			expect(stageRows.filter((s) => s.status === "failed")).toHaveLength(0);
 
 			const exhaustionNotice = chain.notifications.find((n) => /backward-jump limit exceeded/i.test(n.msg));
 			expect(exhaustionNotice?.level).toBe("error");
@@ -1615,7 +1620,7 @@ describe("runWorkflow", () => {
 			expect(chain.statusUpdates.at(-1)).toEqual({ key: "rpiv-workflow", value: undefined });
 		});
 
-		it("records a failed stage in JSONL on backward-jump exhaustion", async () => {
+		it("does not write a duplicate JSONL row on backward-jump exhaustion", async () => {
 			writeArtifact(tmpDir, ".rpiv/artifacts/a/a1.md");
 			writeArtifact(tmpDir, ".rpiv/artifacts/b/b1.md");
 
@@ -1642,10 +1647,15 @@ describe("runWorkflow", () => {
 
 			await runWorkflow(chain.ctx, { preset: "cycle", input: "x", dag, maxBackwardJumps: 0 });
 
+			// Both stages completed successfully before the guard halted the
+			// chain — no phantom "failed" row for the same skill that just
+			// recorded "completed". (Filter on `stageNumber` to skip the
+			// routing-decision row interleaved into the JSONL.)
 			const { stages } = readState(tmpDir);
-			const failedRows = stages.filter((s) => s.status === "failed");
-			expect(failedRows).toHaveLength(1);
-			expect(failedRows[0]?.skill).toBe("b");
+			const stageRows = stages.filter((s) => typeof s.stageNumber === "number");
+			expect(stageRows).toHaveLength(2);
+			expect(stageRows.every((s) => s.status === "completed")).toBe(true);
+			expect(stageRows.filter((s) => s.status === "failed")).toHaveLength(0);
 		});
 	});
 });

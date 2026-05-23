@@ -331,10 +331,14 @@ async function runStage(curCtx: ChainCtx, idx: number, run: RunContext): Promise
 				}
 
 				// --- Backward-jump cycle guard ---
+				// The stage itself completed successfully (recordStageSuccess
+				// already wrote its "completed" JSONL row at sessions.ts:190);
+				// halt is at the chain/routing layer, signaled via state.error.
+				// No second audit row — the absence of subsequent stages plus
+				// state.error tells the full story.
 				if (nextIdx <= idx) {
 					state.backwardJumps++;
 					if (state.backwardJumps > run.maxBackwardJumps) {
-						recordStage(cwd, runId, { skill: skillLabel, status: "failed", ts: nowIso() }, state);
 						freshCtx.ui.setStatus(STATUS_KEY, undefined);
 						freshCtx.ui.notify(MSG_BACKWARD_JUMP_EXHAUSTED(state.backwardJumps, run.maxBackwardJumps), "error");
 						state.error = ERR_BACKWARD_JUMP_EXHAUSTED(state.backwardJumps, run.maxBackwardJumps);
