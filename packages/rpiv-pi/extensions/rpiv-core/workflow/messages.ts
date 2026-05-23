@@ -1,17 +1,10 @@
 /**
- * User-facing message constants for the /rpiv workflow runtime.
- *
- * Two channels:
- * - `STATUS_*`: persistent status-line text written via `ctx.ui.setStatus`.
- *   Survives the `newSession` transition.
- * - `MSG_*` / `ERR_*`: one-shot announcements via `ctx.ui.notify`. Some may be
- *   repainted by Pi's session transition; the persistent status line above
- *   guarantees the user always knows where the workflow currently is.
- *
- * No imports beyond TS primitives — safe to consume from any layer.
+ * User-facing message constants.
+ * - `STATUS_*` via `ctx.ui.setStatus` — persists across `newSession`.
+ * - `MSG_*` / `ERR_*` via `ctx.ui.notify` — one-shot; may be repainted by
+ *   Pi's session transition (the status line is the durable channel).
  */
 
-/** Key under which the workflow writes its persistent status line. */
 export const STATUS_KEY = "rpiv-workflow";
 
 export const STATUS_STAGE = (stage: number, total: number, skill: string) => `rpiv: stage ${stage}/${total} — ${skill}`;

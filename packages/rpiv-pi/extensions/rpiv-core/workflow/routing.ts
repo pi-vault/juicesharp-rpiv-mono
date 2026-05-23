@@ -1,9 +1,6 @@
 /**
- * Stage routing for the /rpiv workflow runner.
- *
- * Replaces the runner's inline `idx + 1` next-stage computation with
- * edge-aware routing. Strict-preset mode only: predicate targets must
- * be in the preset sequence at or after the linear successor.
+ * Edge-aware next-stage lookup. Strict-preset: predicate targets must
+ * appear at or after the linear successor in the preset.
  */
 
 import { type DagEdge, getEdge, type WorkflowDag } from "./dag.js";
@@ -12,17 +9,11 @@ import { assertNever } from "./transcript.js";
 import type { RunState } from "./types.js";
 
 /**
- * Resolve the next stage id after the current node.
- *
- * - No outgoing edge → linear advance.
- * - `auto` edge      → first target.
- * - `predicate` edge → evaluate predicate, validate target is forward in preset.
- * - `choice` edge    → linear advance (user-prompt routing not yet wired);
- *                      preset linearity disambiguates aliased targets.
- *
- * Exhaustive over `EdgeCondition` via `assertNever` — a new condition variant
- * lights up at this single call site instead of silently falling into the
- * choice arm.
+ * - no edge → linear advance
+ * - auto → `edge.to[0]`
+ * - predicate → evaluate + assert forward
+ * - choice → linear advance (preset linearity disambiguates aliased targets;
+ *            user-prompt routing not yet wired)
  */
 export function resolveNextStageId(
 	dag: WorkflowDag,
@@ -42,35 +33,21 @@ export function resolveNextStageId(
 		case "predicate":
 			return evaluatePredicateEdge(edge, preset, idx, state);
 		case "choice":
-			// User-prompt routing not yet wired; the choice falls through to
-			// preset linearity, which is also how per-preset aliased targets
-			// (e.g. validate → code-review vs. code-review-large) resolve today.
 			return linearNextOf(preset, idx);
 		default:
 			return assertNever(edge.condition);
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Preset navigation
-// ---------------------------------------------------------------------------
-
 const atEndOfPreset = (preset: string[], idx: number): boolean => idx + 1 >= preset.length;
-
 const linearNextOf = (preset: string[], idx: number): string | undefined => preset[idx + 1];
 
-// ---------------------------------------------------------------------------
-// Predicate evaluation
-// ---------------------------------------------------------------------------
-
-/** Run the edge's predicate and verify the chosen target is a valid forward step. */
 function evaluatePredicateEdge(edge: DagEdge, preset: string[], idx: number, state: Readonly<RunState>): string {
 	const target = invokePredicate(edge, state);
 	assertForwardTarget(target, preset, idx);
 	return target;
 }
 
-/** Call the edge's predicate with a typed context; surface any throw as a halt-shaped error. */
 function invokePredicate(edge: DagEdge, state: Readonly<RunState>): string {
 	const predicate = (edge as { predicate: EdgePredicate }).predicate;
 	const ctx: PredicateContext = { manifest: state.manifest, state };
@@ -81,7 +58,6 @@ function invokePredicate(edge: DagEdge, state: Readonly<RunState>): string {
 	}
 }
 
-/** Strict-preset enforcement: predicate target must be at or after preset[idx + 1]. */
 function assertForwardTarget(target: string, preset: string[], idx: number): void {
 	const targetIdx = preset.indexOf(target);
 	if (targetIdx < 0 || targetIdx < idx + 1) {

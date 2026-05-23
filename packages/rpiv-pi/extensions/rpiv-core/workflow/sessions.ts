@@ -1,25 +1,14 @@
 /**
- * Session execution layer — drives one Pi session per workflow stage / phase.
- *
- * Two public entries (`runStageSession`, `runPhaseSession`) sit on top of the
- * shared `spawnSession` primitive. The session-policy switch (fresh vs continue)
- * lives only in `spawnSession`; everything downstream — stop classification,
- * manifest extraction with validation retry, JSONL persistence, chain advance —
- * is policy-agnostic.
- *
- * Top-level functions (`postStage`, `postPhase`, `extractAndValidateManifest`)
- * are written programming-by-intention: every line at their top level is a
- * single named action at the same abstraction level. The "what to do" reads
- * top-to-bottom; the "how" lives in the named helpers below.
- *
- * Imports the audit layer (record* / Audit) and message constants; never the
- * orchestration layer (`runner.ts`). The orchestration layer drives this
- * module by building `StageSession` / `PhaseSession` and awaiting the entry.
+ * Session execution — one Pi session per workflow stage / phase.
+ * `runStageSession` and `runPhaseSession` are the two public entries.
+ * The fresh-vs-continue branch lives only in spawnSession; everything
+ * downstream (stop classification, extraction, validation, JSONL,
+ * chain advance) is policy-agnostic.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
-	type Audit,
+	type AuditCtx,
 	nowIso,
 	recordCancellation,
 	recordStage,
@@ -111,18 +100,12 @@ async function postPhase(ctx: ChainCtx, s: PhaseSession): Promise<void> {
 // MANIFEST EXTRACTION + VALIDATION
 // ===========================================================================
 
-/** Discriminated result of `extractAndValidateManifest`. */
 type ExtractionOutcome =
 	| { kind: "ok"; manifest: Manifest | undefined }
 	| { kind: "fatal"; message: string }
 	| { kind: "validation-exhausted"; failureSummary: string };
 
-/**
- * Run the extractor, finalize the envelope with runner-owned `meta`, then run
- * the output-validation retry loop (if the node declares a schema). The retry
- * loop re-invokes the extractor against the most recent branch after each
- * agent reply, hence the `freshBranch` thunk.
- */
+/** Retry loop re-extracts against the latest branch after each fix request — hence `freshBranch`. */
 async function extractAndValidateManifest(
 	ctx: ChainCtx,
 	s: StageSession,
@@ -179,12 +162,7 @@ function haltPhase(ctx: ChainCtx, s: PhaseSession, stop: Exclude<StopSignal, "st
 // SUCCESS-PERSISTENCE HELPERS
 // ===========================================================================
 
-/**
- * Stage success: dual-write artifact path, set state.manifest, write JSONL row,
- * notify, and bump `stagesCompleted` only when the row actually landed on disk.
- * The agent's work is already done either way; gating the counter keeps
- * `RunWorkflowResult.stagesCompleted` aligned with the on-disk row count.
- */
+/** Bumps `stagesCompleted` only on disk-write success — keeps result.stagesCompleted aligned with row count. */
 function recordStageSuccess(
 	ctx: ChainCtx,
 	s: StageSession,
@@ -205,11 +183,7 @@ function recordStageSuccess(
 	if (assigned !== undefined) s.state.stagesCompleted++;
 }
 
-/**
- * Phase success: inherit artifact, write JSONL row, bump counter on
- * successful persistence. The MSG_STAGE_COMPLETE notify is suppressed —
- * phases hold it until the parent stage finishes.
- */
+/** Phase rows never notify — parent stage holds MSG_STAGE_COMPLETE until all phases finish. */
 function recordPhaseSuccess(s: PhaseSession, artifact: string | undefined): void {
 	if (artifact) s.state.artifactPath = artifact;
 	const assigned = recordStage(
@@ -225,7 +199,6 @@ function recordPhaseSuccess(s: PhaseSession, artifact: string | undefined): void
 // BRANCH INSPECTION — read how the agent stopped
 // ===========================================================================
 
-/** Snapshot of the agent's output for the just-finished session. */
 interface SessionOutcome {
 	branch: BranchEntry[];
 	artifact: string | undefined;
@@ -240,10 +213,7 @@ function readPhaseOutcome(ctx: ChainCtx): SessionOutcome {
 	return readSessionOutcome(ctx, { sessionPolicy: "fresh" });
 }
 
-/**
- * Read the branch for this session. "continue" policies inherit prior-stage
- * entries and must be sliced by `branchOffset`; fresh sessions start at 0.
- */
+/** Continue policies must slice the prior-stage prefix via `branchOffset`. */
 function readSessionOutcome(
 	ctx: ChainCtx,
 	opts: { sessionPolicy?: SessionPolicy; branchOffset?: number },
@@ -261,13 +231,7 @@ function readSessionOutcome(
 // EXTRACTION INTERNALS
 // ===========================================================================
 
-/**
- * Resolve the extractor for a node — explicit override wins, otherwise the
- * default keyed off `completionStrategy`. Switch is exhaustive: a new variant on
- * `CompletionStrategy` lights up `assertNever` rather than silently falling into
- * `sideEffectExtractor` (whose contract never returns `fatal`, so the
- * wrong default would record a phantom-success row for an unhandled mode).
- */
+/** Explicit override > default-by-completionStrategy. Exhaustive — assertNever lights future variants. */
 function resolveExtractor(node: DagNode): ExtractorFn {
 	if (node.extractor) return node.extractor;
 	switch (node.completionStrategy) {
@@ -280,7 +244,6 @@ function resolveExtractor(node: DagNode): ExtractorFn {
 	}
 }
 
-/** Build the per-stage ExtractorCtx — slicing semantics differ for continue policies. */
 function buildExtractorCtx(s: StageSession, branch: BranchEntry[]): ExtractorCtx {
 	return {
 		cwd: s.cwd,
@@ -288,15 +251,14 @@ function buildExtractorCtx(s: StageSession, branch: BranchEntry[]): ExtractorCtx
 		stageIndex: s.stageIndex,
 		state: s.state,
 		branch,
-		// For continue stages, branch is already sliced; pass undefined so extractors
-		// (which call extractArtifactPath) don't double-slice.
+		// Continue branch is already sliced upstream — undefined here so
+		// extractArtifactPath doesn't double-slice.
 		branchOffset: s.node.sessionPolicy === "continue" ? undefined : s.branchOffset,
 		snapshot: s.snapshot,
 		skill: s.skill,
 	};
 }
 
-/** Wrap a freshly-extracted payload in a full Manifest, sourcing meta from the session. */
 function wrapManifest(s: StageSession, payload: ExtractorPayload): Manifest {
 	return finalizeManifest(payload, {
 		skill: s.skill,
@@ -306,7 +268,6 @@ function wrapManifest(s: StageSession, payload: ExtractorPayload): Manifest {
 	});
 }
 
-/** Invoke the extractor once; normalise the result into ExtractionOutcome-without-validation-exhausted. */
 async function runExtractor(
 	extractor: ExtractorFn,
 	extractorCtx: ExtractorCtx,
@@ -317,12 +278,10 @@ async function runExtractor(
 	return { kind: "ok", manifest: result.payload ? finalize(result.payload) : undefined };
 }
 
-/** When the node has no schema (or extraction produced no payload), skip validation. */
 function shouldValidateOutput(node: DagNode, manifest: Manifest | undefined): manifest is Manifest {
 	return !!(node.outputSchema && manifest?.data);
 }
 
-/** Tools the validation loop needs from the caller, grouped so the loop signature stays readable. */
 interface RetryDeps {
 	extractor: ExtractorFn;
 	extractorCtx: ExtractorCtx;
@@ -330,11 +289,6 @@ interface RetryDeps {
 	freshBranch: () => BranchEntry[];
 }
 
-/**
- * Validate the extracted manifest, asking the agent to fix and re-extracting
- * up to `maxValidationRetries` times. Returns the validated manifest or one of
- * the two terminal failure kinds.
- */
 async function retryUntilValid(
 	ctx: ChainCtx,
 	s: StageSession,
@@ -383,11 +337,10 @@ async function retryUntilValid(
 }
 
 /**
- * Notify the user + send the agent a fix request, blocking until the agent
- * settles OR `timeoutMs` elapses. The timeout protects against a hung agent
- * pinning the runner — `ctx.waitForIdle()` has no abort signal, so the
- * underlying promise continues in the background; the next stage's
- * `newSession` replaces the ctx and the dangling promise becomes inert.
+ * Sends the fix request and races settlement against `timeoutMs`. waitForIdle
+ * has no abort signal, so on timeout the underlying promise keeps draining in
+ * the background; the next stage's `newSession` replaces the ctx and renders
+ * it inert.
  */
 async function askAgentToFix(
 	ctx: ChainCtx,
@@ -407,7 +360,6 @@ async function askAgentToFix(
 	);
 }
 
-/** Build the validation-exhausted outcome from accumulated failures. */
 function validationExhausted(failures: ValidationFailure[]): ExtractionOutcome {
 	const failureSummary = failures.map((f) => `${f.path}: ${f.message}`).join("; ");
 	return { kind: "validation-exhausted", failureSummary };
@@ -417,7 +369,6 @@ function validationExhausted(failures: ValidationFailure[]): ExtractionOutcome {
 // SESSION SPAWN PRIMITIVE
 // ===========================================================================
 
-/** Discriminator + payload for `spawnSession`. */
 type SessionSpawn = { kind: "fresh" } | { kind: "continue"; pi: ExtensionAPI };
 
 function spawnPolicyFor(s: StageSession): SessionSpawn {
@@ -425,12 +376,9 @@ function spawnPolicyFor(s: StageSession): SessionSpawn {
 }
 
 /**
- * Drive one Pi session: send the prompt + await idle, then run `body` on the
- * ctx that's valid for the spawned session — `freshCtx` inside `withSession`
- * for fresh policies, the supplied `ctx` for continue policies.
- *
- * `onCancelled` fires only when a fresh session is cancelled before
- * `withSession` returned.
+ * `body` runs on the ctx that's valid for the spawned session — `freshCtx`
+ * inside `withSession` for fresh, the supplied `ctx` for continue.
+ * `onCancelled` fires only when a fresh session is cancelled pre-withSession.
  */
 async function spawnSession(
 	ctx: ChainCtx,
@@ -456,11 +404,8 @@ async function spawnSession(
 }
 
 /**
- * Send a user message into the session and block until the agent finishes
- * responding. Branches on session policy:
- * - "fresh": ctx is inside withSession, so sendUserMessage awaits the agent loop.
- * - "continue": uses pi.sendUserMessage (sync, fire-and-forget) + awaits
- *   `ctx.waitForIdle()`, which the SDK resolves when streaming finishes.
+ * Fresh ctx is ReplacedSessionContext (sendUserMessage awaits the agent loop);
+ * continue path uses pi.sendUserMessage + ctx.waitForIdle().
  */
 async function sendAndAwaitIdle(
 	ctx: ChainCtx,
@@ -472,17 +417,15 @@ async function sendAndAwaitIdle(
 		opts.pi.sendUserMessage(msg);
 		await ctx.waitForIdle();
 	} else {
-		// Inside withSession, ctx is ReplacedSessionContext which has sendUserMessage.
 		await (ctx as unknown as { sendUserMessage(msg: string): Promise<void> }).sendUserMessage(msg);
 	}
 }
 
 // ===========================================================================
-// SHARED MICRO-HELPERS
+// Helpers
 // ===========================================================================
 
-/** Collapse a session struct down to the audit-layer's minimal shape. */
-const auditFor = (s: StageSession | PhaseSession): Audit => ({
+const auditFor = (s: StageSession | PhaseSession): AuditCtx => ({
 	cwd: s.cwd,
 	runId: s.runId,
 	state: s.state,

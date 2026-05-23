@@ -1,17 +1,8 @@
 /**
- * Implement-skill phase fanout for the /rpiv workflow runner.
- *
- * When an `implement` skill node runs against a plan artifact whose body
- * contains `## Phase N:` headings, the runner expands the single stage into
- * one session per phase. The expansion is implement-specific: phases iterate
- * over the plan's heading layout, not over per-phase artifacts (the chain's
- * artifact handoff already happened at the plan stage that produced the
- * input).
- *
- * The runner injects `runPhaseSession` and `runNextStage` as dependencies so
- * this module doesn't import from `runner.ts` — avoids a circular module
- * graph while keeping every implement-specific concept (regex, status
- * format, phase-row labels) in one place.
+ * Implement-skill phase fanout. When an implement node runs against a plan
+ * with `## Phase N:` headings, the runner expands into one session per
+ * phase. `runner.ts` injects its primitives via `PhaseFanoutDeps` so this
+ * module never imports back (cycle-free).
  */
 
 import { readFileSync } from "node:fs";
@@ -19,37 +10,15 @@ import { join } from "node:path";
 import { MSG_STAGE_COMPLETE, STATUS_KEY, STATUS_PHASE } from "./messages.js";
 import type { ChainCtx, PhaseSession, RunContext } from "./types.js";
 
-// ---------------------------------------------------------------------------
-// Dependency interface — runner supplies its primitives so this module
-// doesn't import from runner.ts (one-way value graph: runner → phases).
-// ---------------------------------------------------------------------------
-
-/**
- * Dependencies the runner supplies to drive a phase iteration. Wrapping these
- * as a struct keeps the call site readable when runImplementPhases recurses.
- */
 export interface PhaseFanoutDeps {
-	/** Execute one phase session — opaque to phases; runner.ts owns the impl. */
 	runPhaseSession: (ctx: ChainCtx, session: PhaseSession) => Promise<void>;
 	/** Hand back to the generic stage loop once all phases complete. */
 	runNextStage: (curCtx: ChainCtx, nextIdx: number, run: RunContext) => Promise<void>;
 }
 
-// ---------------------------------------------------------------------------
-// Phase detection — file read + regex
-// ---------------------------------------------------------------------------
-
-/** Regex for phase headings in plan artifacts: `## Phase N: {name}`. */
 const PHASE_HEADING_REGEX = /^## Phase (\d+):/gm;
 
-/**
- * Count `## Phase N:` headings in a plan artifact, resolving `planPath`
- * relative to `cwd` when it's not absolute. Returns 0 on any failure (missing
- * file, no headings, read error) so callers can branch on phase count without
- * try/catch noise.
- *
- * Fail-soft: never throws.
- */
+/** Fail-soft: 0 on missing file, no headings, or read error. */
 export function countPhases(planPath: string, cwd: string): number {
 	const absolutePath = planPath.startsWith("/") ? planPath : join(cwd, planPath);
 	try {
@@ -61,25 +30,11 @@ export function countPhases(planPath: string, cwd: string): number {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Phase iteration
-// ---------------------------------------------------------------------------
-
 /**
- * Run the multi-phase expansion of an `implement` stage. Iterates phases
- * 1..phaseCount, spawning one session per phase via `deps.runPhaseSession`,
- * then hands back to `deps.runNextStage` once every phase has completed.
- *
- * `skill` is the bundled skill name (e.g. `"implement"`) — the runner reads
- * it off the node and threads it through so phase rows and prompts carry
- * the skill body even when the source node id is an alias (e.g.
- * `implement-after-revise`). Using the node id here would tag audit rows
- * with a routing identity that other consumers don't share.
- *
- * Specific to the `implement` skill — generic-stage logic lives in
- * `runStage`. Caller is responsible for verifying the node is implement-
- * shaped and that the plan artifact has matching `## Phase N:` headings
- * before invoking this function (see `runStage` in runner.ts).
+ * `skill` is the bundled skill name (threaded by the runner), not the node id.
+ * Aliased implement nodes (implement-after-revise, etc.) tag phase rows + prompts
+ * with the skill body so audit consumers don't see two labels for the same work.
+ * Caller verifies node + plan shape before invoking (see `runStage`).
  */
 export async function runImplementPhases(
 	curCtx: ChainCtx,

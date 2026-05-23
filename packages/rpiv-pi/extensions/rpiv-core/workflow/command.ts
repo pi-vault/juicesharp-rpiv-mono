@@ -1,13 +1,4 @@
-/**
- * /rpiv — slash command registration and handler.
- *
- * Parses args (preset name + feature description) using config-driven preset
- * names, resolves the preset, and delegates to runWorkflow(). Config is
- * loaded fresh from disk on every invocation via loadConfig().
- *
- * Registration follows setup-command.ts pattern: registerXxxCommand(pi) export,
- * separate named handler function, guard clauses first.
- */
+/** /rpiv slash command: parse → loadConfig → runWorkflow. */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { type LoadedConfigWithSource, loadConfig } from "./loadConfig.js";
@@ -25,11 +16,7 @@ const ERR_WORKFLOW_THROW = (reason: string) => `/rpiv: workflow runner failed un
 // Arg parsing
 // ---------------------------------------------------------------------------
 
-/**
- * Parse command args into preset name and remaining input text.
- * First token = preset name (if in presetNames); remaining text = feature description.
- * If no recognized preset, uses defaultPreset and the entire args string is the input.
- */
+/** First token is a preset name iff recognised; otherwise the whole arg is input + defaultPreset. */
 export function parseArgs(
 	args: string,
 	config: { presetNames: ReadonlySet<string>; defaultPreset: string },
@@ -47,17 +34,9 @@ export function parseArgs(
 		return { preset: firstToken, input: remaining };
 	}
 
-	// No recognized preset — use default, entire string is input
 	return { preset: config.defaultPreset, input: trimmed };
 }
 
-// ---------------------------------------------------------------------------
-// Help formatting
-// ---------------------------------------------------------------------------
-
-/**
- * Format available presets as a help listing with source indicator.
- */
 export function formatPresetList(config: LoadedConfigWithSource): string {
 	const lines = Array.from(config.presetNames, (name) => {
 		const isDefault = name === config.defaultPreset;
@@ -66,20 +45,12 @@ export function formatPresetList(config: LoadedConfigWithSource): string {
 	return `Available presets [${config.source}]:\n${lines.join("\n")}\n\n${MSG_USAGE}`;
 }
 
-// ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
-
 export function registerWorkflowCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("rpiv", {
 		description: "Run the rpiv skill pipeline: /rpiv [preset] [description]",
 		handler: (args: string, ctx: ExtensionCommandContext) => handleWorkflowCommand(pi, args, ctx),
 	});
 }
-
-// ---------------------------------------------------------------------------
-// Handler
-// ---------------------------------------------------------------------------
 
 async function handleWorkflowCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext): Promise<void> {
 	if (!ctx.hasUI) {
@@ -88,8 +59,6 @@ async function handleWorkflowCommand(pi: ExtensionAPI, args: string, ctx: Extens
 	}
 
 	const config = loadConfig(ctx.cwd);
-
-	// Surface any warnings from config loading
 	if (config.warnings?.length) {
 		for (const warning of config.warnings) {
 			ctx.ui.notify(warning, "warning");
@@ -97,17 +66,14 @@ async function handleWorkflowCommand(pi: ExtensionAPI, args: string, ctx: Extens
 	}
 
 	const { preset, input } = parseArgs(args, config);
-
 	if (!input) {
 		ctx.ui.notify(formatPresetList(config), "info");
 		return;
 	}
 
-	// runWorkflow's documented surface returns a result envelope rather than
-	// throwing — but a misconfigured DAG, a thrown predicate, or an SDK
-	// regression could still bubble. Surface unexpected throws as a user-
-	// visible error instead of letting Pi's command dispatcher print a raw
-	// stack trace.
+	// runWorkflow returns a result envelope rather than throwing — but a
+	// misconfigured DAG or thrown predicate could still bubble. Catch so
+	// Pi's dispatcher doesn't print a raw stack.
 	try {
 		await runWorkflow(ctx, { preset, input, dag: config.dag, pi });
 	} catch (e) {
