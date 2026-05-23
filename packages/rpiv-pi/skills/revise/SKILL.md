@@ -146,6 +146,7 @@ Use the `ask_user_question` tool to confirm before editing. Question: "{Summary 
    - If modifying scope, update "What We're NOT Doing" section
    - If changing approach, update "Implementation Approach" section
    - Maintain the distinction between automated vs manual success criteria
+   - **Uncheck modified work.** When editing the body of a phase that already carries `- [x]` checkmarks, change `- [x]` back to `- [ ]` for every item whose acceptance is no longer guaranteed by the prior implementation (changed steps, changed success criteria, new sub-steps). Leave checkmarks intact only on items whose existing implementation still satisfies the revised criteria. This is load-bearing: `/skill:implement` trusts checkmarks when resuming a plan, so a stale `- [x]` on a rewritten phase silently skips the new work whenever the next-step `Phase {N}` arg is dropped.
    - If the plan has YAML frontmatter, set `last_updated` to `<iso>` from the Metadata block; set `last_updated_by` to your name. Copy the offset verbatim — do not reformat.
 
 3. **Preserve quality standards**:

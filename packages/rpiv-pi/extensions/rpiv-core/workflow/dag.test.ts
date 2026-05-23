@@ -23,12 +23,16 @@ describe("DAG types and constants", () => {
 		expect(presetNames).toEqual(["small", "mid", "large"]);
 	});
 
-	it("large preset has 8 nodes (includes code-review, revise, commit)", () => {
-		expect(WORKFLOW_DAG.presets.large).toHaveLength(8);
+	it("mid preset has 8 nodes (Path A tail: code-review → revise → implement → commit)", () => {
+		expect(WORKFLOW_DAG.presets.mid).toHaveLength(8);
 	});
 
-	it("every preset includes validate as its final verification stage", () => {
-		// small/mid end at validate; large continues into code-review after validate.
+	it("large preset has 10 nodes (Path B tail: code-review → design → plan → implement → commit)", () => {
+		expect(WORKFLOW_DAG.presets.large).toHaveLength(10);
+	});
+
+	it("every preset includes validate as its verification stage", () => {
+		// small ends at validate; mid/large continue into code-review after validate.
 		for (const [name, stageIds] of Object.entries(WORKFLOW_DAG.presets)) {
 			expect(stageIds, `preset ${name} should include validate`).toContain("validate");
 		}
@@ -81,11 +85,20 @@ describe("resolvePreset", () => {
 		expect(resolvePreset(WORKFLOW_DAG, "small")).toEqual(["blueprint", "implement", "validate"]);
 	});
 
-	it("resolves mid to correct sequence", () => {
-		expect(resolvePreset(WORKFLOW_DAG, "mid")).toEqual(["research", "blueprint", "implement", "validate"]);
+	it("resolves mid to Path A sequence (revise loop after code-review)", () => {
+		expect(resolvePreset(WORKFLOW_DAG, "mid")).toEqual([
+			"research",
+			"blueprint",
+			"implement",
+			"validate",
+			"code-review",
+			"revise",
+			"implement",
+			"commit",
+		]);
 	});
 
-	it("resolves large to correct sequence", () => {
+	it("resolves large to Path B sequence (design/plan loop after code-review)", () => {
 		expect(resolvePreset(WORKFLOW_DAG, "large")).toEqual([
 			"research",
 			"design",
@@ -93,7 +106,9 @@ describe("resolvePreset", () => {
 			"implement",
 			"validate",
 			"code-review",
-			"revise",
+			"design",
+			"plan",
+			"implement",
 			"commit",
 		]);
 	});

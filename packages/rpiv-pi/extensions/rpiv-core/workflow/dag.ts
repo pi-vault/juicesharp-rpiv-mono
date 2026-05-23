@@ -207,14 +207,37 @@ export const WORKFLOW_DAG: WorkflowDag = {
 		},
 	],
 
-	// Linear research → build → verify chains. `commit` and `revise` are
-	// intentionally left to the user once the working tree is in a known-good
-	// state. `large` includes `code-review` since architectural changes earn
-	// the parallel-specialist review pass.
+	// Linear research → build → verify chains, each ending in a review→fix→commit
+	// tail sized to the preset's risk profile:
+	//
+	// - `small` stops at `validate`; no review tail (trivial changes don't pay
+	//   the review cost).
+	// - `mid` uses the surgical fix tail (Path A): `code-review → revise →
+	//   implement → commit`. Revise edits the existing blueprint-produced plan
+	//   in place, then implement re-runs the touched phase. Cheap when findings
+	//   are localised.
+	// - `large` uses the heavy re-design tail (Path B): `code-review → design →
+	//   plan → implement → commit`. Re-runs design/plan rather than patching
+	//   the existing plan, suited to architectural findings that exceed
+	//   revise's surgical-edit contract.
+	//
+	// `commit` is the final stage in mid/large; `small` leaves committing to
+	// the user (working tree is in a known-good state at validate).
 	presets: {
 		small: ["blueprint", "implement", "validate"],
-		mid: ["research", "blueprint", "implement", "validate"],
-		large: ["research", "design", "plan", "implement", "validate", "code-review", "revise", "commit"],
+		mid: ["research", "blueprint", "implement", "validate", "code-review", "revise", "implement", "commit"],
+		large: [
+			"research",
+			"design",
+			"plan",
+			"implement",
+			"validate",
+			"code-review",
+			"design",
+			"plan",
+			"implement",
+			"commit",
+		],
 	},
 
 	nodes: {
