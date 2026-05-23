@@ -167,8 +167,13 @@ export function appendStage(cwd: string, runId: string, stage: WorkflowStage): b
 // ---------------------------------------------------------------------------
 
 /**
- * Read all data lines (skipping the header at line 0) from the JSONL file,
- * filtering with the supplied type-narrowing predicate. Fail-soft: missing
+ * Read every line of the JSONL file, returning the rows the predicate
+ * accepts. Filtering is shape-based, not position-based: the header (no
+ * `stageNumber`) and routing rows (`type: "routing"`, no `stageNumber`)
+ * fall out of `isWorkflowStage` naturally, and stage rows (`stageNumber:
+ * number`, no `type`) fall out of `isRoutingRow`. Reading from line 0
+ * keeps the first row recoverable even if a transient `writeHeader`
+ * failure left the file without its header line. Fail-soft: missing
  * file → empty array, parse/IO errors logged + empty array.
  */
 function readJsonlRows<T>(cwd: string, runId: string, match: (row: unknown) => row is T): T[] {
@@ -179,8 +184,8 @@ function readJsonlRows<T>(cwd: string, runId: string, match: (row: unknown) => r
 		if (!content) return [];
 		const lines = content.split("\n");
 		const rows: T[] = [];
-		for (let i = 1; i < lines.length; i++) {
-			const parsed = JSON.parse(lines[i]!);
+		for (const line of lines) {
+			const parsed = JSON.parse(line);
 			if (match(parsed)) rows.push(parsed);
 		}
 		return rows;
@@ -194,9 +199,9 @@ const isWorkflowStage = (row: unknown): row is WorkflowStage =>
 	!!row && typeof (row as { stageNumber?: unknown }).stageNumber === "number";
 
 /**
- * Read the last stage from the workflow state file.
- * Returns undefined if the file doesn't exist or has no stage entries.
- * The header line is skipped — only WorkflowStage entries are considered.
+ * Read the last stage from the workflow state file. Returns undefined if
+ * the file doesn't exist or has no stage entries. Header + routing rows
+ * are filtered out by `isWorkflowStage`'s shape check.
  */
 export function readLastStage(cwd: string, runId: string): WorkflowStage | undefined {
 	const stages = readJsonlRows(cwd, runId, isWorkflowStage);
@@ -204,8 +209,8 @@ export function readLastStage(cwd: string, runId: string): WorkflowStage | undef
 }
 
 /**
- * Read all stages from the workflow state file (excluding header).
- * Returns empty array if file doesn't exist or has no stages.
+ * Read all stages from the workflow state file. Header + routing rows
+ * are filtered out by `isWorkflowStage`'s shape check.
  */
 export function readAllStages(cwd: string, runId: string): WorkflowStage[] {
 	return readJsonlRows(cwd, runId, isWorkflowStage);
