@@ -8,7 +8,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { DagNode, SessionPolicy, WorkflowDag } from "./dag.js";
+import type { DagNode, WorkflowDag } from "./dag.js";
 import type { Manifest } from "./manifest.js";
 
 /**
@@ -55,38 +55,52 @@ export interface RunContext {
 }
 
 /**
- * Parameters for one session spawn — fully captures the asymmetries between
- * `runStage` and `runImplementPhases` so the spawn body itself can live in
- * one place (`executeSession` in runner.ts).
+ * Fields every session execution shares: provenance, prompt, and the label
+ * that appears in the status line and JSONL audit row.
  */
-export interface ExecuteSessionParams {
+interface SessionContext {
 	cwd: string;
 	runId: string;
 	state: RunState;
-	/** The `/skill:<name> <args>` line to send into the fresh session. */
+	/** The `/skill:<name> <args>` line sent into the session. */
 	prompt: string;
-	/** Base skill name — used for the JSONL "skill" field on failed and skipped rows. */
+	/** Status-line + audit-row label. Stage = node skill; phase = parent skill ("implement"). */
 	skill: string;
-	/** Optional override applied only to the *successful* JSONL row's "skill" field. */
-	successSkill?: string;
-	/** Message stored in state.error when the session yields no assistant message. */
-	errorMessage: string;
-	/** Whether to emit `MSG_STAGE_COMPLETE(skill)` on success (stages yes; phases hold until all phases done). */
-	emitCompleteOnSuccess: boolean;
-	/** Optional hook invoked inside withSession after the failed row is recorded — used for the partial-artifacts recap. */
-	onFailure?: (freshCtx: ChainCtx) => void;
-	/** Invoked inside withSession after success bookkeeping. `freshCtx` is the valid ctx for further chaining. */
-	onSuccess: (freshCtx: ChainCtx, artifact: string | undefined) => Promise<void>;
-	/** Session policy for this stage. "fresh" creates a new session; "continue" reuses the prior session. */
-	sessionPolicy?: SessionPolicy;
-	/** ExtensionAPI — required when sessionPolicy is "continue". */
-	pi?: ExtensionAPI;
-	/** Branch offset — entries before this index belong to prior stages. Only set for "continue" stages. */
-	branchOffset?: number;
-	/** Pre-stage snapshot result (if node declared a snapshot). Passed to the extractor. */
-	snapshot?: unknown;
-	/** DAG node for this stage — used by manifest extractor resolution. */
-	node?: DagNode;
-	/** 0-based stage index — propagated into ExtractorCtx.stageIndex. */
+}
+
+/**
+ * Execute one DAG stage in its own Pi session. The node carries everything
+ * stage-specific (sessionPolicy, extractor, schemas) — the runner derives
+ * spawn policy and post-stage handling from it.
+ */
+export interface StageSession extends SessionContext {
+	/** The DAG node being executed. sessionPolicy + extractor + schemas derive from it. */
+	node: DagNode;
+	/** 0-based index in the preset's stageIds sequence. */
 	stageIndex: number;
+	/** Result of `node.snapshot(...)` if declared, undefined otherwise. Caller pre-invokes. */
+	snapshot: unknown;
+	/** Required iff `node.sessionPolicy === "continue"`. */
+	pi?: ExtensionAPI;
+	/** Branch offset for slicing — only set for continue stages. */
+	branchOffset?: number;
+	/** Recap hook invoked on failure (e.g. partial-artifacts notice). */
+	onFailure?: (ctx: ChainCtx) => void;
+	/** Chain advance — called on success with the artifact this stage produced. */
+	onSuccess: (ctx: ChainCtx, artifact: string | undefined) => Promise<void>;
+}
+
+/**
+ * Execute one `## Phase N:` iteration of an implement stage. Always fresh,
+ * no manifest extraction, inherits the parent stage's artifact.
+ */
+export interface PhaseSession extends SessionContext {
+	/** 1-based phase index within the parent stage. */
+	phaseIndex: number;
+	/** Total phase count — used to format "phase N/total" labels. */
+	phaseCount: number;
+	/** Parent stage's 0-based index — drives the status-line position. */
+	stageIndex: number;
+	/** Hand back to the next phase iteration or next stage. */
+	onSuccess: (ctx: ChainCtx) => Promise<void>;
 }

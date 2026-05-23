@@ -23,8 +23,10 @@
  *     freshCtx, and the function simply unwinds.
  *   - On "continue" there is no newSession — curCtx remains valid throughout.
  *
- * The session-spawn body itself lives in `executeSession` — runStage and
- * runImplementPhases are thin shells that build the prompt + labels for it.
+ * The session-spawn body itself lives in `spawnSession`; `runStageSession`
+ * and `runPhaseSession` wrap it with stage- and phase-specific
+ * post-processing. `runStage` and `runImplementPhases` build the prompts
+ * + labels and hand them off.
  *
  * Vocabulary:
  *   - "stage" = one position in a preset's node sequence (a DAG node).
@@ -55,7 +57,7 @@ import {
 	writeHeader,
 } from "./state.js";
 import { type BranchEntry, extractArtifactPath, hasAssistantMessage, lastAssistantStopReason } from "./transcript.js";
-import type { ChainCtx, ExecuteSessionParams, RunContext } from "./types.js";
+import type { ChainCtx, PhaseSession, RunContext, StageSession } from "./types.js";
 import {
 	DEFAULT_VALIDATION_RETRIES,
 	formatValidationFailuresForAgent,
@@ -274,41 +276,48 @@ function notifyPartialArtifacts(ctx: ChainCtx, cwd: string, runId: string): void
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Shared post-stage building blocks
+//
+// The two session entries (`runStageSession`, `runPhaseSession`) share a
+// small kit of helpers that take only what they need — never the full
+// session struct. Helpers operate on a primitive `Audit` shape (cwd/runId/
+// state/skill) so they don't care whether the caller was a stage or a phase.
+// ---------------------------------------------------------------------------
+
+/** Minimal bookkeeping context: what every failure/success row needs to write. */
+interface Audit {
+	cwd: string;
+	runId: string;
+	state: RunContext["state"];
+	/** Label written to the JSONL "skill" field for failed/skipped rows. */
+	skill: string;
+}
+
 /**
  * Record a stage as terminally failed (status, audit row, status-line clear,
  * user-visible notify, and `state.error`), then optionally invoke `onFailure`
- * for the partial-artifacts recap. The three early-exit branches in
- * `executeSession` (aborted / failed / no-artifact) all share this shape;
- * collapsing them here keeps the bookkeeping consistent and makes it harder
- * to forget a step when adding a new failure mode.
- *
- * Called on the valid ctx for this path — freshCtx for "fresh" stages,
- * curCtx for "continue" stages. The three failure modes (aborted / failed /
- * no-artifact) share this bookkeeping helper.
+ * for the partial-artifacts recap. Shared between stage- and phase-mode.
  */
 function recordTerminalFailure(
-	freshCtx: ChainCtx,
-	p: ExecuteSessionParams,
+	ctx: ChainCtx,
+	audit: Audit,
 	args: {
 		status: "failed" | "aborted";
 		notifyMsg: string;
 		notifyLevel: "warning" | "error";
 		errMsg: string;
-		callOnFailure: boolean;
 	},
+	onFailure?: (ctx: ChainCtx) => void,
 ): void {
-	recordStage(p.cwd, p.runId, { skill: p.skill, status: args.status, ts: nowIso() }, p.state);
-	freshCtx.ui.setStatus(STATUS_KEY, undefined);
-	freshCtx.ui.notify(args.notifyMsg, args.notifyLevel);
-	if (args.callOnFailure) p.onFailure?.(freshCtx);
-	p.state.error = args.errMsg;
+	recordStage(audit.cwd, audit.runId, { skill: audit.skill, status: args.status, ts: nowIso() }, audit.state);
+	ctx.ui.setStatus(STATUS_KEY, undefined);
+	ctx.ui.notify(args.notifyMsg, args.notifyLevel);
+	onFailure?.(ctx);
+	audit.state.error = args.errMsg;
 }
 
-/**
- * Stop classification — what kind of terminal outcome (if any) the branch
- * shows after the agent loop finishes. Maps to the three early-exit branches
- * the stage post-processing flow handles.
- */
+/** What kind of terminal outcome (if any) the branch shows after the agent stops. */
 type StopOutcome = "ok" | "aborted" | "failed";
 
 function classifyStopOutcome(branch: BranchEntry[]): StopOutcome {
@@ -318,25 +327,23 @@ function classifyStopOutcome(branch: BranchEntry[]): StopOutcome {
 	return "ok";
 }
 
-/**
- * Snapshot of the agent's output for the stage that just finished — derived
- * once from the live branch and passed into the post-processing helpers so
- * each helper has the same view of what the agent produced.
- */
-interface StageOutcome {
+/** Snapshot of the agent's output for the just-finished session. */
+interface SessionOutcome {
 	branch: BranchEntry[];
 	artifact: string | undefined;
 	stop: StopOutcome;
 }
 
 /**
- * Read the branch for this stage. Continue policies receive a transcript that
- * accumulates entries from prior stages and must be sliced by `branchOffset`;
- * fresh policies start from index 0.
+ * Read the branch for this session. "continue" policies inherit prior-stage
+ * entries and must be sliced by `branchOffset`; fresh sessions start at 0.
  */
-function readStageOutcome(ctx: ChainCtx, p: ExecuteSessionParams): StageOutcome {
+function readSessionOutcome(
+	ctx: ChainCtx,
+	opts: { sessionPolicy?: "fresh" | "continue"; branchOffset?: number },
+): SessionOutcome {
 	const fullBranch = ctx.sessionManager.getBranch() as unknown as BranchEntry[];
-	const branch = p.sessionPolicy === "continue" ? fullBranch.slice(p.branchOffset ?? 0) : fullBranch;
+	const branch = opts.sessionPolicy === "continue" ? fullBranch.slice(opts.branchOffset ?? 0) : fullBranch;
 	return {
 		branch,
 		artifact: extractArtifactPath(branch),
@@ -345,29 +352,47 @@ function readStageOutcome(ctx: ChainCtx, p: ExecuteSessionParams): StageOutcome 
 }
 
 /**
- * Halt the chain because the agent itself stopped abnormally (ESC abort or
- * empty/errored response). Maps the `StopOutcome` to the canonical bookkeeping
- * shape `recordTerminalFailure` consumes.
+ * Halt the chain because the agent stopped abnormally (ESC abort or empty /
+ * errored response). `errorMessage` is the caller-formatted text stored in
+ * `state.error` for the "failed" case (stages and phases format differently).
  */
-function recordStopFailure(ctx: ChainCtx, p: ExecuteSessionParams, stop: Exclude<StopOutcome, "ok">): void {
+function recordStopFailure(
+	ctx: ChainCtx,
+	audit: Audit,
+	stop: Exclude<StopOutcome, "ok">,
+	errorMessage: string,
+	onFailure?: (ctx: ChainCtx) => void,
+): void {
 	if (stop === "aborted") {
-		recordTerminalFailure(ctx, p, {
-			status: "aborted",
-			notifyMsg: MSG_STAGE_ABORTED(p.skill),
-			notifyLevel: "warning",
-			errMsg: `${p.skill} aborted by user (ESC)`,
-			callOnFailure: true,
-		});
+		recordTerminalFailure(
+			ctx,
+			audit,
+			{
+				status: "aborted",
+				notifyMsg: MSG_STAGE_ABORTED(audit.skill),
+				notifyLevel: "warning",
+				errMsg: `${audit.skill} aborted by user (ESC)`,
+			},
+			onFailure,
+		);
 		return;
 	}
-	recordTerminalFailure(ctx, p, {
-		status: "failed",
-		notifyMsg: MSG_STAGE_FAILED(p.skill),
-		notifyLevel: "error",
-		errMsg: p.errorMessage,
-		callOnFailure: true,
-	});
+	recordTerminalFailure(
+		ctx,
+		audit,
+		{
+			status: "failed",
+			notifyMsg: MSG_STAGE_FAILED(audit.skill),
+			notifyLevel: "error",
+			errMsg: errorMessage,
+		},
+		onFailure,
+	);
 }
+
+// ---------------------------------------------------------------------------
+// Manifest extraction + output validation
+// ---------------------------------------------------------------------------
 
 /** Discriminated result of `extractAndValidateManifest`. */
 type ExtractionOutcome =
@@ -377,42 +402,37 @@ type ExtractionOutcome =
 
 /**
  * Run the extractor, finalize the envelope with runner-owned `meta`, then
- * run the output-validation retry loop (if the node declares a schema).
- *
- * Centralises the post-stage flow that used to be duplicated across the
- * fresh/continue branches in `executeSession`. The retry loop re-invokes
- * the extractor against the most recent branch after each agent reply, so
- * the function takes a `freshBranch` thunk rather than the static branch
- * captured in `extractorCtx`.
+ * run the output-validation retry loop (if the node declares a schema). The
+ * retry loop re-invokes the extractor against the most recent branch after
+ * each agent reply, hence the `freshBranch` thunk.
  */
 async function extractAndValidateManifest(
 	ctx: ChainCtx,
-	p: ExecuteSessionParams,
-	node: DagNode,
+	s: StageSession,
 	branch: BranchEntry[],
 	freshBranch: () => BranchEntry[],
 ): Promise<ExtractionOutcome> {
+	const node = s.node;
 	const extractor = resolveExtractor(node);
-	const successSkill = p.successSkill ?? p.skill;
-	const extractorBranchOffset = p.sessionPolicy === "continue" ? undefined : p.branchOffset;
+	const extractorBranchOffset = node.sessionPolicy === "continue" ? undefined : s.branchOffset;
 
 	const extractorCtx: ExtractorCtx = {
-		cwd: p.cwd,
-		runId: p.runId,
-		stageIndex: p.stageIndex,
-		state: p.state,
+		cwd: s.cwd,
+		runId: s.runId,
+		stageIndex: s.stageIndex,
+		state: s.state,
 		branch,
 		branchOffset: extractorBranchOffset,
-		snapshot: p.snapshot,
-		skill: successSkill,
+		snapshot: s.snapshot,
+		skill: s.skill,
 	};
 
 	const wrap = (payload: ExtractorPayload): Manifest =>
 		finalizeManifest(payload, {
-			skill: successSkill,
-			stage: p.state.jsonlStage + 1,
+			skill: s.skill,
+			stage: s.state.jsonlStage + 1,
 			ts: nowIso(),
-			runId: p.runId,
+			runId: s.runId,
 		});
 
 	const first = await extractor(extractorCtx);
@@ -428,17 +448,17 @@ async function extractAndValidateManifest(
 	while (!result.valid && attempts < maxRetries) {
 		if (node.onValidationFailure === "halt") break;
 		attempts++;
-		ctx.ui.notify(MSG_VALIDATION_RETRY(p.skill, attempts), "warning");
-		await sendAndAwaitIdle(ctx, formatValidationFailuresForAgent(p.skill, result.failures), {
-			sessionPolicy: p.sessionPolicy,
-			pi: p.pi,
+		ctx.ui.notify(MSG_VALIDATION_RETRY(s.skill, attempts), "warning");
+		await sendAndAwaitIdle(ctx, formatValidationFailuresForAgent(s.skill, result.failures), {
+			sessionPolicy: node.sessionPolicy,
+			pi: s.pi,
 		});
 
 		const reExtract = await extractor({ ...extractorCtx, branch: freshBranch() });
 		if (!reExtract.payload) {
 			return {
 				kind: "fatal",
-				message: reExtract.fatal ?? `${p.skill}: extractor returned no manifest on retry ${attempts}`,
+				message: reExtract.fatal ?? `${s.skill}: extractor returned no manifest on retry ${attempts}`,
 			};
 		}
 		manifest = wrap(reExtract.payload);
@@ -452,113 +472,171 @@ async function extractAndValidateManifest(
 	return { kind: "ok", manifest };
 }
 
+// ---------------------------------------------------------------------------
+// Stage + phase post-processing
+// ---------------------------------------------------------------------------
+
 /**
  * Commit a successful stage to disk + in-memory state: dual-write artifact
- * path, update `state.manifest`, append the JSONL row. `manifest` is the
- * already-finalized envelope from `extractAndValidateManifest` (or undefined
- * for the implement-phases path that skips extraction).
+ * path, update `state.manifest`, append the JSONL row.
  */
-function persistStageSuccess(
-	p: ExecuteSessionParams,
-	artifact: string | undefined,
-	manifest: Manifest | undefined,
-): void {
-	if (manifest?.artifact_path) p.state.artifactPath = manifest.artifact_path;
-	else if (artifact) p.state.artifactPath = artifact;
-	if (manifest) p.state.manifest = manifest;
+function persistStageSuccess(s: StageSession, artifact: string | undefined, manifest: Manifest | undefined): void {
+	if (manifest?.artifact_path) s.state.artifactPath = manifest.artifact_path;
+	else if (artifact) s.state.artifactPath = artifact;
+	if (manifest) s.state.manifest = manifest;
 
-	recordStage(
-		p.cwd,
-		p.runId,
-		{ skill: p.successSkill ?? p.skill, artifact, status: "completed", ts: nowIso(), manifest },
-		p.state,
-	);
+	recordStage(s.cwd, s.runId, { skill: s.skill, artifact, status: "completed", ts: nowIso(), manifest }, s.state);
 }
 
-/**
- * Post-stage flow shared by both session policies. Runs after the agent has
- * settled. Branches on `p.node`: with a node we extract → validate → persist;
- * without (the implement-phases path) we persist the bare artifact only.
- */
-async function postStage(ctx: ChainCtx, p: ExecuteSessionParams): Promise<void> {
-	const outcome = readStageOutcome(ctx, p);
+/** Stage post-processing: extract → validate → persist → notify → chain. */
+async function postStage(ctx: ChainCtx, s: StageSession): Promise<void> {
+	const audit: Audit = { cwd: s.cwd, runId: s.runId, state: s.state, skill: s.skill };
+	const outcome = readSessionOutcome(ctx, { sessionPolicy: s.node.sessionPolicy, branchOffset: s.branchOffset });
 
 	if (outcome.stop !== "ok") {
-		recordStopFailure(ctx, p, outcome.stop);
+		recordStopFailure(ctx, audit, outcome.stop, `${s.skill} failed`, s.onFailure);
 		return;
 	}
 
-	if (!p.node) {
-		// implement-phases — no manifest extraction.
-		persistStageSuccess(p, outcome.artifact, undefined);
-	} else {
-		const result = await extractAndValidateManifest(
+	const result = await extractAndValidateManifest(
+		ctx,
+		s,
+		outcome.branch,
+		() => ctx.sessionManager.getBranch() as unknown as BranchEntry[],
+	);
+	if (result.kind === "fatal") {
+		recordTerminalFailure(
 			ctx,
-			p,
-			p.node,
-			outcome.branch,
-			() => ctx.sessionManager.getBranch() as unknown as BranchEntry[],
-		);
-		if (result.kind === "fatal") {
-			recordTerminalFailure(ctx, p, {
+			audit,
+			{
 				status: "failed",
-				notifyMsg: MSG_STAGE_FAILED(p.skill),
+				notifyMsg: MSG_STAGE_FAILED(s.skill),
 				notifyLevel: "error",
 				errMsg: result.message,
-				callOnFailure: true,
-			});
-			return;
-		}
-		if (result.kind === "validation-exhausted") {
-			recordTerminalFailure(ctx, p, {
-				status: "failed",
-				notifyMsg: MSG_VALIDATION_EXHAUSTED(p.skill),
-				notifyLevel: "error",
-				errMsg: ERR_VALIDATION_FAILED(p.skill, result.failureSummary),
-				callOnFailure: true,
-			});
-			return;
-		}
-		persistStageSuccess(p, outcome.artifact, result.manifest);
+			},
+			s.onFailure,
+		);
+		return;
 	}
-
-	if (p.emitCompleteOnSuccess) ctx.ui.notify(MSG_STAGE_COMPLETE(p.skill), "info");
-	p.state.stagesCompleted++;
-	await p.onSuccess(ctx, outcome.artifact);
-}
-
-/**
- * Spawn one session for a stage and drive the agent loop. The single
- * `sessionPolicy` switch wraps the session-creation primitive; the entire
- * post-stage flow lives in `postStage`, shared across both branches.
- *
- * Chain recursion happens inside `postStage` via `p.onSuccess`, called on the
- * ctx valid for the current stage — `freshCtx` for "fresh" stages, `curCtx`
- * for "continue" stages.
- */
-async function executeSession(curCtx: ChainCtx, p: ExecuteSessionParams): Promise<void> {
-	if (p.sessionPolicy === "continue") {
-		await sendAndAwaitIdle(curCtx, p.prompt, { sessionPolicy: "continue", pi: p.pi });
-		await postStage(curCtx, p);
+	if (result.kind === "validation-exhausted") {
+		recordTerminalFailure(
+			ctx,
+			audit,
+			{
+				status: "failed",
+				notifyMsg: MSG_VALIDATION_EXHAUSTED(s.skill),
+				notifyLevel: "error",
+				errMsg: ERR_VALIDATION_FAILED(s.skill, result.failureSummary),
+			},
+			s.onFailure,
+		);
 		return;
 	}
 
-	const { cancelled } = await curCtx.newSession({
+	persistStageSuccess(s, outcome.artifact, result.manifest);
+	ctx.ui.notify(MSG_STAGE_COMPLETE(s.skill), "info");
+	s.state.stagesCompleted++;
+	await s.onSuccess(ctx, outcome.artifact);
+}
+
+/** Per-phase JSONL row label, e.g. "implement (phase 2/4)". */
+const phaseRowLabel = (s: PhaseSession) => `${s.skill} (phase ${s.phaseIndex}/${s.phaseCount})`;
+
+/** Phase post-processing: no extraction; persist bare row + chain. */
+async function postPhase(ctx: ChainCtx, s: PhaseSession): Promise<void> {
+	const audit: Audit = { cwd: s.cwd, runId: s.runId, state: s.state, skill: s.skill };
+	const outcome = readSessionOutcome(ctx, { sessionPolicy: "fresh" });
+
+	if (outcome.stop !== "ok") {
+		recordStopFailure(ctx, audit, outcome.stop, `${s.skill} phase ${s.phaseIndex} failed`);
+		return;
+	}
+
+	if (outcome.artifact) s.state.artifactPath = outcome.artifact;
+	recordStage(
+		s.cwd,
+		s.runId,
+		{ skill: phaseRowLabel(s), artifact: outcome.artifact, status: "completed", ts: nowIso() },
+		s.state,
+	);
+	// Phases hold the MSG_STAGE_COMPLETE notify until the parent stage finishes.
+	s.state.stagesCompleted++;
+	await s.onSuccess(ctx);
+}
+
+// ---------------------------------------------------------------------------
+// Session spawn primitive + public entries
+// ---------------------------------------------------------------------------
+
+/** Discriminator + payload for `spawnSession`. */
+type SessionSpawn = { kind: "fresh" } | { kind: "continue"; pi: ExtensionAPI };
+
+/**
+ * Drive one Pi session: send the prompt + await idle, then run `body` on the
+ * ctx that's valid for the spawned session — `freshCtx` inside `withSession`
+ * for fresh policies, the supplied `ctx` for continue policies.
+ *
+ * `onCancelled` fires only when a fresh session is cancelled before
+ * `withSession` returned.
+ */
+async function spawnSession(
+	ctx: ChainCtx,
+	prompt: string,
+	spawn: SessionSpawn,
+	body: (sessionCtx: ChainCtx) => Promise<void>,
+	onCancelled?: () => void,
+): Promise<void> {
+	if (spawn.kind === "continue") {
+		await sendAndAwaitIdle(ctx, prompt, { sessionPolicy: "continue", pi: spawn.pi });
+		await body(ctx);
+		return;
+	}
+
+	const { cancelled } = await ctx.newSession({
 		withSession: async (freshCtx) => {
-			await freshCtx.sendUserMessage(p.prompt);
-			await postStage(freshCtx, p);
+			await freshCtx.sendUserMessage(prompt);
+			await body(freshCtx);
 		},
 	});
 
-	if (cancelled) {
-		recordStage(p.cwd, p.runId, { skill: p.skill, status: "skipped", ts: nowIso() }, p.state);
-		curCtx.ui.setStatus(STATUS_KEY, undefined);
-		curCtx.ui.notify(MSG_WORKFLOW_CANCELLED, "info");
-		// Distinguish "user cancelled" from "workflow never started" — both
-		// land in the caller as `success: false`; the error string is the
-		// only signal that disambiguates the two cases.
-		p.state.error = `${p.skill} cancelled by user`;
-	}
+	if (cancelled && onCancelled) onCancelled();
+}
+
+/** Bookkeeping for a user-cancelled fresh session — JSONL row + notify + state.error. */
+function recordCancellation(ctx: ChainCtx, audit: Audit): void {
+	recordStage(audit.cwd, audit.runId, { skill: audit.skill, status: "skipped", ts: nowIso() }, audit.state);
+	ctx.ui.setStatus(STATUS_KEY, undefined);
+	ctx.ui.notify(MSG_WORKFLOW_CANCELLED, "info");
+	// Distinguish "user cancelled" from "workflow never started" — both land
+	// in the caller as `success: false`; the error string is the only signal
+	// that disambiguates the two cases.
+	audit.state.error = `${audit.skill} cancelled by user`;
+}
+
+/** Execute one DAG stage in its own session. */
+export async function runStageSession(ctx: ChainCtx, s: StageSession): Promise<void> {
+	const spawn: SessionSpawn =
+		s.node.sessionPolicy === "continue" ? { kind: "continue", pi: s.pi! } : { kind: "fresh" };
+	const audit: Audit = { cwd: s.cwd, runId: s.runId, state: s.state, skill: s.skill };
+	await spawnSession(
+		ctx,
+		s.prompt,
+		spawn,
+		(sessionCtx) => postStage(sessionCtx, s),
+		() => recordCancellation(ctx, audit),
+	);
+}
+
+/** Execute one phase iteration of an implement stage. Always fresh. */
+export async function runPhaseSession(ctx: ChainCtx, s: PhaseSession): Promise<void> {
+	const audit: Audit = { cwd: s.cwd, runId: s.runId, state: s.state, skill: s.skill };
+	await spawnSession(
+		ctx,
+		s.prompt,
+		{ kind: "fresh" },
+		(sessionCtx) => postPhase(sessionCtx, s),
+		() => recordCancellation(ctx, audit),
+	);
 }
 
 /**
@@ -623,7 +701,7 @@ async function runStage(curCtx: ChainCtx, idx: number, run: RunContext): Promise
 		const phaseCount = countPhases(state.artifactPath, cwd);
 		if (phaseCount > 0) {
 			await runImplementPhases(curCtx, idx, 1, phaseCount, run, {
-				executeSession,
+				runPhaseSession,
 				runNextStage: runStage,
 			});
 			return;
@@ -671,9 +749,10 @@ async function runStage(curCtx: ChainCtx, idx: number, run: RunContext): Promise
 			const failureSummary = result.failures.map((f) => `${f.path}: ${f.message}`).join("; ");
 			const prevSkill = state.manifest.meta.skill || "unknown";
 
-			// Inline halt — same bookkeeping shape as recordTerminalFailure, but
-			// using runStage's locals (curCtx, cwd, runId) so we don't need a
-			// fabricated ExecuteSessionParams.
+			// Inline halt — input validation runs before the session opens, so
+			// runStage's locals (curCtx, cwd, runId, state) are still the valid
+			// surface; building a StageSession just to call recordTerminalFailure
+			// would obscure the early-exit shape.
 			recordStage(cwd, runId, { skill: nodeLabel, status: "failed", ts: nowIso() }, state);
 			curCtx.ui.setStatus(STATUS_KEY, undefined);
 			curCtx.ui.notify(MSG_INPUT_VALIDATION_FAILED(nodeLabel, prevSkill), "error");
@@ -693,20 +772,17 @@ async function runStage(curCtx: ChainCtx, idx: number, run: RunContext): Promise
 		}
 	}
 
-	await executeSession(curCtx, {
+	await runStageSession(curCtx, {
 		cwd,
 		runId,
 		state,
 		prompt,
 		skill: skillLabel,
-		errorMessage: `${skillLabel} failed`,
-		emitCompleteOnSuccess: true,
-		sessionPolicy: node.sessionPolicy,
-		pi: run.pi,
-		branchOffset,
-		snapshot: snapshotResult,
 		node,
 		stageIndex: idx,
+		snapshot: snapshotResult,
+		pi: run.pi,
+		branchOffset,
 		onFailure: (freshCtx) => notifyPartialArtifacts(freshCtx, cwd, runId),
 		onSuccess: async (freshCtx) => {
 			try {

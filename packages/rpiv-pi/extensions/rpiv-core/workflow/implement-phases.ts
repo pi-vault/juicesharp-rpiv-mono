@@ -8,7 +8,7 @@
  * artifact handoff already happened at the plan stage that produced the
  * input).
  *
- * The runner injects `executeSession` and `runNextStage` as dependencies so
+ * The runner injects `runPhaseSession` and `runNextStage` as dependencies so
  * this module doesn't import from `runner.ts` — avoids a circular module
  * graph while keeping every implement-specific concept (regex, status
  * format, phase-row labels) in one place.
@@ -16,7 +16,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ChainCtx, ExecuteSessionParams, RunContext } from "./types.js";
+import type { ChainCtx, PhaseSession, RunContext } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Dependency interface — runner supplies its primitives so this module
@@ -28,8 +28,8 @@ import type { ChainCtx, ExecuteSessionParams, RunContext } from "./types.js";
  * as a struct keeps the call site readable when runImplementPhases recurses.
  */
 export interface PhaseFanoutDeps {
-	/** Execute one session — opaque to phases; runner.ts owns the impl. */
-	executeSession: (curCtx: ChainCtx, params: ExecuteSessionParams) => Promise<void>;
+	/** Execute one phase session — opaque to phases; runner.ts owns the impl. */
+	runPhaseSession: (ctx: ChainCtx, session: PhaseSession) => Promise<void>;
 	/** Hand back to the generic stage loop once all phases complete. */
 	runNextStage: (curCtx: ChainCtx, nextIdx: number, run: RunContext) => Promise<void>;
 }
@@ -74,7 +74,7 @@ const MSG_STAGE_COMPLETE = (skill: string) => `✓ ${skill} completed`;
 
 /**
  * Run the multi-phase expansion of an `implement` stage. Iterates phases
- * 1..phaseCount, spawning one session per phase via `deps.executeSession`,
+ * 1..phaseCount, spawning one session per phase via `deps.runPhaseSession`,
  * then hands back to `deps.runNextStage` once every phase has completed.
  *
  * Specific to the `implement` skill — generic-stage logic lives in
@@ -92,9 +92,7 @@ export async function runImplementPhases(
 ): Promise<void> {
 	const { cwd, runId, stageIds, totalStages, state } = run;
 	// The audit label for phases is the bare skill name "implement" — that's
-	// what runStage's guard checked when fanning out. The node was a skill-
-	// kind node pointing at the implement skill; the label here matches the
-	// pre-refactor naming for backward compatibility of JSONL rows.
+	// what runStage's guard checked when fanning out.
 	const skill = stageIds[stageIdx]!;
 
 	if (p > phaseCount) {
@@ -105,22 +103,14 @@ export async function runImplementPhases(
 
 	curCtx.ui.setStatus(STATUS_KEY, STATUS_PHASE(stageIdx + 1, totalStages, p, phaseCount));
 
-	await deps.executeSession(curCtx, {
+	await deps.runPhaseSession(curCtx, {
 		cwd,
 		runId,
 		state,
 		prompt: `/skill:implement ${state.artifactPath} Phase ${p}`,
 		skill,
-		// Successful phase rows are labelled with their position; failed/skipped
-		// rows are stored under the base skill name (preserved invariant).
-		successSkill: `implement (phase ${p}/${phaseCount})`,
-		errorMessage: `${skill} phase ${p} failed`,
-		emitCompleteOnSuccess: false,
-		// Phases iterate over the plan's `## Phase N:` headings, not over
-		// per-phase artifacts — the chain's artifact handoff already happened
-		// at the plan stage.
-		node: undefined,
-		snapshot: undefined,
+		phaseIndex: p,
+		phaseCount,
 		stageIndex: stageIdx,
 		onSuccess: (freshCtx) => runImplementPhases(freshCtx, stageIdx, p + 1, phaseCount, run, deps),
 	});
