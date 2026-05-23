@@ -14,11 +14,20 @@ import type { Manifest } from "./manifest.js";
 /**
  * A ctx that can spawn the next session. Either the original handler ctx or
  * a `freshCtx` from `withSession` — both extend `ExtensionCommandContext`,
- * which is all we need (`ui.notify` + `newSession`).
- * `ReplacedSessionContext` is not publicly exported from `pi-coding-agent`,
- * so we lean on the base type.
+ * which is the publicly exported base.
+ *
+ * The intersection below adds methods the SDK guarantees on every event /
+ * session context but doesn't surface on the public base type. They're
+ * declared here so call sites can use plain method syntax instead of an
+ * `as unknown as { ... }` cast at each invocation. See pi-coding-agent
+ * CHANGELOG for `isIdle()` / `waitForIdle()`.
  */
-export type ChainCtx = ExtensionCommandContext;
+export type ChainCtx = ExtensionCommandContext & {
+	/** Whether the agent loop is currently idle (not streaming). */
+	isIdle(): boolean;
+	/** Resolves when the agent loop becomes idle (streaming finishes). */
+	waitForIdle(): Promise<void>;
+};
 
 /** Mutable per-run bookkeeping threaded through the chain by reference. */
 export interface RunState {
