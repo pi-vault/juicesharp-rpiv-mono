@@ -41,9 +41,11 @@ import type { Manifest } from "./manifest.js";
 import {
 	ERR_BACKWARD_JUMP_EXHAUSTED,
 	ERR_INPUT_VALIDATION_FAILED,
+	ERR_MISSING_ARTIFACT,
 	MAX_BACKWARD_JUMPS,
 	MSG_BACKWARD_JUMP_EXHAUSTED,
 	MSG_INPUT_VALIDATION_FAILED,
+	MSG_MISSING_ARTIFACT,
 	MSG_WORKFLOW_COMPLETE,
 	STATUS_KEY,
 	STATUS_STAGE,
@@ -230,9 +232,21 @@ async function runStage(curCtx: ChainCtx, idx: number, run: RunContext): Promise
 		}
 	}
 
-	// First stage has no prior artifact yet — fall back to the original brief
-	// so /skill:<name> gets a meaningful argument.
-	const inputForStage = state.artifactPath ?? state.originalInput;
+	// Stage-input contract: the first stage consumes the user's brief; every
+	// later stage MUST receive its upstream artifact path. Falling back to
+	// `originalInput` past idx 0 would silently hand a downstream skill the
+	// raw feature description as if it were an artifact path — rarely what
+	// callers intend, and indistinguishable from a configuration error.
+	if (idx > 0 && !state.artifactPath) {
+		const nodeLabel = node.kind === "skill" ? node.skill : id;
+		recordStage(cwd, runId, { skill: nodeLabel, status: "failed", ts: nowIso() }, state);
+		curCtx.ui.setStatus(STATUS_KEY, undefined);
+		curCtx.ui.notify(MSG_MISSING_ARTIFACT(nodeLabel), "error");
+		notifyPartialArtifacts(curCtx, cwd, runId);
+		state.error = ERR_MISSING_ARTIFACT(nodeLabel, stageNumber);
+		return;
+	}
+	const inputForStage = idx === 0 ? state.originalInput : state.artifactPath!;
 	const { prompt, skillLabel } = dispatchNode(node, inputForStage);
 
 	// Update the persistent status line — survives the `newSession` transition

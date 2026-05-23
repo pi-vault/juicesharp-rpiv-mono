@@ -41,6 +41,11 @@ export const MSG_INPUT_VALIDATION_FAILED = (currentSkill: string, prevSkill: str
 export const ERR_INPUT_VALIDATION_FAILED = (currentSkill: string, prevSkill: string, failures: string) =>
 	`Input validation failed for '${currentSkill}': upstream '${prevSkill}' produced invalid data: ${failures}`;
 
+export const MSG_MISSING_ARTIFACT = (currentSkill: string) =>
+	`✗ ${currentSkill} has no upstream artifact to consume — stopping workflow`;
+export const ERR_MISSING_ARTIFACT = (currentSkill: string, stageNumber: number) =>
+	`Stage ${stageNumber} (${currentSkill}) has no upstream artifactPath; only stage 1 may consume the user's original input`;
+
 /** Hard cap on backward-jump iterations (prevents infinite recursion). */
 export const MAX_BACKWARD_JUMPS = 2;
 

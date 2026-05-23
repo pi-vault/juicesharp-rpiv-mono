@@ -16,6 +16,9 @@
  *        actual on-disk row count.
  * - I9 — Phase fanout labels JSONL rows by node id (wrong for aliased
  *        implement nodes); should label by node.skill instead.
+ * - Q7 — runner reuses originalInput whenever artifactPath is unset, not
+ *        just at the first stage; later stages silently receive the user's
+ *        original brief instead of the upstream stage's output.
  */
 
 import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -348,6 +351,69 @@ describe("[I3] recordStage signals success and advances stageNumber monotonicall
 		);
 		expect(nextAssignment).toBe(2);
 		expect(state.jsonlStage).toBe(2);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Q7 — Non-first stages must NOT silently fall back to originalInput when
+//      their upstream produced no artifactPath. The "first stage" semantics
+//      should be guarded by stageIndex === 0 explicitly; anything else
+//      should halt with a structured error.
+// ---------------------------------------------------------------------------
+
+describe("[Q7] non-first stage with no artifactPath halts instead of reusing originalInput", () => {
+	let tmpDir: string;
+
+	beforeEach(() => {
+		tmpDir = mkdtempSync(join(tmpdir(), "rpiv-q7-repro-"));
+	});
+
+	afterEach(() => {
+		rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("halts the chain when stage idx > 0 has no upstream artifactPath", async () => {
+		// Two agent-end stages back-to-back. The first (commit) doesn't produce
+		// an artifact; sideEffectExtractor inherits state.artifactPath which
+		// starts undefined. The second stage then runs with artifactPath still
+		// undefined — today it silently picks up state.originalInput.
+		const dag: WorkflowDag = {
+			edges: [],
+			presets: { tiny: ["commit", "annotate-guidance"] },
+			nodes: {
+				commit: { kind: "skill", skill: "commit", stopStrategy: "agent-end", sessionPolicy: "fresh" },
+				"annotate-guidance": {
+					kind: "skill",
+					skill: "annotate-guidance",
+					stopStrategy: "agent-end",
+					sessionPolicy: "fresh",
+				},
+			},
+		};
+
+		const chain = createMockSessionChain({
+			cwd: tmpDir,
+			steps: [
+				{ branch: [mockAssistantMessage("commit done")] },
+				{ branch: [mockAssistantMessage("would never receive originalInput in a sane chain")] },
+			],
+		});
+
+		const result = await runWorkflow(chain.ctx, {
+			preset: "tiny",
+			input: "add dark mode",
+			dag,
+		});
+
+		// Expected post-fix: chain halts at idx 1 with a structured error
+		// referencing the missing input. Today: result.success is true and the
+		// second stage was invoked with the user's original brief.
+		expect(result.success).toBe(false);
+		expect(result.error).toMatch(/artifact|input/i);
+
+		// The second stage's prompt must NOT have been issued with originalInput
+		// substituted as if it were an artifact path.
+		expect(chain.sentMessages).not.toContain("/skill:annotate-guidance add dark mode");
 	});
 });
 
