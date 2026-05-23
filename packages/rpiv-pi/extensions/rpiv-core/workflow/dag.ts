@@ -212,9 +212,9 @@ export const WORKFLOW_DAG: WorkflowDag = {
 	// state. `large` includes `code-review` since architectural changes earn
 	// the parallel-specialist review pass.
 	presets: {
-		small: ["research", "blueprint", "implement", "validate"],
-		mid: ["discover", "research", "blueprint", "implement", "validate"],
-		large: ["discover", "research", "design", "plan", "implement", "validate", "code-review", "revise", "commit"],
+		small: ["blueprint", "implement", "validate"],
+		mid: ["research", "blueprint", "implement", "validate"],
+		large: ["research", "design", "plan", "implement", "validate", "code-review", "revise", "commit"],
 	},
 
 	nodes: {

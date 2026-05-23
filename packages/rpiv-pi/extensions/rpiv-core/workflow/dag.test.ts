@@ -23,8 +23,8 @@ describe("DAG types and constants", () => {
 		expect(presetNames).toEqual(["small", "mid", "large"]);
 	});
 
-	it("large preset has 9 nodes (includes code-review, revise, commit)", () => {
-		expect(WORKFLOW_DAG.presets.large).toHaveLength(9);
+	it("large preset has 8 nodes (includes code-review, revise, commit)", () => {
+		expect(WORKFLOW_DAG.presets.large).toHaveLength(8);
 	});
 
 	it("every preset includes validate as its final verification stage", () => {
@@ -77,23 +77,16 @@ describe("getEdge", () => {
 });
 
 describe("resolvePreset", () => {
-	it("resolves small to research → blueprint → implement → validate", () => {
-		expect(resolvePreset(WORKFLOW_DAG, "small")).toEqual(["research", "blueprint", "implement", "validate"]);
+	it("resolves small to blueprint → implement → validate", () => {
+		expect(resolvePreset(WORKFLOW_DAG, "small")).toEqual(["blueprint", "implement", "validate"]);
 	});
 
 	it("resolves mid to correct sequence", () => {
-		expect(resolvePreset(WORKFLOW_DAG, "mid")).toEqual([
-			"discover",
-			"research",
-			"blueprint",
-			"implement",
-			"validate",
-		]);
+		expect(resolvePreset(WORKFLOW_DAG, "mid")).toEqual(["research", "blueprint", "implement", "validate"]);
 	});
 
 	it("resolves large to correct sequence", () => {
 		expect(resolvePreset(WORKFLOW_DAG, "large")).toEqual([
-			"discover",
 			"research",
 			"design",
 			"plan",

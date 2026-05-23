@@ -1,7 +1,7 @@
 ---
 name: blueprint
-description: Plan complex features by decomposing them into vertical slices (one slice equals one phase) with developer micro-checkpoints between phases, producing an implement-ready phased plan in .rpiv/artifacts/plans/. Use for complex multi-component features touching 6+ files across multiple layers when iterative review between slices is valuable. Requires a research artifact or a solutions artifact (from explore). Prefer blueprint over plan when mid-flight micro-checkpoints matter, and prefer plan when a straightforward phased breakdown is enough.
-argument-hint: "[research artifact path]"
+description: Plan complex features by decomposing them into vertical slices (one slice equals one phase) with developer micro-checkpoints between phases, producing an implement-ready phased plan in .rpiv/artifacts/plans/. Use for complex multi-component features touching 6+ files across multiple layers when iterative review between slices is valuable. Optionally consumes a research/solutions artifact; can also run standalone with a free-text feature description for small tasks. Prefer blueprint over plan when mid-flight micro-checkpoints matter, and prefer plan when a straightforward phased breakdown is enough.
+argument-hint: "[research artifact path or feature description]"
 shell-timeout: 10
 ---
 
@@ -11,7 +11,7 @@ You are tasked with planning how code will be shaped for a feature or change AND
 
 ## Input
 
-`$ARGUMENTS` — path to a research artifact (`.rpiv/artifacts/research/*.md`) or a solutions artifact (`.rpiv/artifacts/solutions/*.md`).
+`$ARGUMENTS` — path to a research artifact (`.rpiv/artifacts/research/*.md`) or a solutions artifact (`.rpiv/artifacts/solutions/*.md`), or a free-text feature description (standalone mode for small tasks).
 
 ## Metadata
 
@@ -52,9 +52,11 @@ When this command is invoked:
    - Research Developer Context Q/As = inherited decisions (record in Decisions, never re-ask); Open Questions = starting ambiguity queue, filtered by dimension in Step 3
 
    **No arguments provided**, branch on the `recent research:` and `recent solutions:` listings in the Metadata block:
-   - **Both empty** — no upstream artifacts available; tell the user and suggest running `/skill:research` (or `/skill:explore` for option comparison) first.
+   - **Both empty** — no upstream artifacts available; ask the user for a free-text feature description and proceed in standalone mode (no artifact read; Step 2 fills the integration and precedent slots via agent dispatch).
    - **Exactly one entry total** — confirm with `ask_user_question`: "Blueprint from this artifact?" with options "Blueprint from `[<source>] <filename>` (Recommended)" and "Pick a different path".
    - **Two or more entries total** — present up to 4 most-recent across both listings as `ask_user_question` options, each prefixed `[research]` or `[solutions]` to flag source class.
+
+   **Anything else** (plain free-text feature description, unrecognized `.md` path, ticket link) — treat the input as the topic for Step 2; skip the upstream artifact read.
 
 2. **Read any additional files mentioned** — tickets, related designs, existing implementations. Read them FULLY before proceeding.
 
@@ -66,7 +68,7 @@ This is NOT a discovery sweep. Focus on DEPTH (how things work, what patterns to
 
    - Use **codebase-pattern-finder** to find existing implementations to model after — the primary template for code shape
 
-   For integration wiring (inbound refs, outbound deps, config/DI/event registration), use the `## Integration Points` section already extracted from research in Step 1. For precedent context (similar past changes, blast radius, follow-up fixes, lessons), use the `## Precedents & Lessons` section already extracted from research in Step 1. Do NOT dispatch a fresh agent to re-map either surface.
+   For integration wiring (inbound refs, outbound deps, config/DI/event registration), use the `## Integration Points` section already extracted from research in Step 1 when present; otherwise add **integration-scanner** to the parallel dispatch. For precedent context (similar past changes, blast radius, follow-up fixes, lessons), use the `## Precedents & Lessons` section already extracted from research in Step 1 when present; otherwise add **precedent-locator** when the topic touches risky surfaces (auth, migrations, schema changes, hot paths, perf-sensitive code). Do NOT dispatch either agent when its corresponding section is already in context.
 
    **Novel work** (new libraries, first-time patterns, no existing codebase precedent):
    - Add **web-search-researcher** for external documentation, API references, and community patterns
@@ -74,8 +76,9 @@ This is NOT a discovery sweep. Focus on DEPTH (how things work, what patterns to
 
    Agent prompts should focus on (labeled by target agent):
    - **codebase-pattern-finder**: "Find the implementation pattern I should model after for {feature type}"
+   - **integration-scanner** (when dispatched): "For {topic}, map inbound refs, outbound deps, and config/DI/event registration for the area where the new feature would wire in. Single pass."
 
-   NOT: "Find all files related to X" — that's discovery's job, upstream of this skill. NOT: "Analyze {component} integration" — the integration surface is in research's `## Integration Points`; if a specific anchor needs deeper inspection, defer to the on-demand `codebase-analyzer` dispatch in Step 4 (correction path) or Step 6.1 (mid-generation gap).
+   NOT: "Find all files related to X" — that's discovery's job, upstream of this skill.
 
 2. **Read all key files identified by agents** into the main context — especially the pattern templates you'll model after.
 
