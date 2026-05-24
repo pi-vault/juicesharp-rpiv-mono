@@ -55,6 +55,7 @@
     "@juicesharp/rpiv-config": "*",
     "yaml": "*",
     "typebox": "*",
-    "jiti": "*"
+    "jiti": "*",
+    "@standard-schema/spec": "*"
   }
 }

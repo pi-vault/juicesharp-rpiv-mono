@@ -9,6 +9,7 @@ import { defineWorkflow, threshold } from "./api.js";
 import { clearChildSession, isChildSession } from "./child-session.js";
 import { countPhases } from "./implement-phases.js";
 import { runWorkflow } from "./runner.js";
+import { typeboxSchema } from "./standard-schema.js";
 import { readRoutingDecisions } from "./state.js";
 import { extractArtifactPath, hasAssistantMessage, lastAssistantStopReason } from "./transcript.js";
 
@@ -958,7 +959,7 @@ describe("runWorkflow", () => {
 				],
 			});
 
-			const schema = Type.Object({ requiredField: Type.String() });
+			const schema = typeboxSchema(Type.Object({ requiredField: Type.String() }));
 			const result = await runWorkflow(chain.ctx, {
 				workflow: wf("two", ["research", "design"], { design: { inputSchema: schema } }),
 				input: "x",
@@ -984,7 +985,7 @@ describe("runWorkflow", () => {
 				steps: [{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/research/r.md")] }],
 			});
 
-			const schema = Type.Object({ version: Type.Integer() });
+			const schema = typeboxSchema(Type.Object({ version: Type.Integer() }));
 			await runWorkflow(chain.ctx, {
 				workflow: wf("two", ["research", "design"], { design: { inputSchema: schema } }),
 				input: "x",
@@ -1029,7 +1030,7 @@ describe("runWorkflow", () => {
 				],
 			});
 
-			const schema = Type.Object({ requiredField: Type.String() });
+			const schema = typeboxSchema(Type.Object({ requiredField: Type.String() }));
 			const result = await runWorkflow(chain.ctx, {
 				workflow: wf("two", ["research", "design"], { design: { inputSchema: schema } }),
 				input: "x",
@@ -1046,7 +1047,7 @@ describe("runWorkflow", () => {
 				steps: [{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/research/r.md")] }],
 			});
 
-			const schema = Type.Object({ mustExist: Type.String() });
+			const schema = typeboxSchema(Type.Object({ mustExist: Type.String() }));
 			await runWorkflow(chain.ctx, {
 				workflow: wf("two", ["research", "design"], { design: { inputSchema: schema } }),
 				input: "x",

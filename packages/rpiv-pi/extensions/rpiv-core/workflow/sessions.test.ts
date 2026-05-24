@@ -33,6 +33,7 @@ import {
 	MSG_VALIDATION_RETRY,
 } from "./messages.js";
 import { runPhaseSession, runStageSession } from "./sessions.js";
+import { typeboxSchema } from "./standard-schema.js";
 import type { ChainCtx, PhaseSession, RunState, StageSession } from "./types.js";
 import { MAX_VALIDATION_RETRIES, MAX_VALIDATION_RETRY_TIMEOUT_MS } from "./validation.js";
 
@@ -93,7 +94,7 @@ const okPayload = (data: unknown): ExtractorResult => ({
 	payload: { kind: "test", data: data as Record<string, unknown> },
 });
 
-const FOO_EQ_2_SCHEMA = Type.Object({ foo: Type.Literal(2) }, { additionalProperties: true });
+const FOO_EQ_2_SCHEMA = typeboxSchema(Type.Object({ foo: Type.Literal(2) }, { additionalProperties: true }));
 
 /** Read JSONL rows the audit layer wrote under cwd/.rpiv/workflows/<runId>.jsonl. */
 const readStageRows = (cwd: string): Array<Record<string, unknown>> => {

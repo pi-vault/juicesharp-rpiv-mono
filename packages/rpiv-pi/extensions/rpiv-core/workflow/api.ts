@@ -16,7 +16,7 @@
  * the old paths onto it.
  */
 
-import type { TSchema } from "typebox";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
 import type { Extractor } from "./manifest.js";
 import { type EdgePredicate, predicateThreshold } from "./predicates.js";
 import type { RunState } from "./types.js";
@@ -79,8 +79,8 @@ export interface NodeDef {
 	completionStrategy: CompletionStrategy;
 	sessionPolicy: SessionPolicy;
 	extractor?: Extractor;
-	outputSchema?: TSchema;
-	inputSchema?: TSchema;
+	outputSchema?: StandardSchemaV1;
+	inputSchema?: StandardSchemaV1;
 	onValidationFailure?: "retry" | "halt";
 	maxValidationRetries?: number;
 	validationRetryTimeoutMs?: number;

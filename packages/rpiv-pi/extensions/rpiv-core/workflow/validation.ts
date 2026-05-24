@@ -1,10 +1,11 @@
 /**
- * Manifest validation via TypeBox `Value.Check` + `Value.Errors`, plus a
- * walltime-cap helper for the agent-roundtrip retry loop.
+ * Manifest validation against a `StandardSchemaV1` schema, plus a walltime-cap
+ * helper for the agent-roundtrip retry loop. The schema-library boundary is
+ * `~standard.validate`; users may bring Zod / Valibot / ArkType / TypeBox
+ * (wrapped via `standard-schema.ts:typeboxSchema`).
  */
 
-import type { TSchema } from "typebox";
-import { Value } from "typebox/value";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -58,26 +59,47 @@ export async function withTimeout<T>(promise: Promise<T>, ms: number, message: s
 // Validation
 // ---------------------------------------------------------------------------
 
-export function validateManifestData(schema: TSchema, data: unknown): ValidationResult {
-	if (Value.Check(schema, data)) {
+export function validateManifestData(schema: StandardSchemaV1, data: unknown): ValidationResult {
+	const result = schema["~standard"].validate(data);
+	if (result instanceof Promise) {
+		// Standard Schema permits async `validate`. Our retry-loop is synchronous
+		// at this seam (the schema fires inside `extractAndValidateManifest`),
+		// so async schemas would silently miss failures. Surface a clear error
+		// rather than degrade to "always valid". If a user genuinely wants
+		// async validation, the retry loop needs an awaitable refactor first.
+		throw new Error("validateManifestData: async schema validation is not supported");
+	}
+	if (!result.issues) {
 		return { valid: true, failures: [] };
 	}
-
-	const errors = Value.Errors(schema, data);
-	const failures: ValidationFailure[] = [];
-	for (const err of errors) {
-		failures.push({
-			path: err.instancePath === "" ? "." : err.instancePath,
-			expected: err.keyword,
-			actual: describeType((err as { value?: unknown }).value ?? resolveInstanceValue(data, err.instancePath)),
-			message: err.message || `${err.keyword} validation failed at ${err.instancePath || "root"}`,
-		});
-	}
+	const failures: ValidationFailure[] = result.issues.map((issue) => {
+		const path = issue.path ? formatStandardPath(issue.path) : ".";
+		return {
+			path,
+			expected: "schema",
+			actual: describeType(resolveInstanceValue(data, path)),
+			message: issue.message,
+		};
+	});
 	return { valid: false, failures };
 }
 
+/** `["foo", 0, "bar"]` → `/foo/0/bar`; empty path → `"."`. */
+function formatStandardPath(path: readonly (PropertyKey | { readonly key: PropertyKey })[]): string {
+	if (path.length === 0) return ".";
+	const segs: string[] = [];
+	for (const seg of path) {
+		if (typeof seg === "object" && seg !== null && "key" in seg) {
+			segs.push(String(seg.key));
+		} else {
+			segs.push(String(seg));
+		}
+	}
+	return `/${segs.join("/")}`;
+}
+
 function resolveInstanceValue(data: unknown, instancePath: string): unknown {
-	if (!instancePath || instancePath === "") return data;
+	if (!instancePath || instancePath === "" || instancePath === ".") return data;
 	const segments = instancePath.split("/").slice(1);
 	let cur: unknown = data;
 	for (const seg of segments) {

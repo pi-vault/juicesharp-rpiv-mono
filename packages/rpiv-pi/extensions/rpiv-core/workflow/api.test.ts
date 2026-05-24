@@ -18,6 +18,7 @@ import {
 	threshold,
 	type Workflow,
 } from "./api.js";
+import { typeboxSchema } from "./standard-schema.js";
 
 // ---------------------------------------------------------------------------
 // defineWorkflow
@@ -79,7 +80,7 @@ describe("skill", () => {
 	});
 
 	it("accepts outputSchema for predicate-edge gating", () => {
-		const schema = Type.Object({ severeIssueCount: Type.Integer({ minimum: 0 }) });
+		const schema = typeboxSchema(Type.Object({ severeIssueCount: Type.Integer({ minimum: 0 }) }));
 		const n = skill("code-review", { outputSchema: schema });
 		expect(n.outputSchema).toBe(schema);
 	});
@@ -199,7 +200,7 @@ describe("composition smoke", () => {
 			nodes: {
 				research: skill("research"),
 				"code-review": skill("code-review", {
-					outputSchema: Type.Object({ severeIssueCount: Type.Integer({ minimum: 0 }) }),
+					outputSchema: typeboxSchema(Type.Object({ severeIssueCount: Type.Integer({ minimum: 0 }) })),
 				}),
 				revise: skill("revise"),
 				commit: action("commit"),

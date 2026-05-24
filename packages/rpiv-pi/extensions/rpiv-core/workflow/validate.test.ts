@@ -5,9 +5,11 @@
  * produces. The built-in workflows get a smoke pass (zero errors expected).
  */
 
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { action, definePredicate, defineWorkflow, type EdgeFn, skill, threshold, type Workflow } from "./api.js";
 import { builtInWorkflows } from "./built-in.js";
+import { typeboxSchema } from "./standard-schema.js";
 import { validateWorkflow } from "./validate.js";
 
 // ---------------------------------------------------------------------------
@@ -311,7 +313,9 @@ describe("validateWorkflow — predicate-edge schema check", () => {
 			name: "clothed",
 			start: "code-review",
 			nodes: {
-				"code-review": skill("code-review", { outputSchema: { type: "object" } as never }),
+				"code-review": skill("code-review", {
+					outputSchema: typeboxSchema(Type.Object({ severeIssueCount: Type.Integer({ minimum: 0 }) })),
+				}),
 				revise: skill("revise"),
 				commit: action("commit"),
 			},

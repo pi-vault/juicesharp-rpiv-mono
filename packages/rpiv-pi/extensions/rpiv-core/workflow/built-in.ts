@@ -11,10 +11,10 @@
 import { Type } from "typebox";
 import { action, defineWorkflow, skill, threshold, type Workflow } from "./api.js";
 import { gitCommitExtractor } from "./extractors/index.js";
+import { typeboxSchema } from "./standard-schema.js";
 
-const CODE_REVIEW_SCHEMA = Type.Object(
-	{ severeIssueCount: Type.Integer({ minimum: 0 }) },
-	{ additionalProperties: true },
+const CODE_REVIEW_SCHEMA = typeboxSchema(
+	Type.Object({ severeIssueCount: Type.Integer({ minimum: 0 }) }, { additionalProperties: true }),
 );
 
 // ===========================================================================
