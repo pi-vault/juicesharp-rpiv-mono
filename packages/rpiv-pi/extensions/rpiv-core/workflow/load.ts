@@ -176,6 +176,9 @@ interface NormalizeErr {
 function normalizeDefaultExport(raw: unknown): NormalizeOk | NormalizeErr {
 	if (isWorkflow(raw)) return { value: { workflows: [raw] } };
 	if (Array.isArray(raw)) {
+		if (raw.length === 0) {
+			return { error: "default-export `Workflow[]` must contain at least one Workflow" };
+		}
 		if (!raw.every(isWorkflow)) {
 			return { error: "default export array must contain only Workflow objects" };
 		}

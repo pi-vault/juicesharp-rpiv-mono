@@ -14,7 +14,7 @@
  * No I/O, no throws — purely a graph walk + predicate probe.
  */
 
-import type { EdgeTarget, Workflow } from "./api.js";
+import { type EdgeTarget, READS_FRONTMATTER, type Workflow } from "./api.js";
 import {
 	MAX_VALIDATION_RETRIES,
 	MAX_VALIDATION_RETRY_TIMEOUT_MS,
@@ -195,27 +195,43 @@ function checkNodeSemantics(w: Workflow, issues: ValidationIssue[]): void {
 				error(w.name, name, `onValidationFailure: "${node.onValidationFailure}" — must be "retry" or "halt"`),
 			);
 		}
+		if (node.completionStrategy !== "artifact-emit" && node.completionStrategy !== "agent-end") {
+			issues.push(
+				error(
+					w.name,
+					name,
+					`completionStrategy: "${node.completionStrategy}" — must be "artifact-emit" or "agent-end"`,
+				),
+			);
+		}
+		if (node.sessionPolicy !== "fresh" && node.sessionPolicy !== "continue") {
+			issues.push(error(w.name, name, `sessionPolicy: "${node.sessionPolicy}" — must be "fresh" or "continue"`));
+		}
 	}
 }
 
 /**
- * Predicate edges read `manifest.data[field]` — that data should have been
- * validated against the source node's `outputSchema` before the predicate
- * fires. A predicate on a node WITHOUT an `outputSchema` is reading
- * unvalidated frontmatter; routing decisions made on absent fields silently
- * default. Warn so the author can declare the schema and let the validation
- * retry loop guard the boundary.
+ * Predicate edges that read `manifest.data[field]` (i.e. `threshold` and any
+ * future factory that sets the `READS_FRONTMATTER` marker) should fire on
+ * data the source node has validated against its `outputSchema`. If the
+ * schema is absent, the validation-retry loop never runs and the predicate
+ * may read an undefined field — routing decisions silently default.
+ *
+ * Hand-rolled predicates (via `definePredicate`) that consult only `state`
+ * or `manifest.meta` carry no marker and are exempt — the warning would be
+ * a false positive there.
  */
 function checkPredicateSchemas(w: Workflow, issues: ValidationIssue[]): void {
 	for (const [from, target] of Object.entries(w.edges)) {
 		if (typeof target === "string") continue;
+		if (!(target as unknown as Record<symbol, unknown>)[READS_FRONTMATTER]) continue;
 		const node = w.nodes[from];
 		if (node && !node.outputSchema) {
 			issues.push(
 				warning(
 					w.name,
 					from,
-					`predicate edge from "${from}" reads manifest data but the node has no outputSchema — routing may fire on un-validated frontmatter`,
+					`predicate edge from "${from}" reads manifest.data but the node has no outputSchema — routing may fire on un-validated frontmatter`,
 				),
 			);
 		}

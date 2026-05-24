@@ -13,7 +13,7 @@ import { formatWorkflowDetails, formatWorkflowList } from "./preview.js";
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const node = (overrides: Partial<NodeDef> & { name: string; skill: string }): NodeDef => ({
+const node = (overrides: Partial<NodeDef> & { skill: string }): NodeDef => ({
 	completionStrategy: "agent-end",
 	sessionPolicy: "fresh",
 	...overrides,
@@ -23,9 +23,9 @@ const midWorkflow = defineWorkflow({
 	name: "mid",
 	start: "research",
 	nodes: {
-		research: node({ name: "research", skill: "research", completionStrategy: "artifact-emit" }),
-		implement: node({ name: "implement", skill: "implement" }),
-		commit: node({ name: "commit", skill: "commit", extractor: gitCommitExtractor }),
+		research: node({ skill: "research", completionStrategy: "artifact-emit" }),
+		implement: node({ skill: "implement" }),
+		commit: node({ skill: "commit", extractor: gitCommitExtractor }),
 	},
 	edges: { research: "implement", implement: "commit", commit: "stop" },
 });

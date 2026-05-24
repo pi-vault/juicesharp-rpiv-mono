@@ -10,7 +10,6 @@ import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
 	action,
-	custom,
 	definePredicate,
 	defineWorkflow,
 	type EdgeFn,
@@ -58,7 +57,6 @@ describe("skill", () => {
 	it("applies artifact-emit + fresh defaults", () => {
 		const n = skill("research");
 		expect(n).toMatchObject({
-			name: "research",
 			skill: "research",
 			completionStrategy: "artifact-emit",
 			sessionPolicy: "fresh",
@@ -77,7 +75,6 @@ describe("skill", () => {
 
 	it("lets overrides redirect to a different skill body than the node name", () => {
 		const n = skill("code-review-large", { skill: "code-review" });
-		expect(n.name).toBe("code-review-large");
 		expect(n.skill).toBe("code-review");
 	});
 
@@ -96,7 +93,6 @@ describe("action", () => {
 	it("applies agent-end + fresh defaults", () => {
 		const n = action("implement");
 		expect(n).toMatchObject({
-			name: "implement",
 			skill: "implement",
 			completionStrategy: "agent-end",
 			sessionPolicy: "fresh",
@@ -114,33 +110,6 @@ describe("action", () => {
 		};
 		const n = action("commit", { extractor });
 		expect(n.extractor).toBe(extractor);
-	});
-});
-
-// ---------------------------------------------------------------------------
-// custom — explicit-everything
-// ---------------------------------------------------------------------------
-
-describe("custom", () => {
-	it("returns the spec unchanged — no defaulting", () => {
-		const spec = {
-			name: "deploy",
-			skill: "deploy",
-			completionStrategy: "agent-end" as const,
-			sessionPolicy: "fresh" as const,
-		};
-		expect(custom(spec)).toBe(spec);
-	});
-
-	it("permits any sessionPolicy / completionStrategy combination explicitly", () => {
-		const n = custom({
-			name: "audit",
-			skill: "audit",
-			completionStrategy: "artifact-emit",
-			sessionPolicy: "continue",
-		});
-		expect(n.completionStrategy).toBe("artifact-emit");
-		expect(n.sessionPolicy).toBe("continue");
 	});
 });
 

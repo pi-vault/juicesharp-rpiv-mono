@@ -182,7 +182,6 @@ describe("runWorkflow", () => {
 			const defaultStrategy: CompletionStrategy =
 				id === "implement" || id === "commit" ? "agent-end" : "artifact-emit";
 			nodes[id] = {
-				name: id,
 				skill: id,
 				completionStrategy: defaultStrategy,
 				sessionPolicy: "fresh",
@@ -1514,5 +1513,122 @@ describe("transcript offset helpers", () => {
 		expect(lastAssistantStopReason(branch, 1)).toBe("error");
 		// From offset 2, no entries
 		expect(lastAssistantStopReason(branch, 2)).toBeUndefined();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// totalStages (countReachableNodes) — observed through the status-line denominator
+// ---------------------------------------------------------------------------
+
+describe("totalStages denominator (countReachableNodes)", () => {
+	let tmpDir: string;
+
+	beforeEach(() => {
+		tmpDir = mkdtempSync(join(tmpdir(), "rpiv-total-stages-"));
+		clearChildSession();
+	});
+	afterEach(() => {
+		rmSync(tmpDir, { recursive: true, force: true });
+		clearChildSession();
+	});
+
+	const stageDenominator = (statusUpdates: Array<{ key: string; value: string | undefined }>): number | undefined => {
+		const first = statusUpdates.find((u) => u.value !== undefined);
+		const match = first?.value?.match(/stage \d+\/(\d+)/);
+		return match ? Number(match[1]) : undefined;
+	};
+
+	it("counts every reachable node along a linear chain", async () => {
+		writeFileSync(join(tmpDir, ".rpiv-stub"), ""); // ensure cwd exists
+		const chain = createMockSessionChain({
+			cwd: tmpDir,
+			steps: [{ branch: [mockAssistantMessage("done")] }],
+		});
+		// 3-node linear chain — denominator should be 3.
+		await runWorkflow(chain.ctx, {
+			workflow: {
+				name: "linear",
+				start: "a",
+				nodes: {
+					a: { skill: "a", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+					b: { skill: "b", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+					c: { skill: "c", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+				},
+				edges: { a: "b", b: "c", c: "stop" },
+			},
+			input: "x",
+		});
+		expect(stageDenominator(chain.statusUpdates)).toBe(3);
+	});
+
+	it("counts both branches when an edge is a threshold (with .targets)", async () => {
+		const chain = createMockSessionChain({
+			cwd: tmpDir,
+			steps: [{ branch: [mockAssistantMessage("done")] }],
+		});
+		await runWorkflow(chain.ctx, {
+			workflow: {
+				name: "branching",
+				start: "a",
+				nodes: {
+					a: { skill: "a", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+					b: { skill: "b", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+					c: { skill: "c", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+				},
+				// Threshold attaches .targets = ["b", "c"]; BFS reaches both.
+				edges: { a: threshold("count", 0, "b", "c"), b: "stop", c: "stop" },
+			},
+			input: "x",
+		});
+		expect(stageDenominator(chain.statusUpdates)).toBe(3);
+	});
+
+	it("excludes orphan (unreachable) nodes from the count", async () => {
+		const chain = createMockSessionChain({
+			cwd: tmpDir,
+			steps: [{ branch: [mockAssistantMessage("done")] }],
+		});
+		// `orphan` is declared but never reachable from start.
+		await runWorkflow(chain.ctx, {
+			workflow: {
+				name: "with-orphan",
+				start: "a",
+				nodes: {
+					a: { skill: "a", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+					b: { skill: "b", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+					orphan: { skill: "orphan", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+				},
+				edges: { a: "b", b: "stop", orphan: "stop" },
+			},
+			input: "x",
+		});
+		// BFS reaches {a, b} — denominator is 2, not 3.
+		expect(stageDenominator(chain.statusUpdates)).toBe(2);
+	});
+
+	it("falls back to the declared-node total when an EdgeFn has no .targets", async () => {
+		const chain = createMockSessionChain({
+			cwd: tmpDir,
+			steps: [{ branch: [mockAssistantMessage("done")] }],
+		});
+		// A bare EdgeFn skips definePredicate/threshold and carries no .targets
+		// metadata. Validate would reject this at load time, but runWorkflow can
+		// still receive it from a test or programmatic embedder. The defensive
+		// fallback in countReachableNodes returns Object.keys(nodes).length so
+		// the status-line denominator stays a valid upper bound (never undercounts).
+		const bareEdge = () => "b";
+		await runWorkflow(chain.ctx, {
+			workflow: {
+				name: "naked",
+				start: "a",
+				nodes: {
+					a: { skill: "a", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+					b: { skill: "b", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+				},
+				edges: { a: bareEdge, b: "stop" },
+			},
+			input: "x",
+		});
+		expect(stageDenominator(chain.statusUpdates)).toBe(2);
 	});
 });

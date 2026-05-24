@@ -289,6 +289,17 @@ export default [
 		expect(loaded.workflows.find((w) => w.name === "mid")).toBeDefined();
 	});
 
+	it("rejects an empty Workflow[]", async () => {
+		writeProjectConfig(TEST_TMP, "export default [];\n");
+
+		const loaded = await loadWorkflows(TEST_TMP);
+		expect(
+			loaded.issues.some(
+				(i) => i.kind === "load" && i.severity === "error" && /must contain at least one Workflow/.test(i.message),
+			),
+		).toBe(true);
+	});
+
 	it("accepts a single-entry Workflow[] without an envelope", async () => {
 		writeProjectConfig(
 			TEST_TMP,

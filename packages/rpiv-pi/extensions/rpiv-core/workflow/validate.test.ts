@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { action, defineWorkflow, type EdgeFn, skill, threshold, type Workflow } from "./api.js";
+import { action, definePredicate, defineWorkflow, type EdgeFn, skill, threshold, type Workflow } from "./api.js";
 import { builtInWorkflows } from "./built-in.js";
 import { validateWorkflow } from "./validate.js";
 
@@ -258,6 +258,16 @@ describe("validateWorkflow — semantic node constraints", () => {
 			validateWorkflow(baseWithNode({ onValidationFailure: "halt" })).filter((i) => i.severity === "error"),
 		).toEqual([]);
 	});
+
+	it("errors on unknown completionStrategy", () => {
+		const issues = validateWorkflow(baseWithNode({ completionStrategy: "burn-it" as unknown as "artifact-emit" }));
+		expect(issues.some((i) => i.severity === "error" && /completionStrategy: "burn-it"/.test(i.message))).toBe(true);
+	});
+
+	it("errors on unknown sessionPolicy", () => {
+		const issues = validateWorkflow(baseWithNode({ sessionPolicy: "lingering" as unknown as "fresh" }));
+		expect(issues.some((i) => i.severity === "error" && /sessionPolicy: "lingering"/.test(i.message))).toBe(true);
+	});
 });
 
 describe("validateWorkflow — predicate-edge schema check", () => {
@@ -276,6 +286,24 @@ describe("validateWorkflow — predicate-edge schema check", () => {
 		expect(
 			issues.some((i) => i.severity === "warning" && i.node === "code-review" && /outputSchema/.test(i.message)),
 		).toBe(true);
+	});
+
+	it("does NOT warn when the predicate is hand-rolled via definePredicate (no frontmatter read)", () => {
+		// definePredicate doesn't carry the READS_FRONTMATTER marker; the schema
+		// warning is exclusively for `threshold`-shaped predicates that consult
+		// `manifest.data[field]`. A state-derived predicate is exempt.
+		const w: Workflow = {
+			name: "state-derived",
+			start: "code-review",
+			nodes: { "code-review": skill("code-review"), a: skill("a"), b: skill("b") },
+			edges: {
+				"code-review": definePredicate(["a", "b"], ({ state }) => (state.backwardJumps > 0 ? "a" : "b")),
+				a: "stop",
+				b: "stop",
+			},
+		};
+		const issues = validateWorkflow(w);
+		expect(issues.filter((i) => i.severity === "warning" && /outputSchema/.test(i.message))).toEqual([]);
 	});
 
 	it("does not warn when the predicate source carries an outputSchema", () => {

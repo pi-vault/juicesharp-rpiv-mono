@@ -71,10 +71,10 @@ export type EdgeTarget = string | EdgeFn;
 /**
  * A node in the workflow graph. `skill` is resolved by Pi at run-time —
  * no allowlist gate. If Pi can't load the skill, the runner halts with a
- * clear error pointing at this node.
+ * clear error pointing at this node. The node's identity is the
+ * surrounding `Workflow.nodes` record key, not a duplicated `name` field.
  */
 export interface NodeDef {
-	name: string;
 	skill: string;
 	completionStrategy: CompletionStrategy;
 	sessionPolicy: SessionPolicy;
@@ -109,10 +109,14 @@ export function defineWorkflow(spec: Workflow): Workflow {
 	return spec;
 }
 
-/** Protocol skill: writes `.rpiv/artifacts/<bucket>/<file>.md`. Defaults to fresh-session. */
+/**
+ * Protocol skill: writes `.rpiv/artifacts/<bucket>/<file>.md`. Defaults to
+ * fresh-session. `name` doubles as the default `skill` body — override via
+ * the second argument when the node name differs from the skill being invoked
+ * (e.g. `skill("code-review-large", { skill: "code-review" })`).
+ */
 export function skill(name: string, overrides: Partial<NodeDef> = {}): NodeDef {
 	return {
-		name,
 		skill: name,
 		completionStrategy: "artifact-emit",
 		sessionPolicy: "fresh",
@@ -123,7 +127,6 @@ export function skill(name: string, overrides: Partial<NodeDef> = {}): NodeDef {
 /** Action skill: side effect IS the work (commit, implement). Defaults to fresh-session. */
 export function action(name: string, overrides: Partial<NodeDef> = {}): NodeDef {
 	return {
-		name,
 		skill: name,
 		completionStrategy: "agent-end",
 		sessionPolicy: "fresh",
@@ -131,18 +134,20 @@ export function action(name: string, overrides: Partial<NodeDef> = {}): NodeDef 
 	};
 }
 
-/**
- * Explicit-everything node — for skills whose name differs from their node
- * name, or for cases where `skill`/`action` defaults don't fit. Identity
- * passthrough; provides the shape entry point for users.
- */
-export function custom(spec: NodeDef): NodeDef {
-	return spec;
-}
-
 // ===========================================================================
 // Predicate builders — common patterns
 // ===========================================================================
+
+/**
+ * Internal marker attached by predicate factories that read from
+ * `manifest.data` (e.g. `threshold`). `validate.ts:checkPredicateSchemas`
+ * scopes its `outputSchema`-missing warning to predicates carrying this
+ * marker, so hand-rolled predicates that only consult `state` or
+ * `manifest.meta` don't trip false positives.
+ *
+ * Exported as a `Symbol.for` so it survives `import` boundaries cleanly.
+ */
+export const READS_FRONTMATTER: unique symbol = Symbol.for("rpiv.workflow.readsFrontmatter");
 
 /**
  * Promote a hand-rolled `EdgePredicate` to an `EdgeFn` by structurally
@@ -166,7 +171,11 @@ export function definePredicate(targets: readonly string[], fn: EdgePredicate): 
 /**
  * `ifAbove` when `Number(manifest.data[field] ?? 0) > threshold`, else `ifBelow`.
  * Built on `definePredicate` so the contract is enforced structurally.
+ * Marks the returned EdgeFn with `READS_FRONTMATTER` so the predicate-schema
+ * lint can warn when the source node has no `outputSchema`.
  */
 export function threshold(field: string, n: number, ifAbove: string, ifBelow: string): EdgeFn {
-	return definePredicate([ifAbove, ifBelow], predicateThreshold(field, n, ifAbove, ifBelow));
+	const fn = definePredicate([ifAbove, ifBelow], predicateThreshold(field, n, ifAbove, ifBelow));
+	(fn as unknown as Record<symbol, boolean>)[READS_FRONTMATTER] = true;
+	return fn;
 }

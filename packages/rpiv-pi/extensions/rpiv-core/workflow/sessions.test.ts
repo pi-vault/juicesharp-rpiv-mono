@@ -55,7 +55,6 @@ const freshRunState = (overrides: Partial<RunState> = {}): RunState => ({
 
 /** Minimal skill node — fresh policy, agent-end (no artifact extraction by default). */
 const node = (overrides: Partial<NodeDef> = {}): NodeDef => ({
-	name: "test",
 	skill: "test",
 	completionStrategy: "agent-end",
 	sessionPolicy: "fresh",
