@@ -36,8 +36,12 @@ export interface EdgeContext {
 	state: Readonly<RunState>;
 }
 
-/** A function that picks the next node name given current state + manifest. */
-export type EdgeFn = EdgePredicate;
+/**
+ * A function that picks the next node name given current state + manifest.
+ * Optional `targets` field lets graph introspectors enumerate possible
+ * returns — `threshold` and other built-in predicate builders populate it.
+ */
+export type EdgeFn = EdgePredicate & { targets?: readonly string[] };
 
 /**
  * What an `edges` entry resolves to: another node name (auto-edge), the
@@ -123,6 +127,12 @@ export function custom(spec: NodeDef): NodeDef {
 
 /**
  * `ifAbove` when `Number(manifest.data[field] ?? 0) > threshold`, else `ifBelow`.
- * Thin alias over `predicateThreshold` so user-facing imports stay under one name.
+ * Attaches `.targets = [ifAbove, ifBelow]` to the returned function so the
+ * compile-to-legacy-DAG translator (and any future graph introspector) can
+ * enumerate the predicate's possible returns without probing.
  */
-export const threshold = predicateThreshold;
+export function threshold(field: string, n: number, ifAbove: string, ifBelow: string): EdgeFn {
+	const fn = predicateThreshold(field, n, ifAbove, ifBelow) as EdgeFn;
+	fn.targets = [ifAbove, ifBelow];
+	return fn;
+}

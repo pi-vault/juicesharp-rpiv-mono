@@ -4,11 +4,11 @@
  * the DAG explicitly so tests can pass alternatives.
  */
 
-import { type TSchema, Type } from "typebox";
+import type { TSchema } from "typebox";
 import { BUNDLED_SKILL_NAMES } from "../paths.js";
-import { gitCommitExtractor } from "./extractors/index.js";
+import { builtInWorkflows, extraEdges, extraNodes } from "./built-in.js";
+import { compileWorkflowsToDag } from "./compile.js";
 import type { Extractor } from "./manifest.js";
-import { predicateThreshold } from "./predicates.js";
 import {
 	MAX_VALIDATION_RETRIES,
 	MAX_VALIDATION_RETRY_TIMEOUT_MS,
@@ -109,110 +109,26 @@ export const skillNode = (
 	inputSchema: overrides?.inputSchema,
 });
 
-// Shared schema for every code-review node — gates the predicate edges so
-// `retryUntilValid` rejects a manifest missing `severeIssueCount` before
-// the routing layer ever sees it.
-const CODE_REVIEW_SCHEMA = Type.Object(
-	{ severeIssueCount: Type.Integer({ minimum: 0 }) },
-	{ additionalProperties: true },
-);
-
-export const WORKFLOW_DAG: WorkflowDag = {
-	edges: [
-		{ from: "discover", to: ["research"], condition: "auto" },
-		{ from: "design", to: ["plan"], condition: "auto" },
-		{ from: "plan", to: ["implement"], condition: "auto" },
-		{ from: "blueprint", to: ["implement"], condition: "auto" },
-		{ from: "implement", to: ["validate"], condition: "auto" },
-		// `validate` is the build/review boundary; its actual successor depends
-		// on the preset profile (small: none, mid: code-review, large:
-		// code-review-large). Choice edges fall through to `linearNextOf` in
-		// `routing.ts`, so the right successor is picked from each preset's
-		// linear sequence at runtime — no per-preset edge fanout needed.
-		{ from: "validate", to: ["code-review", "code-review-large"], condition: "choice" },
-		// The second implement in `mid` is a distinct node id (skill stays
-		// "implement") so routing's Array.indexOf reaches the post-revise
-		// position instead of the original first implement.
-		{ from: "revise", to: ["implement-after-revise"], condition: "auto" },
-		// `large`'s post-review redesign tail. Distinct node ids let routing
-		// reach idx 6..8 of the large preset instead of looping back to the
-		// pre-validate design at idx 1.
-		{ from: "design-after-review", to: ["plan-after-review"], condition: "auto" },
-		{ from: "plan-after-review", to: ["implement-after-review"], condition: "auto" },
-		{ from: "outline-test-cases", to: ["write-test-cases"], condition: "auto" },
-		{ from: "migrate-to-guidance", to: ["annotate-guidance"], condition: "auto" },
-
-		{ from: "research", to: ["design", "blueprint"], condition: "choice" },
-		{ from: "explore", to: ["design", "blueprint"], condition: "choice" },
-		{
-			from: "code-review",
-			to: ["revise", "commit"],
-			condition: "predicate",
-			predicate: predicateThreshold("severeIssueCount", 0, "revise", "commit"),
-		},
-		{
-			from: "code-review-large",
-			to: ["design-after-review", "commit"],
-			condition: "predicate",
-			predicate: predicateThreshold("severeIssueCount", 0, "design-after-review", "commit"),
-		},
-	],
-
-	// Review-tail sizing: small terminates at validate; mid does a surgical
-	// revise loop; large re-runs design/plan for architectural findings.
-	presets: {
-		small: ["blueprint", "implement", "validate"],
-		mid: [
-			"research",
-			"blueprint",
-			"implement",
-			"validate",
-			"code-review",
-			"revise",
-			"implement-after-revise",
-			"commit",
-		],
-		large: [
-			"research",
-			"design",
-			"plan",
-			"implement",
-			"validate",
-			"code-review-large",
-			"design-after-review",
-			"plan-after-review",
-			"implement-after-review",
-			"commit",
-		],
-	},
-
-	// `*-after-revise` / `*-after-review` aliases share a skill body with the
-	// pre-validate node but a distinct node id, so routing.indexOf reaches the
-	// post-review position instead of looping back.
-	nodes: {
-		discover: skillNode("discover", "artifact-emit"),
-		research: skillNode("research", "artifact-emit"),
-		design: skillNode("design", "artifact-emit"),
-		plan: skillNode("plan", "artifact-emit"),
-		blueprint: skillNode("blueprint", "artifact-emit"),
-		explore: skillNode("explore", "artifact-emit"),
-		validate: skillNode("validate", "artifact-emit"),
-		revise: skillNode("revise", "artifact-emit"),
-		"code-review": skillNode("code-review", "artifact-emit", { outputSchema: CODE_REVIEW_SCHEMA }),
-		"code-review-large": skillNode("code-review", "artifact-emit", { outputSchema: CODE_REVIEW_SCHEMA }),
-		"outline-test-cases": skillNode("outline-test-cases", "artifact-emit"),
-		"design-after-review": skillNode("design", "artifact-emit"),
-		"plan-after-review": skillNode("plan", "artifact-emit"),
-
-		"write-test-cases": skillNode("write-test-cases", "agent-end"),
-		implement: skillNode("implement", "agent-end"),
-		"implement-after-revise": skillNode("implement", "agent-end"),
-		"implement-after-review": skillNode("implement", "agent-end"),
-		commit: skillNode("commit", "agent-end", { extractor: gitCommitExtractor }),
-		"annotate-guidance": skillNode("annotate-guidance", "agent-end"),
-		"migrate-to-guidance": skillNode("migrate-to-guidance", "agent-end"),
-	},
-};
+/**
+ * The legacy `WorkflowDag` is now a derived view computed from `builtInWorkflows`
+ * (defined in TS-native form in `built-in.ts`). The compiler translates each
+ * Workflow's `(nodes, edges, start)` graph into the parallel `(nodes, edges,
+ * presets)` shape this module's consumers (routing.ts, runner.ts, loadConfig.ts)
+ * still expect.
+ *
+ * `extraNodes` + `extraEdges` round out the node lexicon with skills that no
+ * built-in preset reaches today (discover, explore, outline-test-cases,
+ * migrate-to-guidance) — kept so `getEdge` and `isValidNode` continue to
+ * resolve those names. They'll be folded into proper Workflows in Phase 5.
+ *
+ * This translator goes away in Phase 5 when the runner consumes `Workflow`
+ * directly.
+ */
+export const WORKFLOW_DAG: WorkflowDag = compileWorkflowsToDag({
+	workflows: builtInWorkflows,
+	extraNodes,
+	extraEdges,
+});
 
 // ---------------------------------------------------------------------------
 // Validation

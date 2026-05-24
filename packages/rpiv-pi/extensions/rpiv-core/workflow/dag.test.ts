@@ -11,19 +11,22 @@ import {
 } from "./dag.js";
 
 describe("DAG types and constants", () => {
-	it("WORKFLOW_DAG has 15 edges (10 auto + 3 choice + 2 predicate)", () => {
-		// validate is now a 2-target choice (code-review vs code-review-large
-		// per preset profile); large's post-review tail adds two auto edges and
-		// a second predicate edge on code-review-large.
-		expect(WORKFLOW_DAG.edges).toHaveLength(15);
-		expect(WORKFLOW_DAG.edges.filter((e) => e.condition === "auto")).toHaveLength(10);
-		expect(WORKFLOW_DAG.edges.filter((e) => e.condition === "choice")).toHaveLength(3);
+	it("WORKFLOW_DAG has 16 edges (12 auto + 2 choice + 2 predicate)", () => {
+		// Compiled from `built-in.ts`. Two `*-after-*` → commit edges that were
+		// implicit in the old hand-authored linear lists now appear as explicit
+		// auto edges (behavior identical via `linearNextOf` fallback either way).
+		// The legacy `explore → [design, blueprint]` choice edge is dropped —
+		// no built-in preset reaches it.
+		expect(WORKFLOW_DAG.edges).toHaveLength(16);
+		expect(WORKFLOW_DAG.edges.filter((e) => e.condition === "auto")).toHaveLength(12);
+		expect(WORKFLOW_DAG.edges.filter((e) => e.condition === "choice")).toHaveLength(2);
 		expect(WORKFLOW_DAG.edges.filter((e) => e.condition === "predicate")).toHaveLength(2);
 	});
 
 	it("WORKFLOW_DAG has 3 presets", () => {
 		const presetNames = Object.keys(WORKFLOW_DAG.presets);
-		expect(presetNames).toEqual(["small", "mid", "large"]);
+		// Order is whatever `built-in.ts:builtInWorkflows` declares — set, not list.
+		expect(new Set(presetNames)).toEqual(new Set(["small", "mid", "large"]));
 	});
 
 	it("mid preset has 8 nodes (Path A tail: code-review → revise → implement → commit)", () => {
