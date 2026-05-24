@@ -24,6 +24,25 @@ import type { RunState } from "./types.js";
 export type { Extractor } from "./manifest.js";
 
 // ===========================================================================
+// Node-shape primitives
+// ===========================================================================
+
+/**
+ * - `"artifact-emit"` — protocol skills that write `.rpiv/artifacts/<bucket>/<file>.md`.
+ *   The runner halts the chain if the path doesn't appear in the transcript.
+ * - `"agent-end"` — action skills (commit, implement) where the side effect IS
+ *   the work; the chain inherits the prior `state.artifactPath`.
+ */
+export type CompletionStrategy = "artifact-emit" | "agent-end";
+
+/**
+ * - `"fresh"` — wraps the stage in `ctx.newSession({ withSession })`.
+ * - `"continue"` — reuses the prior session via `pi.sendUserMessage()` +
+ *   `ctx.waitForIdle()`; branch sliced by `branchOffset`.
+ */
+export type SessionPolicy = "fresh" | "continue";
+
+// ===========================================================================
 // Types
 // ===========================================================================
 
@@ -57,8 +76,8 @@ export type EdgeTarget = string | EdgeFn;
 export interface NodeDef {
 	name: string;
 	skill: string;
-	completionStrategy: "artifact-emit" | "agent-end";
-	sessionPolicy: "fresh" | "continue";
+	completionStrategy: CompletionStrategy;
+	sessionPolicy: SessionPolicy;
 	extractor?: Extractor;
 	outputSchema?: TSchema;
 	inputSchema?: TSchema;

@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { createMockPi, createMockSessionChain, mockAssistantMessage } from "@juicesharp/rpiv-test-utils";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DagNode } from "./dag.js";
+import type { NodeDef } from "./api.js";
 import type { Extractor, ExtractorCtx, ExtractorFn, ExtractorResult } from "./manifest.js";
 import {
 	ERR_VALIDATION_FAILED,
@@ -54,14 +54,13 @@ const freshRunState = (overrides: Partial<RunState> = {}): RunState => ({
 });
 
 /** Minimal skill node — fresh policy, agent-end (no artifact extraction by default). */
-const node = (overrides: Partial<DagNode> = {}): DagNode =>
-	({
-		kind: "skill",
-		skill: "test",
-		completionStrategy: "agent-end",
-		sessionPolicy: "fresh",
-		...overrides,
-	}) as DagNode;
+const node = (overrides: Partial<NodeDef> = {}): NodeDef => ({
+	name: "test",
+	skill: "test",
+	completionStrategy: "agent-end",
+	sessionPolicy: "fresh",
+	...overrides,
+});
 
 /**
  * Build a StageSession with sensible defaults. Caller MUST supply cwd + state

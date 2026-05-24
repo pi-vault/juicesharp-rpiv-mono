@@ -1,8 +1,8 @@
 /**
- * Workflow orchestration. `runWorkflow` resolves a preset and recursively
- * drives `runStage` through it. Per-stage work (sessions, extraction,
- * validation, audit row writes) lives in sessions.ts + audit.ts; this
- * file only owns preset traversal, per-stage prerequisites, and routing.
+ * Workflow orchestration. `runWorkflow` walks a `Workflow`'s edge graph
+ * stage-by-stage. Per-stage work (sessions, extraction, validation, audit
+ * row writes) lives in sessions.ts + audit.ts; this file owns graph
+ * traversal, per-stage prerequisites, and routing.
  *
  * Ctx lifecycle: every level only touches the ctx it was handed.
  * - `newSession({cancelled: false})` invalidates the outer ctx; all
@@ -11,17 +11,15 @@
  * - `cancelled: true` means no replacement happened — outer ctx remains valid.
  * - Continue policy has no newSession — same ctx throughout.
  *
- * Vocabulary: "stage" = one preset position (a DAG node); "phase" = one
+ * Vocabulary: "stage" = one node activation in this run; "phase" = one
  * `## Phase N:` subdivision inside an implement plan artifact.
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { NodeDef, Workflow } from "./api.js";
 import { notifyPartialArtifacts, nowIso, recordStage } from "./audit.js";
 import { clearChildSession, markChildSession } from "./child-session.js";
-import type { DagNode, WorkflowDag } from "./dag.js";
-import { WORKFLOW_DAG } from "./dag.js";
 import { countPhases, runImplementPhases } from "./implement-phases.js";
-import type { Manifest } from "./manifest.js";
 import {
 	ERR_BACKWARD_JUMP_EXHAUSTED,
 	ERR_INPUT_VALIDATION_FAILED,
@@ -34,11 +32,11 @@ import {
 	STATUS_KEY,
 	STATUS_STAGE,
 } from "./messages.js";
-import { resolveNextStageId } from "./routing.js";
+import { edgeIsDecision, nextNode } from "./routing.js";
 import { runPhaseSession, runStageSession } from "./sessions.js";
 import { appendRoutingDecision, generateRunId, writeHeader } from "./state.js";
 import { readBranch } from "./transcript.js";
-import type { ChainCtx, RunContext } from "./types.js";
+import type { ChainCtx, RunContext, RunState } from "./types.js";
 import { validateManifestData } from "./validation.js";
 
 // ---------------------------------------------------------------------------
@@ -46,10 +44,10 @@ import { validateManifestData } from "./validation.js";
 // ---------------------------------------------------------------------------
 
 export interface RunWorkflowOptions {
-	preset: string;
-	/** Passed to the first skill as its argument. */
+	/** Workflow to execute — caller resolves by name from `LoadedWorkflows`. */
+	workflow: Workflow;
+	/** Passed to the start node as its argument. */
 	input: string;
-	dag?: WorkflowDag;
 	/** Required for "continue"-policy stages (pi.sendUserMessage). */
 	pi?: ExtensionAPI;
 	/** Defaults to MAX_BACKWARD_JUMPS. */
@@ -76,45 +74,51 @@ export async function runWorkflow(
 	ctx: ExtensionCommandContext,
 	options: RunWorkflowOptions,
 ): Promise<RunWorkflowResult> {
-	const dag = options.dag ?? WORKFLOW_DAG;
-	const stageIds = dag.presets[options.preset];
-	if (!stageIds || stageIds.length === 0) {
-		return { stagesCompleted: 0, success: false, error: `Unknown preset: ${options.preset}` };
+	const { workflow } = options;
+	if (!workflow.nodes[workflow.start]) {
+		return {
+			stagesCompleted: 0,
+			success: false,
+			error: `Workflow "${workflow.name}" start node "${workflow.start}" is not declared`,
+		};
 	}
 
 	const cwd = ctx.cwd;
 	const runId = generateRunId();
-	const totalStages = stageIds.length;
+	const totalStages = countReachableNodes(workflow);
 
 	writeHeader(cwd, {
 		runId,
-		preset: options.preset,
+		preset: workflow.name,
 		input: options.input,
 		ts: nowIso(),
 	});
 
-	// Closed-over by the chain; per-level closures mutate while their ctx is
-	// still valid. `artifactPath` starts undefined so countPhases is never
-	// handed raw user text masquerading as a file path.
-	const state = {
+	const state: RunState = {
 		originalInput: options.input,
-		artifactPath: undefined as string | undefined,
-		manifest: undefined as Manifest | undefined,
+		artifactPath: undefined,
+		manifest: undefined,
 		stagesCompleted: 0,
 		lastStageNumber: 0,
 		success: false,
-		error: undefined as string | undefined,
+		error: undefined,
 		backwardJumps: 0,
 	};
 
 	const maxBackwardJumps = options.maxBackwardJumps ?? MAX_BACKWARD_JUMPS;
 
-	// Inner stages fire session_start; the marker tells session-hooks +
-	// advisor to suppress the cosmetic banner. Cleared in `finally` so a
-	// thrown stage doesn't strand the flag.
 	markChildSession();
 	try {
-		await runStage(ctx, 0, { cwd, runId, dag, stageIds, totalStages, state, pi: options.pi, maxBackwardJumps });
+		await runStage(ctx, workflow.start, 0, {
+			cwd,
+			runId,
+			workflow,
+			totalStages,
+			state,
+			visited: new Set(),
+			pi: options.pi,
+			maxBackwardJumps,
+		});
 	} finally {
 		clearChildSession();
 	}
@@ -126,6 +130,27 @@ export async function runWorkflow(
 	};
 }
 
+/** Upper bound for the status-line denominator — BFS reach from `workflow.start`. */
+function countReachableNodes(workflow: Workflow): number {
+	const seen = new Set<string>();
+	const frontier: string[] = [workflow.start];
+	while (frontier.length > 0) {
+		const cur = frontier.shift()!;
+		if (seen.has(cur)) continue;
+		seen.add(cur);
+		const edge = workflow.edges[cur];
+		if (edge === undefined || edge === "stop") continue;
+		if (typeof edge === "string") {
+			if (workflow.nodes[edge] && !seen.has(edge)) frontier.push(edge);
+		} else if (Array.isArray(edge.targets)) {
+			for (const t of edge.targets) {
+				if (t !== "stop" && workflow.nodes[t] && !seen.has(t)) frontier.push(t);
+			}
+		}
+	}
+	return seen.size;
+}
+
 // ---------------------------------------------------------------------------
 // runStage — per-stage orchestration
 // ---------------------------------------------------------------------------
@@ -134,40 +159,28 @@ export async function runWorkflow(
  * Builds the `/skill:<name> <args>` line sent into the session. The audit
  * label (which used to round-trip through here) is read off `stage.skill`
  * by the caller — single source.
- *
- * Default arm runtime-throws instead of `assertNever(node)` because DagNode
- * is currently a union of one — TS won't narrow to never. Drop the cast +
- * use assertNever once a second variant lands.
  */
-function buildPrompt(node: DagNode, inputForStage: string): string {
-	switch (node.kind) {
-		case "skill":
-			return `/skill:${node.skill} ${inputForStage}`;
-		default: {
-			const unknownKind = (node as { kind?: unknown }).kind;
-			throw new Error(`runStage: unsupported node kind: ${String(unknownKind)}`);
-		}
-	}
+function buildPrompt(node: NodeDef, inputForStage: string): string {
+	return `/skill:${node.skill} ${inputForStage}`;
 }
 
 /**
  * Top level reads as the stage lifecycle. Each named helper either does its
  * side effect and returns, or returns `false` to signal a halt — the caller
- * then short-circuits. Helpers are unit-testable in isolation.
+ * then short-circuits.
  */
-async function runStage(curCtx: ChainCtx, idx: number, run: RunContext): Promise<void> {
-	if (idx >= run.stageIds.length) return finalizeWorkflow(curCtx, run);
+async function runStage(curCtx: ChainCtx, currentName: string, idx: number, run: RunContext): Promise<void> {
+	const stage = resolveStageNode(currentName, idx, run);
 
-	const stage = resolveStageNode(idx, run);
+	if (await tryPhaseFanout(curCtx, currentName, stage.node, idx, run)) return;
+	if (!ensureUpstreamArtifact(curCtx, stage, currentName, run)) return;
 
-	if (await tryPhaseFanout(curCtx, stage.node, idx, run)) return;
-	if (!ensureUpstreamArtifact(curCtx, stage, idx, run)) return;
-
-	const inputForStage = idx === 0 ? run.state.originalInput : run.state.artifactPath!;
+	const isStart = currentName === run.workflow.start;
+	const inputForStage = isStart ? run.state.originalInput : run.state.artifactPath!;
 	const prompt = buildPrompt(stage.node, inputForStage);
 	curCtx.ui.setStatus(STATUS_KEY, STATUS_STAGE(stage.stageNumber, run.totalStages, stage.skill));
 
-	enforceSessionInvariants(stage, run);
+	enforceSessionInvariants(stage, currentName, run);
 	const branchOffset = computeBranchOffset(curCtx, stage.node);
 
 	if (!runStageInputValidation(curCtx, stage, run)) return;
@@ -186,24 +199,20 @@ async function runStage(curCtx: ChainCtx, idx: number, run: RunContext): Promise
 		pi: run.pi,
 		branchOffset,
 		onFailure: (freshCtx) => notifyPartialArtifacts(freshCtx, run.cwd, run.runId),
-		onSuccess: (freshCtx) => advanceChain(freshCtx, idx, stage.id, run),
+		onSuccess: (freshCtx) => advanceChain(freshCtx, currentName, idx, run),
 	});
 }
 
 // ---------------------------------------------------------------------------
-// runStage prerequisites — one helper per phase, top of runStage reads as a list
+// runStage prerequisites
 // ---------------------------------------------------------------------------
 
 interface ResolvedStage {
-	node: DagNode;
-	id: string;
+	node: NodeDef;
+	name: string;
 	/** 1-based; for status line + audit row. */
 	stageNumber: number;
-	/**
-	 * Value written to the JSONL "skill" field and the status line —
-	 * `node.skill` for skill nodes, the node id for kinds that don't carry
-	 * a skill. Matches `StageSession.skill` / `PhaseSession.skill`.
-	 */
+	/** Label written to JSONL + the status line. */
 	skill: string;
 }
 
@@ -213,41 +222,45 @@ function finalizeWorkflow(curCtx: ChainCtx, run: RunContext): void {
 	run.state.success = true;
 }
 
-function resolveStageNode(idx: number, run: RunContext): ResolvedStage {
-	const id = run.stageIds[idx]!;
-	const node = run.dag.nodes[id];
+function resolveStageNode(currentName: string, idx: number, run: RunContext): ResolvedStage {
+	const node = run.workflow.nodes[currentName];
 	if (!node) {
-		// validateDag should catch this; defensive for tests that bypass validation.
-		throw new Error(`runStage: node id "${id}" referenced by preset but missing from dag.nodes`);
+		// validateWorkflow should catch this; defensive for tests bypassing validation.
+		throw new Error(`runStage: node "${currentName}" referenced by edges but missing from workflow.nodes`);
 	}
-	const skill = node.kind === "skill" ? node.skill : id;
-	return { node, id, stageNumber: idx + 1, skill };
+	return { node, name: currentName, stageNumber: idx + 1, skill: node.skill };
 }
 
 /**
- * An implement skill against a plan with `## Phase N:` headings expands into
- * one session per phase. Keyed on node.skill so aliased implement nodes
- * (implement-after-revise, etc.) fan out too. Returns true iff fanout fired
- * (caller should then return without running the single-stage path).
+ * An implement skill against a plan with `## Phase N:` headings expands
+ * into one session per phase. Keyed on `node.skill` so aliased implement
+ * nodes (implement-after-revise, etc.) fan out too. Returns true iff
+ * fanout fired — caller then returns without running the single-stage path.
  */
-async function tryPhaseFanout(curCtx: ChainCtx, node: DagNode, idx: number, run: RunContext): Promise<boolean> {
-	if (!(node.kind === "skill" && node.skill === "implement" && run.state.artifactPath)) return false;
+async function tryPhaseFanout(
+	curCtx: ChainCtx,
+	currentName: string,
+	node: NodeDef,
+	idx: number,
+	run: RunContext,
+): Promise<boolean> {
+	if (!(node.skill === "implement" && run.state.artifactPath)) return false;
 	const phaseCount = countPhases(run.state.artifactPath, run.cwd);
 	if (phaseCount === 0) return false;
-	await runImplementPhases(curCtx, idx, node.skill, 1, phaseCount, run, {
+	await runImplementPhases(curCtx, idx, currentName, node.skill, 1, phaseCount, run, {
 		runPhaseSession,
-		runNextStage: runStage,
+		advanceAfter: (freshCtx, name, completedIdx, ctx) => advanceChain(freshCtx, name, completedIdx, ctx),
 	});
 	return true;
 }
 
 /**
- * First stage consumes the user's brief; later stages MUST inherit an
- * upstream artifactPath. Falling back to originalInput past idx 0 would
- * silently hand a downstream skill the raw feature description.
+ * The start node consumes the user's brief; subsequent stages MUST inherit
+ * an upstream artifactPath. Falling back to originalInput past the start
+ * would silently hand a downstream skill the raw feature description.
  */
-function ensureUpstreamArtifact(curCtx: ChainCtx, stage: ResolvedStage, idx: number, run: RunContext): boolean {
-	if (idx === 0 || run.state.artifactPath) return true;
+function ensureUpstreamArtifact(curCtx: ChainCtx, stage: ResolvedStage, currentName: string, run: RunContext): boolean {
+	if (currentName === run.workflow.start || run.state.artifactPath) return true;
 	recordStage(run.cwd, run.runId, { skill: stage.skill, status: "failed", ts: nowIso() }, run.state);
 	curCtx.ui.setStatus(STATUS_KEY, undefined);
 	curCtx.ui.notify(MSG_MISSING_ARTIFACT(stage.skill), "error");
@@ -256,23 +269,23 @@ function ensureUpstreamArtifact(curCtx: ChainCtx, stage: ResolvedStage, idx: num
 	return false;
 }
 
-function enforceSessionInvariants(stage: ResolvedStage, run: RunContext): void {
-	const { node, id } = stage;
-	if (node.kind === "skill" && node.skill === "implement" && node.sessionPolicy === "continue") {
+function enforceSessionInvariants(stage: ResolvedStage, currentName: string, run: RunContext): void {
+	const { node } = stage;
+	if (node.skill === "implement" && node.sessionPolicy === "continue") {
 		throw new Error(
-			`runStage: implement node "${id}" cannot use sessionPolicy "continue" — ` +
+			`runStage: implement node "${currentName}" cannot use sessionPolicy "continue" — ` +
 				"phase fanout requires per-phase session isolation",
 		);
 	}
 	if (node.sessionPolicy === "continue" && !run.pi) {
 		throw new Error(
-			`runStage: node "${id}" uses sessionPolicy "continue" but no pi (ExtensionAPI) was provided to runWorkflow`,
+			`runStage: node "${currentName}" uses sessionPolicy "continue" but no pi (ExtensionAPI) was provided to runWorkflow`,
 		);
 	}
 }
 
 /** Entries before this index belong to prior stages; only meaningful for continue. */
-function computeBranchOffset(curCtx: ChainCtx, node: DagNode): number | undefined {
+function computeBranchOffset(curCtx: ChainCtx, node: NodeDef): number | undefined {
 	if (node.sessionPolicy !== "continue") return undefined;
 	return readBranch(curCtx).length;
 }
@@ -292,7 +305,7 @@ function runStageInputValidation(curCtx: ChainCtx, stage: ResolvedStage, run: Ru
 	return false;
 }
 
-async function captureStageSnapshot(node: DagNode, idx: number, run: RunContext): Promise<unknown> {
+async function captureStageSnapshot(node: NodeDef, idx: number, run: RunContext): Promise<unknown> {
 	const before = node.extractor?.before;
 	if (!before) return undefined;
 	try {
@@ -310,40 +323,39 @@ async function captureStageSnapshot(node: DagNode, idx: number, run: RunContext)
 }
 
 /**
- * Routing layer after a successful stage: pick the next stage id, audit
- * non-linear decisions, enforce the backward-jump guard, then recurse.
- * Wraps the body in try/catch so an invariant violation (e.g.
- * resolveNextStageId throwing on a predicate misroute) lands in
- * `state.error` rather than bubbling out of withSession.
+ * Routing layer after a successful stage: ask the workflow's edge for the
+ * next node, audit non-trivial decisions (EdgeFn branches), enforce the
+ * backward-jump guard, then recurse. Wraps the body in try/catch so an
+ * EdgeFn throwing lands in `state.error` rather than bubbling out of
+ * withSession.
  */
-async function advanceChain(curCtx: ChainCtx, idx: number, id: string, run: RunContext): Promise<void> {
-	const { cwd, runId, dag, stageIds, state } = run;
+async function advanceChain(curCtx: ChainCtx, currentName: string, idx: number, run: RunContext): Promise<void> {
+	const { cwd, runId, workflow, state } = run;
 	try {
-		const nextId = resolveNextStageId(dag, id, stageIds, idx, state);
-		if (!nextId) {
-			curCtx.ui.setStatus(STATUS_KEY, undefined);
-			curCtx.ui.notify(MSG_WORKFLOW_COMPLETE(state.stagesCompleted), "info");
-			state.success = true;
+		const wasDecision = edgeIsDecision(workflow, currentName);
+		const nextName = nextNode(workflow, currentName, { manifest: state.manifest, state });
+
+		if (!nextName) {
+			finalizeWorkflow(curCtx, run);
 			return;
 		}
-		const nextIdx = stageIds.indexOf(nextId);
-		if (nextIdx < 0) throw new Error(`resolveNextStageId returned "${nextId}" not in preset`);
 
-		// Audit only non-linear routing decisions.
-		const linearNext = stageIds[idx + 1];
-		if (nextId !== linearNext) {
+		// Predicate-mediated transitions get audited; deterministic auto-edges
+		// don't (no decision was made).
+		if (wasDecision) {
 			appendRoutingDecision(cwd, runId, {
 				type: "routing",
 				fromStage: idx + 1,
-				fromNode: id,
-				decision: nextId,
+				fromNode: currentName,
+				decision: nextName,
 				ts: nowIso(),
 			});
 		}
 
-		// Backward-jump guard: stage already recorded "completed"; halt at the
-		// routing layer via state.error + absence of subsequent rows.
-		if (nextIdx <= idx) {
+		// Backward-jump guard: a re-entry into an already-executed node is
+		// "backward". The revise → implement loop legitimately triggers this;
+		// the cap stops unbounded loops.
+		if (run.visited.has(nextName)) {
 			state.backwardJumps++;
 			if (state.backwardJumps > run.maxBackwardJumps) {
 				curCtx.ui.setStatus(STATUS_KEY, undefined);
@@ -352,8 +364,9 @@ async function advanceChain(curCtx: ChainCtx, idx: number, id: string, run: RunC
 				return;
 			}
 		}
+		run.visited.add(currentName);
 
-		await runStage(curCtx, nextIdx, run);
+		await runStage(curCtx, nextName, idx + 1, run);
 	} catch (e) {
 		curCtx.ui.setStatus(STATUS_KEY, undefined);
 		state.error = e instanceof Error ? e.message : String(e);

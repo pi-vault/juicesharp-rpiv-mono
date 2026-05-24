@@ -1,69 +1,64 @@
 /**
- * Edge-aware next-stage lookup. Strict-preset: predicate targets must
- * appear at or after the linear successor in the preset.
+ * Next-node lookup over a `Workflow`'s edge graph.
+ *
+ * `nextNode` is the single chokepoint: given the current node name + the
+ * runtime context, it returns the next node name or `null` (terminal).
+ * Edge targets that resolve to the string `"stop"` collapse to `null` so
+ * the runner only has to check one terminator.
+ *
+ * EdgeFn invocation is wrapped to surface a clear error when a user
+ * predicate throws — the caller (runner) decides whether to halt the
+ * workflow or re-raise.
  */
 
-import { type DagEdge, getEdge, type WorkflowDag } from "./dag.js";
-import type { EdgePredicate, PredicateContext } from "./predicates.js";
-import { assertNever } from "./transcript.js";
-import type { RunState } from "./types.js";
+import type { EdgeContext, EdgeFn, Workflow } from "./api.js";
+
+const STOP = "stop";
 
 /**
- * - no edge → linear advance
- * - auto → `edge.to[0]`
- * - predicate → evaluate + assert forward
- * - choice → linear advance (preset linearity disambiguates aliased targets;
- *            user-prompt routing not yet wired)
+ * Returns the next node name, or `null` if `current` is a terminal (no
+ * outgoing edge OR explicit `"stop"`).
+ *
+ * Throws if an `EdgeFn` returns a target that isn't a declared node and
+ * isn't `"stop"` — that means the predicate's contract was violated at
+ * runtime. Load-time `validateWorkflow` should catch this for predicates
+ * with `.targets` metadata; the runtime check is the last line of defense.
  */
-export function resolveNextStageId(
-	dag: WorkflowDag,
-	currentNodeId: string,
-	preset: string[],
-	idx: number,
-	state: Readonly<RunState>,
-): string | undefined {
-	if (atEndOfPreset(preset, idx)) return undefined;
+export function nextNode(workflow: Workflow, current: string, ctx: EdgeContext): string | null {
+	const target = workflow.edges[current];
+	if (target === undefined || target === STOP) return null;
+	if (typeof target === "string") return assertKnownTarget(workflow, current, target);
 
-	const edge = getEdge(dag, currentNodeId);
-	if (!edge) return linearNextOf(preset, idx);
-
-	switch (edge.condition) {
-		case "auto":
-			return edge.to[0];
-		case "predicate":
-			return evaluatePredicateEdge(edge, preset, idx, state);
-		case "choice":
-			return linearNextOf(preset, idx);
-		default:
-			return assertNever(edge.condition);
-	}
+	const picked = invokeEdgeFn(target, ctx, current);
+	if (picked === STOP) return null;
+	return assertKnownTarget(workflow, current, picked);
 }
 
-const atEndOfPreset = (preset: string[], idx: number): boolean => idx + 1 >= preset.length;
-const linearNextOf = (preset: string[], idx: number): string | undefined => preset[idx + 1];
-
-function evaluatePredicateEdge(edge: DagEdge, preset: string[], idx: number, state: Readonly<RunState>): string {
-	const target = invokePredicate(edge, state);
-	assertForwardTarget(target, preset, idx);
-	return target;
+/**
+ * True iff the current node's edge is an `EdgeFn` — i.e., a routing decision
+ * was made. The runner uses this to decide whether to write a routing-audit
+ * row. String edges are deterministic and not worth auditing.
+ */
+export function edgeIsDecision(workflow: Workflow, current: string): boolean {
+	return typeof workflow.edges[current] === "function";
 }
 
-function invokePredicate(edge: DagEdge, state: Readonly<RunState>): string {
-	const predicate = (edge as { predicate: EdgePredicate }).predicate;
-	const ctx: PredicateContext = { manifest: state.manifest, state };
+// ---------------------------------------------------------------------------
+// Internals
+// ---------------------------------------------------------------------------
+
+function invokeEdgeFn(fn: EdgeFn, ctx: EdgeContext, current: string): string {
 	try {
-		return predicate(ctx);
-	} catch {
-		throw new Error(`resolveNextStageId: predicate on edge "${edge.from} → [${edge.to.join(", ")}]" threw an error`);
+		return fn(ctx);
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		throw new Error(`workflow edge function at "${current}" threw: ${msg}`);
 	}
 }
 
-function assertForwardTarget(target: string, preset: string[], idx: number): void {
-	const targetIdx = preset.indexOf(target);
-	if (targetIdx < 0 || targetIdx < idx + 1) {
-		throw new Error(
-			`resolveNextStageId: predicate returned "${target}" which is not a valid forward target in preset ` +
-				`(must be one of: ${preset.slice(idx + 1).join(", ")})`,
-		);
-	}
+function assertKnownTarget(workflow: Workflow, current: string, target: string): string {
+	if (workflow.nodes[target]) return target;
+	throw new Error(
+		`workflow edge from "${current}" returned "${target}" which is not a declared node in workflow "${workflow.name}"`,
+	);
 }

@@ -1,24 +1,15 @@
 /**
- * Built-in workflows expressed in the TS-native format.
- *
- * `builtInWorkflows` is the source of truth; `dag.ts:WORKFLOW_DAG` is now
- * a derived value computed by `compile.ts`. Each workflow's `nodes`
- * insertion order IS its linear stage order (the compiler preserves it
- * when emitting the legacy `presets[name]` list).
+ * Built-in workflows shipped with rpiv-pi. Each workflow's `nodes`
+ * insertion order IS its linear stage order — `Object.keys(nodes)` gives
+ * the natural read order for previews and traversal alike.
  *
  * Predicate edges use `threshold(...)` from `api.ts`, which attaches
- * `.targets` metadata so the compiler can emit the legacy choice/predicate
- * edge shape without probing.
- *
- * Additional nodes (discover, explore, outline-test-cases, etc.) live
- * outside `builtInWorkflows` in `extraNodes` / `extraEdges` — they remain
- * in `WORKFLOW_DAG.nodes` for `getEdge` and `isValidNode` consumers but
- * aren't reachable from any executable preset. They'll fold into proper
- * Workflows when the user-config format change lands.
+ * `.targets` metadata so reachability checks (validate.ts) and graph
+ * introspectors can enumerate possible branches without probing.
  */
 
 import { Type } from "typebox";
-import { action, defineWorkflow, type EdgeTarget, type NodeDef, skill, threshold, type Workflow } from "./api.js";
+import { action, defineWorkflow, skill, threshold, type Workflow } from "./api.js";
 import { gitCommitExtractor } from "./extractors/index.js";
 
 const CODE_REVIEW_SCHEMA = Type.Object(
@@ -113,35 +104,4 @@ const largeWorkflow = defineWorkflow({
 // Exports
 // ===========================================================================
 
-// Workflow ordering affects compile-to-legacy-DAG output: when multiple
-// workflows define edges from the same node to different targets, the legacy
-// "choice" edge merges them — and the merged `to[]` array reflects the
-// order in which workflows were processed. Order = [small, large, mid] so
-// e.g. research's choice edge resolves to ["design" (from large), "blueprint"
-// (from mid)] — matches the legacy hand-authored ordering.
-export const builtInWorkflows: readonly Workflow[] = [smallWorkflow, largeWorkflow, midWorkflow];
-
-/**
- * Skill nodes available for reference by name but not currently reachable
- * from any built-in preset. Preserved so `getEdge(WORKFLOW_DAG, "discover")`
- * and `isValidNode("discover")` continue to work. Folded into proper
- * Workflows when the user-config format lands.
- */
-export const extraNodes: Record<string, NodeDef> = {
-	discover: skill("discover"),
-	explore: skill("explore"),
-	"outline-test-cases": skill("outline-test-cases"),
-	"write-test-cases": action("write-test-cases"),
-	"annotate-guidance": action("annotate-guidance"),
-	"migrate-to-guidance": skill("migrate-to-guidance"),
-};
-
-/**
- * Edges originating from `extraNodes` — matches the previous global edge
- * table so `getEdge(WORKFLOW_DAG, "discover")` etc. still resolve.
- */
-export const extraEdges: Record<string, EdgeTarget> = {
-	discover: "research",
-	"outline-test-cases": "write-test-cases",
-	"migrate-to-guidance": "annotate-guidance",
-};
+export const builtInWorkflows: readonly Workflow[] = [smallWorkflow, midWorkflow, largeWorkflow];

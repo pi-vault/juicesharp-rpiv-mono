@@ -12,8 +12,12 @@ import type { ChainCtx, PhaseSession, RunContext } from "./types.js";
 
 export interface PhaseFanoutDeps {
 	runPhaseSession: (ctx: ChainCtx, session: PhaseSession) => Promise<void>;
-	/** Hand back to the generic stage loop once all phases complete. */
-	runNextStage: (curCtx: ChainCtx, nextIdx: number, run: RunContext) => Promise<void>;
+	/**
+	 * Resume the chain after the implement node's phases finish. Receives
+	 * the implement node's name so the routing layer can look up the
+	 * outgoing edge from it.
+	 */
+	advanceAfter: (curCtx: ChainCtx, completedName: string, completedIdx: number, run: RunContext) => Promise<void>;
 }
 
 const PHASE_HEADING_REGEX = /^## Phase (\d+):/gm;
@@ -31,14 +35,20 @@ export function countPhases(planPath: string, cwd: string): number {
 }
 
 /**
- * `skill` is the bundled skill name (threaded by the runner), not the node id.
- * Aliased implement nodes (implement-after-revise, etc.) tag phase rows + prompts
- * with the skill body so audit consumers don't see two labels for the same work.
- * Caller verifies node + plan shape before invoking (see `runStage`).
+ * `skill` is the bundled skill body (threaded by the runner), not the node
+ * name. Aliased implement nodes (implement-after-revise, etc.) tag phase
+ * rows + prompts with the skill body so audit consumers don't see two
+ * labels for the same work. Caller verifies node + plan shape before
+ * invoking (see `runStage`).
+ *
+ * `currentName` is the implement node's name in the workflow — passed to
+ * `advanceAfter` once the final phase completes so the routing layer can
+ * look up the outgoing edge from it.
  */
 export async function runImplementPhases(
 	curCtx: ChainCtx,
 	stageIdx: number,
+	currentName: string,
 	skill: string,
 	p: number,
 	phaseCount: number,
@@ -49,7 +59,7 @@ export async function runImplementPhases(
 
 	if (p > phaseCount) {
 		curCtx.ui.notify(MSG_STAGE_COMPLETE(skill), "info");
-		await deps.runNextStage(curCtx, stageIdx + 1, run);
+		await deps.advanceAfter(curCtx, currentName, stageIdx, run);
 		return;
 	}
 
@@ -64,6 +74,6 @@ export async function runImplementPhases(
 		phaseIndex: p,
 		phaseCount,
 		stageIndex: stageIdx,
-		onSuccess: (freshCtx) => runImplementPhases(freshCtx, stageIdx, skill, p + 1, phaseCount, run, deps),
+		onSuccess: (freshCtx) => runImplementPhases(freshCtx, stageIdx, currentName, skill, p + 1, phaseCount, run, deps),
 	});
 }

@@ -7,6 +7,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { NodeDef, SessionPolicy } from "./api.js";
 import {
 	type AuditCtx,
 	nowIso,
@@ -15,7 +16,6 @@ import {
 	recordStopFailure,
 	recordTerminalFailure,
 } from "./audit.js";
-import type { DagNode, SessionPolicy } from "./dag.js";
 import { artifactMdExtractor, sideEffectExtractor } from "./extractors/index.js";
 import {
 	type Extractor,
@@ -239,7 +239,7 @@ function readSessionOutcome(
 // ===========================================================================
 
 /** Explicit override > default-by-completionStrategy. Exhaustive — assertNever lights future variants. */
-function resolveExtractor(node: DagNode): Extractor {
+function resolveExtractor(node: NodeDef): Extractor {
 	if (node.extractor) return node.extractor;
 	switch (node.completionStrategy) {
 		case "artifact-emit":
@@ -285,7 +285,7 @@ async function runExtractor(
 	return { kind: "ok", manifest: result.payload ? finalize(result.payload) : undefined };
 }
 
-function shouldValidateOutput(node: DagNode, manifest: Manifest | undefined): manifest is Manifest {
+function shouldValidateOutput(node: NodeDef, manifest: Manifest | undefined): manifest is Manifest {
 	return !!(node.outputSchema && manifest?.data);
 }
 

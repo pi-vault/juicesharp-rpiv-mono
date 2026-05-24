@@ -1,43 +1,53 @@
 import { createMockCommandCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { action, defineWorkflow, skill } from "./api.js";
 
-// Mock runner to avoid needing full Pi session runtime
+// Mock runner to avoid needing the full Pi session runtime.
 vi.mock("./runner.js", () => ({
 	runWorkflow: vi.fn(async () => ({ stagesCompleted: 2, success: true })),
 }));
 
-// Mock loadConfig to avoid filesystem I/O
-vi.mock("./loadConfig.js", () => ({
-	loadConfig: vi.fn(() => ({
-		dag: {
-			edges: [],
-			presets: {
-				trivial: ["discover", "commit"],
-				small: ["research", "commit"],
-				mid: ["discover", "research", "blueprint", "implement", "validate", "code-review", "commit"],
-				large: ["discover", "research", "design", "plan", "implement", "validate", "code-review", "commit"],
-				review: ["code-review", "commit"],
-			},
-			nodes: {},
-		},
-		presetNames: new Set(["trivial", "small", "mid", "large", "review"]),
-		defaultPreset: "mid",
-		source: "built-in" as const,
-		layers: ["built-in"] as const,
-		presetSources: new Map([
-			["trivial", "built-in"],
-			["small", "built-in"],
+// Mock load.ts to avoid jiti + filesystem I/O. The mock provides a stable
+// LoadedWorkflows shape every test reuses; per-test overrides via mockReturnValueOnce.
+const tinyWorkflow = defineWorkflow({
+	name: "tiny",
+	start: "research",
+	nodes: { research: skill("research"), commit: action("commit") },
+	edges: { research: "commit", commit: "stop" },
+});
+const midWorkflow = defineWorkflow({
+	name: "mid",
+	start: "research",
+	nodes: {
+		research: skill("research"),
+		implement: action("implement"),
+		commit: action("commit"),
+	},
+	edges: { research: "implement", implement: "commit", commit: "stop" },
+});
+const reviewWorkflow = defineWorkflow({
+	name: "review",
+	start: "code-review",
+	nodes: { "code-review": skill("code-review"), commit: action("commit") },
+	edges: { "code-review": "commit", commit: "stop" },
+});
+
+vi.mock("./load.js", () => ({
+	loadWorkflows: vi.fn(async () => ({
+		workflows: [tinyWorkflow, midWorkflow, reviewWorkflow],
+		default: "mid",
+		workflowSources: new Map([
+			["tiny", "built-in"],
 			["mid", "built-in"],
-			["large", "built-in"],
 			["review", "built-in"],
 		]),
+		layers: ["built-in"],
+		issues: [],
 	})),
 }));
 
 import { parseArgs, registerWorkflowCommand } from "./command.js";
-import type { LoadedConfig } from "./loadConfig.js";
-import { loadConfig } from "./loadConfig.js";
-import { formatPresetList } from "./preview.js";
+import { loadWorkflows } from "./load.js";
 import { runWorkflow } from "./runner.js";
 
 beforeEach(() => {
@@ -45,81 +55,48 @@ beforeEach(() => {
 	vi.mocked(runWorkflow).mockResolvedValue({ stagesCompleted: 2, success: true });
 });
 
+// ---------------------------------------------------------------------------
+// parseArgs — pure helper
+// ---------------------------------------------------------------------------
+
 describe("parseArgs", () => {
-	const builtInConfig = {
-		presetNames: new Set(["trivial", "small", "mid", "large", "review"]),
-		defaultPreset: "mid",
+	const built = {
+		workflowNames: new Set(["tiny", "mid", "review"]),
+		default: "mid",
 	};
 
-	it("parses preset + input", () => {
-		expect(parseArgs("mid Add dark mode", builtInConfig)).toEqual({ preset: "mid", input: "Add dark mode" });
+	it("parses workflow name + input", () => {
+		expect(parseArgs("mid Add dark mode", built)).toEqual({ workflow: "mid", input: "Add dark mode" });
 	});
 
-	it("defaults to mid when no preset recognized", () => {
-		expect(parseArgs("Add dark mode", builtInConfig)).toEqual({ preset: "mid", input: "Add dark mode" });
+	it("defaults to the default workflow when no name is recognized", () => {
+		expect(parseArgs("Add dark mode", built)).toEqual({ workflow: "mid", input: "Add dark mode" });
 	});
 
-	it("parses preset-only with no input", () => {
-		expect(parseArgs("review", builtInConfig)).toEqual({ preset: "review", input: "" });
+	it("parses a workflow-name-only token with no input", () => {
+		expect(parseArgs("review", built)).toEqual({ workflow: "review", input: "" });
 	});
 
 	it("handles empty string", () => {
-		expect(parseArgs("", builtInConfig)).toEqual({ preset: "mid", input: "" });
+		expect(parseArgs("", built)).toEqual({ workflow: "mid", input: "" });
 	});
 
 	it("handles whitespace-only string", () => {
-		expect(parseArgs("   ", builtInConfig)).toEqual({ preset: "mid", input: "" });
+		expect(parseArgs("   ", built)).toEqual({ workflow: "mid", input: "" });
 	});
 
-	it("parses trivial preset", () => {
-		expect(parseArgs("trivial Fix typo", builtInConfig)).toEqual({ preset: "trivial", input: "Fix typo" });
-	});
-
-	it("parses large preset with multi-word input", () => {
-		expect(parseArgs("large Build a REST API with auth", builtInConfig)).toEqual({
-			preset: "large",
-			input: "Build a REST API with auth",
-		});
-	});
-
-	it("accepts custom preset names from config", () => {
+	it("uses custom default when no workflow name is recognized", () => {
 		const customConfig = {
-			presetNames: new Set(["my-flow", "quick"]),
-			defaultPreset: "my-flow",
+			workflowNames: new Set(["my-flow"]),
+			default: "my-flow",
 		};
-		expect(parseArgs("my-flow Add feature", customConfig)).toEqual({ preset: "my-flow", input: "Add feature" });
-	});
-
-	it("uses custom defaultPreset when no preset recognized", () => {
-		const customConfig = {
-			presetNames: new Set(["my-flow"]),
-			defaultPreset: "my-flow",
-		};
-		expect(parseArgs("Add feature", customConfig)).toEqual({ preset: "my-flow", input: "Add feature" });
+		expect(parseArgs("Add feature", customConfig)).toEqual({ workflow: "my-flow", input: "Add feature" });
 	});
 });
 
-describe("formatPresetList (re-exported wiring)", () => {
-	// Light smoke-test that command.ts wires the preview formatter through —
-	// full output assertions live in preview.test.ts.
-	it("returns a multiline string mentioning each preset and its source", () => {
-		const config: LoadedConfig = {
-			dag: { edges: [], presets: { mid: ["discover", "commit"], review: ["code-review", "commit"] }, nodes: {} },
-			presetNames: new Set(["mid", "review"]),
-			defaultPreset: "mid",
-			source: "built-in",
-			layers: ["built-in"],
-			presetSources: new Map([
-				["mid", "built-in"],
-				["review", "built-in"],
-			]),
-		};
-		const result = formatPresetList(config);
-		expect(result).toContain("mid");
-		expect(result).toContain("review");
-		expect(result).toContain("[built-in]");
-	});
-});
+// ---------------------------------------------------------------------------
+// /rpiv handler shape + dispatch
+// ---------------------------------------------------------------------------
 
 describe("/rpiv — command shape", () => {
 	it("registers under 'rpiv'", () => {
@@ -130,7 +107,7 @@ describe("/rpiv — command shape", () => {
 });
 
 describe("/rpiv — !hasUI", () => {
-	it("notifies error and exits without calling runWorkflow", async () => {
+	it("notifies an error and exits without calling runWorkflow", async () => {
 		const { pi, captured } = createMockPi();
 		registerWorkflowCommand(pi);
 		const ctx = createMockCommandCtx({ hasUI: false });
@@ -141,78 +118,93 @@ describe("/rpiv — !hasUI", () => {
 });
 
 describe("/rpiv — no input", () => {
-	it("shows preset listing when no input provided", async () => {
+	it("shows the workflow listing when no input is provided", async () => {
 		const { pi, captured } = createMockPi();
 		registerWorkflowCommand(pi);
 		const ctx = createMockCommandCtx({ hasUI: true });
 		await captured.commands.get("rpiv")?.handler("", ctx);
-		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Available presets"), "info");
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Available workflows"), "info");
 		expect(runWorkflow).not.toHaveBeenCalled();
 	});
 });
 
 describe("/rpiv — valid invocation", () => {
-	it("calls runWorkflow with parsed preset, input, and dag from config", async () => {
+	it("calls runWorkflow with the resolved workflow object", async () => {
 		const { pi, captured } = createMockPi();
 		registerWorkflowCommand(pi);
 		const ctx = createMockCommandCtx({ hasUI: true });
 		await captured.commands.get("rpiv")?.handler("mid Add dark mode", ctx);
 		expect(runWorkflow).toHaveBeenCalledTimes(1);
 		const opts = vi.mocked(runWorkflow).mock.calls[0]?.[1];
-		expect(opts?.preset).toBe("mid");
+		expect(opts?.workflow.name).toBe("mid");
 		expect(opts?.input).toBe("Add dark mode");
-		expect(opts?.dag).toBeDefined();
 	});
 
-	it("defaults to mid preset when first token is not a preset", async () => {
+	it("falls back to default workflow when first token is unknown", async () => {
 		const { pi, captured } = createMockPi();
 		registerWorkflowCommand(pi);
 		const ctx = createMockCommandCtx({ hasUI: true });
 		await captured.commands.get("rpiv")?.handler("Add dark mode", ctx);
 		const opts = vi.mocked(runWorkflow).mock.calls[0]?.[1];
-		expect(opts?.preset).toBe("mid");
+		expect(opts?.workflow.name).toBe("mid");
 		expect(opts?.input).toBe("Add dark mode");
 	});
 
-	it("preset-only token shows that preset's detail view (not the full list)", async () => {
+	it("bare workflow-name token shows that workflow's detail view (not the full list)", async () => {
 		const { pi, captured } = createMockPi();
 		registerWorkflowCommand(pi);
 		const ctx = createMockCommandCtx({ hasUI: true });
 		await captured.commands.get("rpiv")?.handler("review", ctx);
-		// Detail header includes "preset: <name>" and does NOT mention "Available presets".
-		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("preset: review"), "info");
-		expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Available presets"), "info");
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("workflow: review"), "info");
+		expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Available workflows"), "info");
 		expect(runWorkflow).not.toHaveBeenCalled();
 	});
 
-	it("unknown token with no further input shows the full preset list", async () => {
-		// "Add" is not a preset name → parseArgs falls through to defaultPreset
-		// with input "Add" — but that has input so it runs. To exercise the
-		// no-input-AND-not-a-preset path we hand bare whitespace.
+	it("whitespace-only input shows the full workflow list", async () => {
 		const { pi, captured } = createMockPi();
 		registerWorkflowCommand(pi);
 		const ctx = createMockCommandCtx({ hasUI: true });
 		await captured.commands.get("rpiv")?.handler("   ", ctx);
-		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Available presets"), "info");
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Available workflows"), "info");
 		expect(runWorkflow).not.toHaveBeenCalled();
 	});
 });
 
-describe("/rpiv — config warnings", () => {
-	it("surfaces config warnings to the user", async () => {
-		vi.mocked(loadConfig).mockReturnValueOnce({
-			dag: { edges: [], presets: { mid: ["discover", "commit"] }, nodes: {} },
-			presetNames: new Set(["mid"]),
-			defaultPreset: "mid",
-			source: "built-in",
+// ---------------------------------------------------------------------------
+// Issue surfacing — load + validation errors
+// ---------------------------------------------------------------------------
+
+describe("/rpiv — issue surfacing", () => {
+	it("surfaces validation warnings as 'warning' notifies", async () => {
+		vi.mocked(loadWorkflows).mockResolvedValueOnce({
+			workflows: [tinyWorkflow],
+			default: "tiny",
+			workflowSources: new Map([["tiny", "built-in"]]),
 			layers: ["built-in"],
-			presetSources: new Map([["mid", "built-in"]]),
-			warnings: ["Test warning"],
+			issues: [
+				{ kind: "validation", workflow: "tiny", node: "research", severity: "warning", message: "orphan check" },
+			],
 		});
 		const { pi, captured } = createMockPi();
 		registerWorkflowCommand(pi);
 		const ctx = createMockCommandCtx({ hasUI: true });
-		await captured.commands.get("rpiv")?.handler("mid Add feature", ctx);
-		expect(ctx.ui.notify).toHaveBeenCalledWith("Test warning", "warning");
+		await captured.commands.get("rpiv")?.handler("tiny Add feature", ctx);
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("orphan check"), "warning");
+	});
+
+	it("aborts on load errors — runWorkflow is not invoked", async () => {
+		vi.mocked(loadWorkflows).mockResolvedValueOnce({
+			workflows: [tinyWorkflow],
+			default: "tiny",
+			workflowSources: new Map([["tiny", "built-in"]]),
+			layers: ["built-in"],
+			issues: [{ kind: "load", layer: "project", path: "rpiv.config.ts", severity: "error", message: "broke" }],
+		});
+		const { pi, captured } = createMockPi();
+		registerWorkflowCommand(pi);
+		const ctx = createMockCommandCtx({ hasUI: true });
+		await captured.commands.get("rpiv")?.handler("tiny Add feature", ctx);
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("config error"), "error");
+		expect(runWorkflow).not.toHaveBeenCalled();
 	});
 });

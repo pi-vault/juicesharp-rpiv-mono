@@ -5,7 +5,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { DagNode, WorkflowDag } from "./dag.js";
+import type { NodeDef, Workflow } from "./api.js";
 import type { Manifest } from "./manifest.js";
 
 /**
@@ -44,11 +44,21 @@ export interface RunState {
 export interface RunContext {
 	cwd: string;
 	runId: string;
-	dag: WorkflowDag;
-	/** Linear node-id sequence resolved from `dag.presets[preset]`. */
-	stageIds: string[];
+	workflow: Workflow;
+	/**
+	 * Upper bound for stage status display — count of nodes reachable from
+	 * `workflow.start`, computed once at run start. The actual stage count
+	 * is path-dependent (a predicate edge may short-circuit), so this is
+	 * the denominator users see; the numerator is the live stage index.
+	 */
 	totalStages: number;
 	state: RunState;
+	/**
+	 * Node names already executed in this run. The backward-jump guard
+	 * increments `state.backwardJumps` on every re-entry; revise → implement
+	 * loops legitimately revisit nodes, but unbounded loops trip the cap.
+	 */
+	visited: Set<string>;
 	/** Required for "continue"-policy stages. */
 	pi?: ExtensionAPI;
 	maxBackwardJumps: number;
@@ -65,10 +75,10 @@ interface SessionContext {
 }
 
 export interface StageSession extends SessionContext {
-	node: DagNode;
-	/** 0-based index in `RunContext.stageIds`. */
+	node: NodeDef;
+	/** 0-based stage index within this run — for status display + JSONL stage number. */
 	stageIndex: number;
-	/** Pre-stage snapshot result (undefined if node has no snapshot). */
+	/** Pre-stage snapshot result (undefined if the node's extractor has no `before`). */
 	snapshot: unknown;
 	/** Required iff `node.sessionPolicy === "continue"`. */
 	pi?: ExtensionAPI;

@@ -1,16 +1,14 @@
-import { describe, expect, it } from "vitest";
-import type { DagNode, WorkflowDag } from "./dag.js";
-import { predicateThreshold } from "./predicates.js";
-import { resolveNextStageId } from "./routing.js";
-import type { RunState } from "./types.js";
+/**
+ * Tests for `nextNode` / `edgeIsDecision` — workflow-graph traversal.
+ *
+ * Each test builds a minimal Workflow by hand and asserts the resolved next
+ * name (or null) for a given current-node + state combination.
+ */
 
-const nodeOf = (overrides: Partial<DagNode> = {}): DagNode => ({
-	kind: "skill",
-	skill: "test",
-	completionStrategy: "agent-end",
-	sessionPolicy: "fresh",
-	...overrides,
-});
+import { describe, expect, it } from "vitest";
+import { type EdgeContext, threshold, type Workflow } from "./api.js";
+import { edgeIsDecision, nextNode } from "./routing.js";
+import type { RunState } from "./types.js";
 
 const makeState = (manifestData?: Record<string, unknown>): RunState => ({
 	originalInput: "",
@@ -25,105 +23,147 @@ const makeState = (manifestData?: Record<string, unknown>): RunState => ({
 	backwardJumps: 0,
 });
 
-describe("resolveNextStageId", () => {
-	const preset = ["a", "b", "c", "d"];
-	const baseDag: WorkflowDag = {
-		edges: [],
-		presets: { test: preset },
-		nodes: {
-			a: nodeOf({ skill: "a" }),
-			b: nodeOf({ skill: "b" }),
-			c: nodeOf({ skill: "c" }),
-			d: nodeOf({ skill: "d" }),
+const ctxOf = (manifestData?: Record<string, unknown>): EdgeContext => {
+	const state = makeState(manifestData);
+	return { manifest: state.manifest, state };
+};
+
+const node = (name: string) => ({
+	name,
+	skill: name,
+	completionStrategy: "agent-end" as const,
+	sessionPolicy: "fresh" as const,
+});
+
+const baseNodes = {
+	a: node("a"),
+	b: node("b"),
+	c: node("c"),
+	d: node("d"),
+};
+
+// ---------------------------------------------------------------------------
+// nextNode
+// ---------------------------------------------------------------------------
+
+describe("nextNode", () => {
+	it("follows a string edge to the named target", () => {
+		const workflow: Workflow = {
+			name: "linear",
+			start: "a",
+			nodes: baseNodes,
+			edges: { a: "b", b: "c", c: "d", d: "stop" },
+		};
+		expect(nextNode(workflow, "a", ctxOf())).toBe("b");
+		expect(nextNode(workflow, "b", ctxOf())).toBe("c");
+		expect(nextNode(workflow, "c", ctxOf())).toBe("d");
+	});
+
+	it('returns null for the "stop" sentinel', () => {
+		const workflow: Workflow = {
+			name: "terminal",
+			start: "a",
+			nodes: baseNodes,
+			edges: { a: "stop" },
+		};
+		expect(nextNode(workflow, "a", ctxOf())).toBeNull();
+	});
+
+	it("returns null for a node with no outgoing edge (implicit terminal)", () => {
+		const workflow: Workflow = {
+			name: "implicit",
+			start: "a",
+			nodes: baseNodes,
+			edges: { a: "b" }, // b has no edge
+		};
+		expect(nextNode(workflow, "b", ctxOf())).toBeNull();
+	});
+
+	it("evaluates an EdgeFn against the supplied context", () => {
+		const workflow: Workflow = {
+			name: "pred",
+			start: "a",
+			nodes: baseNodes,
+			edges: { a: threshold("count", 0, "c", "b") },
+		};
+		expect(nextNode(workflow, "a", ctxOf({ count: 5 }))).toBe("c");
+		expect(nextNode(workflow, "a", ctxOf({ count: 0 }))).toBe("b");
+	});
+
+	it("an EdgeFn returning the stop sentinel terminates the chain", () => {
+		const workflow: Workflow = {
+			name: "pred-stop",
+			start: "a",
+			nodes: baseNodes,
+			edges: { a: () => "stop" },
+		};
+		expect(nextNode(workflow, "a", ctxOf())).toBeNull();
+	});
+
+	it("throws when an EdgeFn returns a target that is not a declared node", () => {
+		const workflow: Workflow = {
+			name: "rogue",
+			start: "a",
+			nodes: baseNodes,
+			edges: { a: () => "ghost" },
+		};
+		expect(() => nextNode(workflow, "a", ctxOf())).toThrow(/"ghost" which is not a declared node/);
+	});
+
+	it("throws when a string edge target is not a declared node (defensive)", () => {
+		const workflow: Workflow = {
+			name: "rogue-string",
+			start: "a",
+			nodes: baseNodes,
+			edges: { a: "ghost" },
+		};
+		expect(() => nextNode(workflow, "a", ctxOf())).toThrow(/"ghost" which is not a declared node/);
+	});
+
+	it("wraps an EdgeFn that throws with a helpful message", () => {
+		const workflow: Workflow = {
+			name: "thrower",
+			start: "a",
+			nodes: baseNodes,
+			edges: {
+				a: () => {
+					throw new Error("predicate exploded");
+				},
+			},
+		};
+		expect(() => nextNode(workflow, "a", ctxOf())).toThrow(/edge function at "a" threw: predicate exploded/);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// edgeIsDecision
+// ---------------------------------------------------------------------------
+
+describe("edgeIsDecision", () => {
+	const workflow: Workflow = {
+		name: "mixed",
+		start: "a",
+		nodes: baseNodes,
+		edges: {
+			a: "b",
+			b: threshold("count", 0, "c", "d"),
+			c: "stop",
 		},
 	};
 
-	it("returns preset[idx + 1] when no outgoing edge", () => {
-		const result = resolveNextStageId(baseDag, "a", preset, 0, makeState());
-		expect(result).toBe("b");
+	it("is true for EdgeFn edges (a routing decision)", () => {
+		expect(edgeIsDecision(workflow, "b")).toBe(true);
 	});
 
-	it("returns undefined when idx + 1 >= preset.length (chain end)", () => {
-		const result = resolveNextStageId(baseDag, "d", preset, 3, makeState());
-		expect(result).toBeUndefined();
+	it("is false for string edges (deterministic auto-edge)", () => {
+		expect(edgeIsDecision(workflow, "a")).toBe(false);
 	});
 
-	it("auto edge returns edge.to[0]", () => {
-		const dag: WorkflowDag = {
-			...baseDag,
-			edges: [{ from: "a", to: ["c"], condition: "auto" }],
-		};
-		const result = resolveNextStageId(dag, "a", preset, 0, makeState());
-		expect(result).toBe("c");
+	it('is false for the "stop" sentinel', () => {
+		expect(edgeIsDecision(workflow, "c")).toBe(false);
 	});
 
-	it("predicate edge evaluates predicate and returns the chosen id", () => {
-		const predicate = predicateThreshold("count", 0, "c", "b");
-		const dag: WorkflowDag = {
-			...baseDag,
-			edges: [{ from: "a", to: ["c", "b"], condition: "predicate", predicate }],
-		};
-		// count > 0 → "c"
-		const state1 = makeState({ count: 5 });
-		expect(resolveNextStageId(dag, "a", preset, 0, state1)).toBe("c");
-
-		// count <= 0 → "b"
-		const state2 = makeState({ count: 0 });
-		expect(resolveNextStageId(dag, "a", preset, 0, state2)).toBe("b");
-	});
-
-	it("predicate that throws propagates an error (caller halts)", () => {
-		const badPredicate = () => {
-			throw new Error("predicate exploded");
-		};
-		const dag: WorkflowDag = {
-			...baseDag,
-			edges: [{ from: "a", to: ["b", "c"], condition: "predicate", predicate: badPredicate }],
-		};
-		expect(() => resolveNextStageId(dag, "a", preset, 0, makeState())).toThrow(/predicate on edge.*threw an error/);
-	});
-
-	it("strict-preset rejects predicate target not in preset at idx + 1 or later", () => {
-		// "a" is at idx 0 — target "a" would be backwards (idx 0 < idx + 1)
-		const predicate = predicateThreshold("count", 0, "a", "b");
-		const dag: WorkflowDag = {
-			...baseDag,
-			edges: [{ from: "a", to: ["a", "b"], condition: "predicate", predicate }],
-		};
-		// count > 0 → "a", which is at idx 0 (before current idx + 1 = 1)
-		expect(() => resolveNextStageId(dag, "a", preset, 0, makeState({ count: 5 }))).toThrow(
-			/not a valid forward target/,
-		);
-	});
-
-	it("strict-preset rejects predicate target not in preset at all", () => {
-		const predicate = predicateThreshold("count", 0, "nonexistent", "b");
-		const dag: WorkflowDag = {
-			...baseDag,
-			edges: [{ from: "a", to: ["nonexistent", "b"], condition: "predicate", predicate }],
-		};
-		expect(() => resolveNextStageId(dag, "a", preset, 0, makeState({ count: 5 }))).toThrow(
-			/not a valid forward target/,
-		);
-	});
-
-	it("choice edge falls back to linear advance (user-prompt not wired)", () => {
-		const dag: WorkflowDag = {
-			...baseDag,
-			edges: [{ from: "a", to: ["b", "c"], condition: "choice" }],
-		};
-		const result = resolveNextStageId(dag, "a", preset, 0, makeState());
-		expect(result).toBe("b");
-	});
-
-	it("predicate can skip forward (target at idx + 2)", () => {
-		const predicate = predicateThreshold("count", 0, "d", "b");
-		const dag: WorkflowDag = {
-			...baseDag,
-			edges: [{ from: "a", to: ["d", "b"], condition: "predicate", predicate }],
-		};
-		// count > 0 → "d" at idx 3, which is >= idx + 1 (1)
-		const result = resolveNextStageId(dag, "a", preset, 0, makeState({ count: 5 }));
-		expect(result).toBe("d");
+	it("is false for nodes with no outgoing edge", () => {
+		expect(edgeIsDecision(workflow, "d")).toBe(false);
 	});
 });

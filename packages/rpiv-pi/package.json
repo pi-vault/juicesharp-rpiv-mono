@@ -54,6 +54,7 @@
     "@juicesharp/rpiv-args": "*",
     "@juicesharp/rpiv-config": "*",
     "yaml": "*",
-    "typebox": "*"
+    "typebox": "*",
+    "jiti": "*"
   }
 }

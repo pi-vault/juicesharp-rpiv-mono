@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { createMockPi, createMockSessionChain, mockAssistantMessage } from "@juicesharp/rpiv-test-utils";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, type vi } from "vitest";
+import type { CompletionStrategy, EdgeTarget, NodeDef, Workflow } from "./api.js";
+import { defineWorkflow, threshold } from "./api.js";
 import { clearChildSession, isChildSession } from "./child-session.js";
-import type { CompletionStrategy, DagNode, WorkflowDag } from "./dag.js";
 import { countPhases } from "./implement-phases.js";
-import type { PredicateContext } from "./predicates.js";
 import { runWorkflow } from "./runner.js";
 import { readRoutingDecisions } from "./state.js";
 import { extractArtifactPath, hasAssistantMessage, lastAssistantStopReason } from "./transcript.js";
@@ -150,38 +150,47 @@ describe("runWorkflow", () => {
 	});
 
 	/**
-	 * DAG factory for tests.
+	 * Workflow factory for tests.
 	 *
-	 * Auto-populates `nodes` from the union of all preset entries — every
-	 * referenced id gets a skill-kind node with `completionStrategy: "artifact-emit"`
-	 * (the dominant case for protocol skills) and `sessionPolicy: "fresh"`.
+	 * Builds a linear `Workflow` from an ordered stage list. Each stage
+	 * becomes a node + an auto-edge to the next stage; the final stage's
+	 * edge is `"stop"`. Two skill names get special defaults that align
+	 * with built-in `WORKFLOW_DAG` settings so tests don't have to spell
+	 * them out:
+	 *   - `implement` → `completionStrategy: "agent-end"` (action skill)
+	 *   - `commit`    → `completionStrategy: "agent-end"` (action skill)
 	 *
-	 * Two skill names get special defaults that align with their built-in
-	 * `WORKFLOW_DAG.nodes` settings, so tests don't have to spell these out
-	 * every time:
-	 *   - `implement` → `"agent-end"` (action skill; phases drive iteration)
-	 *   - `commit`    → `"agent-end"` (action skill; no chained artifact)
+	 * Override per-node via `nodeOverrides`, or replace specific edges
+	 * (predicates, back-edges) via `edgeOverrides`.
 	 *
-	 * Override per-id via `nodeOverrides`. Example:
-	 *   dagWith({ tiny: ["research"] }, { research: { completionStrategy: "agent-end" } })
+	 *   wf("tiny", ["research"])
+	 *   wf("rev", ["research", "code-review", "revise", "commit"], {}, {
+	 *     "code-review": threshold("severeIssueCount", 0, "revise", "commit"),
+	 *   })
 	 */
-	const dagWith = (
-		presets: Record<string, string[]>,
-		nodeOverrides: Record<string, Partial<DagNode>> = {},
-	): WorkflowDag => {
-		const allIds = new Set(Object.values(presets).flat());
-		const nodes: Record<string, DagNode> = {};
-		for (const id of allIds) {
-			const defaultStop: CompletionStrategy = id === "implement" || id === "commit" ? "agent-end" : "artifact-emit";
-			const base: DagNode = {
-				kind: "skill",
+	const wf = (
+		name: string,
+		stages: string[],
+		nodeOverrides: Record<string, Partial<NodeDef>> = {},
+		edgeOverrides: Record<string, EdgeTarget> = {},
+	): Workflow => {
+		const nodes: Record<string, NodeDef> = {};
+		const edges: Record<string, EdgeTarget> = {};
+		for (let i = 0; i < stages.length; i++) {
+			const id = stages[i]!;
+			const next = stages[i + 1];
+			const defaultStrategy: CompletionStrategy =
+				id === "implement" || id === "commit" ? "agent-end" : "artifact-emit";
+			nodes[id] = {
+				name: id,
 				skill: id,
-				completionStrategy: defaultStop,
+				completionStrategy: defaultStrategy,
 				sessionPolicy: "fresh",
+				...(nodeOverrides[id] ?? {}),
 			};
-			nodes[id] = { ...base, ...(nodeOverrides[id] ?? {}) } as DagNode;
+			edges[id] = edgeOverrides[id] ?? next ?? "stop";
 		}
-		return { edges: [], presets, nodes };
+		return defineWorkflow({ name, start: stages[0] ?? "__missing__", nodes, edges });
 	};
 
 	/** Read the single JSONL state file produced for a run, as parsed objects. */
@@ -204,35 +213,23 @@ describe("runWorkflow", () => {
 		writeFileSync(join(cwd, relPath), content);
 	};
 
-	it("returns an error result for an unknown preset and writes nothing to disk", async () => {
+	it("returns an error result for a workflow whose start node is not declared", async () => {
+		// The post-format-change equivalent of "unknown preset": the caller
+		// (command.ts) resolves names to Workflow objects; runWorkflow only
+		// sees the object. A workflow with start ∉ nodes is the proximal
+		// invalid-input case — it short-circuits BEFORE writeHeader so a
+		// typo doesn't pollute the audit trail.
 		const chain = createMockSessionChain({ cwd: tmpDir, steps: [] });
 		const result = await runWorkflow(chain.ctx, {
-			preset: "nonexistent",
+			workflow: { name: "broken", start: "ghost", nodes: {}, edges: {} },
 			input: "x",
-			dag: dagWith({ tiny: ["research"] }),
 		});
 
 		expect(result.success).toBe(false);
 		expect(result.stagesCompleted).toBe(0);
-		expect(result.error).toMatch(/Unknown preset: nonexistent/);
+		expect(result.error).toMatch(/start node "ghost" is not declared/);
 		expect(chain.ctx.newSession).not.toHaveBeenCalled();
-		// No .rpiv/workflows directory was created — the unknown-preset guard
-		// returns BEFORE writeHeader. This is the contract: a typo doesn't
-		// pollute the audit trail.
 		expect(existsSync(join(tmpDir, ".rpiv", "workflows"))).toBe(false);
-	});
-
-	it("returns an error result for a preset whose node list is empty", async () => {
-		const chain = createMockSessionChain({ cwd: tmpDir, steps: [] });
-		const result = await runWorkflow(chain.ctx, {
-			preset: "empty",
-			input: "x",
-			dag: dagWith({ empty: [] }),
-		});
-
-		expect(result.success).toBe(false);
-		expect(result.error).toMatch(/Unknown preset: empty/);
-		expect(chain.ctx.newSession).not.toHaveBeenCalled();
 	});
 
 	describe("child-session marker lifecycle", () => {
@@ -245,9 +242,8 @@ describe("runWorkflow", () => {
 			expect(isChildSession()).toBe(false);
 
 			await runWorkflow(chain.ctx, {
-				preset: "tiny",
+				workflow: wf("tiny", ["research"]),
 				input: "x",
-				dag: dagWith({ tiny: ["research"] }),
 			});
 
 			expect(isChildSession()).toBe(false);
@@ -260,9 +256,8 @@ describe("runWorkflow", () => {
 			});
 
 			const result = await runWorkflow(chain.ctx, {
-				preset: "tiny",
+				workflow: wf("tiny", ["research"]),
 				input: "x",
-				dag: dagWith({ tiny: ["research"] }),
 			});
 
 			expect(result.success).toBe(false);
@@ -273,11 +268,11 @@ describe("runWorkflow", () => {
 			const chain = createMockSessionChain({ cwd: tmpDir, steps: [] });
 			// Empty step queue → second newSession will throw inside the chain.
 			// We expect runWorkflow to propagate, but still clear the marker.
-			const dag = dagWith({ tiny: ["research", "plan"] });
+			const workflow = wf("tiny", ["research", "plan"]);
 
 			let threw = false;
 			try {
-				await runWorkflow(chain.ctx, { preset: "tiny", input: "x", dag });
+				await runWorkflow(chain.ctx, { workflow, input: "x" });
 			} catch {
 				threw = true;
 			}
@@ -287,12 +282,11 @@ describe("runWorkflow", () => {
 			expect(isChildSession()).toBe(false);
 		});
 
-		it("does NOT set the marker when preset is unknown (early return before mark)", async () => {
+		it("does NOT set the marker when the workflow has no declared start (early return before mark)", async () => {
 			const chain = createMockSessionChain({ cwd: tmpDir, steps: [] });
 			await runWorkflow(chain.ctx, {
-				preset: "missing",
+				workflow: { name: "broken", start: "ghost", nodes: {}, edges: {} },
 				input: "x",
-				dag: dagWith({ tiny: ["research"] }),
 			});
 			expect(isChildSession()).toBe(false);
 		});
@@ -306,9 +300,8 @@ describe("runWorkflow", () => {
 		});
 
 		const result = await runWorkflow(chain.ctx, {
-			preset: "tiny",
+			workflow: wf("tiny", ["research"]),
 			input: "add dark mode",
-			dag: dagWith({ tiny: ["research"] }),
 		});
 
 		expect(result).toEqual({
@@ -348,9 +341,8 @@ describe("runWorkflow", () => {
 		});
 
 		const result = await runWorkflow(chain.ctx, {
-			preset: "two",
+			workflow: wf("two", ["research", "design"]),
 			input: "x",
-			dag: dagWith({ two: ["research", "design"] }),
 		});
 
 		expect(result.success).toBe(true);
@@ -387,9 +379,8 @@ describe("runWorkflow", () => {
 		});
 
 		const result = await runWorkflow(chain.ctx, {
-			preset: "two",
+			workflow: wf("two", ["research", "design"]),
 			input: "x",
-			dag: dagWith({ two: ["research", "design"] }),
 		});
 
 		expect(result.success).toBe(false);
@@ -412,9 +403,8 @@ describe("runWorkflow", () => {
 		});
 
 		const result = await runWorkflow(chain.ctx, {
-			preset: "tiny",
+			workflow: wf("tiny", ["research"]),
 			input: "x",
-			dag: dagWith({ tiny: ["research"] }),
 		});
 
 		expect(result.success).toBe(false);
@@ -456,9 +446,8 @@ describe("runWorkflow", () => {
 		});
 
 		const result = await runWorkflow(chain.ctx, {
-			preset: "rip",
+			workflow: wf("rip", ["research", "implement"]),
 			input: "x",
-			dag: dagWith({ rip: ["research", "implement"] }),
 		});
 
 		expect(result.success).toBe(true);
@@ -499,9 +488,8 @@ describe("runWorkflow", () => {
 		});
 
 		const result = await runWorkflow(chain.ctx, {
-			preset: "two",
+			workflow: wf("two", ["research", "design"]),
 			input: "x",
-			dag: dagWith({ two: ["research", "design"] }),
 		});
 
 		expect(result.success).toBe(false);
@@ -542,9 +530,8 @@ describe("runWorkflow", () => {
 		});
 
 		const result = await runWorkflow(chain.ctx, {
-			preset: "three",
+			workflow: wf("three", ["research", "design", "plan"]),
 			input: "x",
-			dag: dagWith({ three: ["research", "design", "plan"] }),
 		});
 
 		expect(result.success).toBe(false);
@@ -571,9 +558,8 @@ describe("runWorkflow", () => {
 		});
 
 		const result = await runWorkflow(chain.ctx, {
-			preset: "two",
+			workflow: wf("two", ["research", "design"]),
 			input: "x",
-			dag: dagWith({ two: ["research", "design"] }),
 		});
 
 		expect(result.success).toBe(false);
@@ -601,9 +587,8 @@ describe("runWorkflow", () => {
 		});
 
 		const result = await runWorkflow(chain.ctx, {
-			preset: "two",
+			workflow: wf("two", ["research", "design"]),
 			input: "describe the thing",
-			dag: dagWith({ two: ["research", "design"] }),
 		});
 
 		expect(result.success).toBe(false);
@@ -645,9 +630,8 @@ describe("runWorkflow", () => {
 		});
 
 		const result = await runWorkflow(chain.ctx, {
-			preset: "rip",
+			workflow: wf("rip", ["research", "implement"]),
 			input: "x",
-			dag: dagWith({ rip: ["research", "implement"] }),
 		});
 
 		expect(result.success).toBe(true);
@@ -665,9 +649,8 @@ describe("runWorkflow", () => {
 			});
 
 			const result = await runWorkflow(chain.ctx, {
-				preset: "tail",
+				workflow: wf("tail", ["commit"]),
 				input: "x",
-				dag: dagWith({ tail: ["commit"] }),
 			});
 
 			expect(result.success).toBe(true);
@@ -691,9 +674,8 @@ describe("runWorkflow", () => {
 			});
 
 			const result = await runWorkflow(chain.ctx, {
-				preset: "rcd",
+				workflow: wf("rcd", ["research", "commit", "design"]),
 				input: "x",
-				dag: dagWith({ rcd: ["research", "commit", "design"] }),
 			});
 
 			expect(result.success).toBe(true);
@@ -717,9 +699,8 @@ describe("runWorkflow", () => {
 			});
 
 			const result = await runWorkflow(chain.ctx, {
-				preset: "tiny",
+				workflow: wf("tiny", ["research"], { research: { completionStrategy: "agent-end" } }),
 				input: "x",
-				dag: dagWith({ tiny: ["research"] }, { research: { completionStrategy: "agent-end" } }),
 			});
 
 			expect(result.success).toBe(true);
@@ -746,9 +727,8 @@ describe("runWorkflow", () => {
 			});
 
 			const result = await runWorkflow(chain.ctx, {
-				preset: "cont",
+				workflow: wf("cont", ["research"], { research: { sessionPolicy: "continue" } }),
 				input: "x",
-				dag: dagWith({ cont: ["research"] }, { research: { sessionPolicy: "continue" } }),
 				pi: chain.pi,
 			});
 
@@ -783,9 +763,8 @@ describe("runWorkflow", () => {
 			});
 
 			const result = await runWorkflow(chain.ctx, {
-				preset: "fc",
+				workflow: wf("fc", ["research", "design"], { design: { sessionPolicy: "continue" } }),
 				input: "x",
-				dag: dagWith({ fc: ["research", "design"] }, { design: { sessionPolicy: "continue" } }),
 				pi: chain.pi,
 			});
 
@@ -812,9 +791,8 @@ describe("runWorkflow", () => {
 			});
 
 			const result = await runWorkflow(chain.ctx, {
-				preset: "cont",
+				workflow: wf("cont", ["research"], { research: { sessionPolicy: "continue" } }),
 				input: "x",
-				dag: dagWith({ cont: ["research"] }, { research: { sessionPolicy: "continue" } }),
 				pi: chain.pi,
 			});
 
@@ -838,9 +816,8 @@ describe("runWorkflow", () => {
 			// The runner sees branchOffset=0, slice gives [], no assistant message.
 
 			const result = await runWorkflow(chain.ctx, {
-				preset: "cont",
+				workflow: wf("cont", ["research"], { research: { sessionPolicy: "continue" } }),
 				input: "x",
-				dag: dagWith({ cont: ["research"] }, { research: { sessionPolicy: "continue" } }),
 				pi: chain.pi,
 			});
 
@@ -864,9 +841,8 @@ describe("runWorkflow", () => {
 			});
 
 			const result = await runWorkflow(chain.ctx, {
-				preset: "cont",
+				workflow: wf("cont", ["research"], { research: { sessionPolicy: "continue" } }),
 				input: "x",
-				dag: dagWith({ cont: ["research"] }, { research: { sessionPolicy: "continue" } }),
 				pi: chain.pi,
 			});
 
@@ -890,9 +866,8 @@ describe("runWorkflow", () => {
 			});
 
 			const result = await runWorkflow(chain.ctx, {
-				preset: "cont",
+				workflow: wf("cont", ["commit"], { commit: { sessionPolicy: "continue" } }),
 				input: "x",
-				dag: dagWith({ cont: ["commit"] }, { commit: { sessionPolicy: "continue" } }),
 				pi: chain.pi,
 			});
 
@@ -910,9 +885,8 @@ describe("runWorkflow", () => {
 
 			await expect(
 				runWorkflow(chain.ctx, {
-					preset: "ic",
+					workflow: wf("ic", ["implement"], { implement: { sessionPolicy: "continue" } }),
 					input: "x",
-					dag: dagWith({ ic: ["implement"] }, { implement: { sessionPolicy: "continue" } }),
 					pi: chain.pi,
 				}),
 			).rejects.toThrow(/cannot use sessionPolicy.*continue/);
@@ -926,9 +900,8 @@ describe("runWorkflow", () => {
 
 			await expect(
 				runWorkflow(chain.ctx, {
-					preset: "cont",
+					workflow: wf("cont", ["research"], { research: { sessionPolicy: "continue" } }),
 					input: "x",
-					dag: dagWith({ cont: ["research"] }, { research: { sessionPolicy: "continue" } }),
 					// No pi provided
 				}),
 			).rejects.toThrow(/no pi.*ExtensionAPI/);
@@ -956,9 +929,8 @@ describe("runWorkflow", () => {
 			});
 
 			const result = await runWorkflow(chain.ctx, {
-				preset: "fc",
+				workflow: wf("fc", ["research", "design"], { design: { sessionPolicy: "continue" } }),
 				input: "x",
-				dag: dagWith({ fc: ["research", "design"] }, { design: { sessionPolicy: "continue" } }),
 				pi: chain.pi,
 			});
 
@@ -989,9 +961,8 @@ describe("runWorkflow", () => {
 
 			const schema = Type.Object({ requiredField: Type.String() });
 			const result = await runWorkflow(chain.ctx, {
-				preset: "two",
+				workflow: wf("two", ["research", "design"], { design: { inputSchema: schema } }),
 				input: "x",
-				dag: dagWith({ two: ["research", "design"] }, { design: { inputSchema: schema } }),
 			});
 
 			expect(result.success).toBe(false);
@@ -1016,9 +987,8 @@ describe("runWorkflow", () => {
 
 			const schema = Type.Object({ version: Type.Integer() });
 			await runWorkflow(chain.ctx, {
-				preset: "two",
+				workflow: wf("two", ["research", "design"], { design: { inputSchema: schema } }),
 				input: "x",
-				dag: dagWith({ two: ["research", "design"] }, { design: { inputSchema: schema } }),
 			});
 
 			const inputFailNotice = chain.notifications.find((n) => /input validation failed/i.test(n.msg));
@@ -1041,9 +1011,8 @@ describe("runWorkflow", () => {
 
 			// Neither node has inputSchema — both should pass through.
 			const result = await runWorkflow(chain.ctx, {
-				preset: "two",
+				workflow: wf("two", ["research", "design"]),
 				input: "x",
-				dag: dagWith({ two: ["research", "design"] }),
 			});
 
 			expect(result.success).toBe(true);
@@ -1063,9 +1032,8 @@ describe("runWorkflow", () => {
 
 			const schema = Type.Object({ requiredField: Type.String() });
 			const result = await runWorkflow(chain.ctx, {
-				preset: "two",
+				workflow: wf("two", ["research", "design"], { design: { inputSchema: schema } }),
 				input: "x",
-				dag: dagWith({ two: ["research", "design"] }, { design: { inputSchema: schema } }),
 			});
 
 			expect(result.success).toBe(true);
@@ -1081,9 +1049,8 @@ describe("runWorkflow", () => {
 
 			const schema = Type.Object({ mustExist: Type.String() });
 			await runWorkflow(chain.ctx, {
-				preset: "two",
+				workflow: wf("two", ["research", "design"], { design: { inputSchema: schema } }),
 				input: "x",
-				dag: dagWith({ two: ["research", "design"] }, { design: { inputSchema: schema } }),
 			});
 
 			// The failed row is still recorded in JSONL (inline halt writes it)
@@ -1111,33 +1078,16 @@ describe("runWorkflow", () => {
 				],
 			});
 
-			const predicate = (ctx: PredicateContext) => {
-				const count = Number((ctx.manifest?.data as Record<string, unknown>)?.severeIssueCount ?? 0);
-				return count > 0 ? "revise" : "commit";
-			};
-
-			const dag: WorkflowDag = {
-				edges: [{ from: "code-review", to: ["revise", "commit"], condition: "predicate", predicate }],
-				presets: { flow: ["research", "code-review", "revise", "commit"] },
-				nodes: {
-					research: {
-						kind: "skill",
-						skill: "research",
-						completionStrategy: "artifact-emit",
-						sessionPolicy: "fresh",
-					},
-					"code-review": {
-						kind: "skill",
-						skill: "code-review",
-						completionStrategy: "artifact-emit",
-						sessionPolicy: "fresh",
-					},
-					revise: { kind: "skill", skill: "revise", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					commit: { kind: "skill", skill: "commit", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+			const workflow = wf(
+				"flow",
+				["research", "code-review", "revise", "commit"],
+				{},
+				{
+					"code-review": threshold("severeIssueCount", 0, "revise", "commit"),
 				},
-			};
+			);
 
-			const result = await runWorkflow(chain.ctx, { preset: "flow", input: "x", dag });
+			const result = await runWorkflow(chain.ctx, { workflow, input: "x" });
 
 			expect(result.success).toBe(true);
 			expect(result.stagesCompleted).toBe(3); // research + code-review + commit (revise skipped)
@@ -1164,33 +1114,16 @@ describe("runWorkflow", () => {
 				],
 			});
 
-			const predicate = (ctx: PredicateContext) => {
-				const count = Number((ctx.manifest?.data as Record<string, unknown>)?.severeIssueCount ?? 0);
-				return count > 0 ? "revise" : "commit";
-			};
-
-			const dag: WorkflowDag = {
-				edges: [{ from: "code-review", to: ["revise", "commit"], condition: "predicate", predicate }],
-				presets: { flow: ["research", "code-review", "revise", "commit"] },
-				nodes: {
-					research: {
-						kind: "skill",
-						skill: "research",
-						completionStrategy: "artifact-emit",
-						sessionPolicy: "fresh",
-					},
-					"code-review": {
-						kind: "skill",
-						skill: "code-review",
-						completionStrategy: "artifact-emit",
-						sessionPolicy: "fresh",
-					},
-					revise: { kind: "skill", skill: "revise", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					commit: { kind: "skill", skill: "commit", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+			const workflow = wf(
+				"flow",
+				["research", "code-review", "revise", "commit"],
+				{},
+				{
+					"code-review": threshold("severeIssueCount", 0, "revise", "commit"),
 				},
-			};
+			);
 
-			const result = await runWorkflow(chain.ctx, { preset: "flow", input: "x", dag });
+			const result = await runWorkflow(chain.ctx, { workflow, input: "x" });
 
 			expect(result.success).toBe(true);
 			expect(result.stagesCompleted).toBe(4); // research + code-review + revise + commit
@@ -1215,33 +1148,16 @@ describe("runWorkflow", () => {
 				],
 			});
 
-			const predicate = (ctx: PredicateContext) => {
-				const count = Number((ctx.manifest?.data as Record<string, unknown>)?.severeIssueCount ?? 0);
-				return count > 0 ? "revise" : "commit";
-			};
-
-			const dag: WorkflowDag = {
-				edges: [{ from: "code-review", to: ["revise", "commit"], condition: "predicate", predicate }],
-				presets: { flow: ["research", "code-review", "revise", "commit"] },
-				nodes: {
-					research: {
-						kind: "skill",
-						skill: "research",
-						completionStrategy: "artifact-emit",
-						sessionPolicy: "fresh",
-					},
-					"code-review": {
-						kind: "skill",
-						skill: "code-review",
-						completionStrategy: "artifact-emit",
-						sessionPolicy: "fresh",
-					},
-					revise: { kind: "skill", skill: "revise", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					commit: { kind: "skill", skill: "commit", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+			const workflow = wf(
+				"flow",
+				["research", "code-review", "revise", "commit"],
+				{},
+				{
+					"code-review": threshold("severeIssueCount", 0, "revise", "commit"),
 				},
-			};
+			);
 
-			await runWorkflow(chain.ctx, { preset: "flow", input: "x", dag });
+			await runWorkflow(chain.ctx, { workflow, input: "x" });
 
 			const dir = join(tmpDir, ".rpiv", "workflows");
 			const files = readdirSync(dir);
@@ -1275,35 +1191,19 @@ describe("runWorkflow", () => {
 				],
 			});
 
-			const predicate = (ctx: PredicateContext) => {
-				const count = Number((ctx.manifest?.data as Record<string, unknown>)?.severeIssueCount ?? 0);
-				return count > 0 ? "revise" : "commit";
-			};
-
-			const dag: WorkflowDag = {
-				edges: [{ from: "code-review", to: ["revise", "commit"], condition: "predicate", predicate }],
-				// Note: linear next after code-review (idx 1) is "revise" (idx 2)
-				// But predicate routes to "commit" (idx 3) — that IS off-linear
-				presets: { flow: ["research", "code-review", "revise", "commit"] },
-				nodes: {
-					research: {
-						kind: "skill",
-						skill: "research",
-						completionStrategy: "artifact-emit",
-						sessionPolicy: "fresh",
-					},
-					"code-review": {
-						kind: "skill",
-						skill: "code-review",
-						completionStrategy: "artifact-emit",
-						sessionPolicy: "fresh",
-					},
-					revise: { kind: "skill", skill: "revise", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					commit: { kind: "skill", skill: "commit", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+			// Threshold routes code-review → "commit" when severeIssueCount === 0,
+			// skipping the otherwise-linear "revise" — the routing layer audits
+			// this decision as a `type: routing` row.
+			const workflow = wf(
+				"flow",
+				["research", "code-review", "revise", "commit"],
+				{},
+				{
+					"code-review": threshold("severeIssueCount", 0, "revise", "commit"),
 				},
-			};
+			);
 
-			await runWorkflow(chain.ctx, { preset: "flow", input: "x", dag });
+			await runWorkflow(chain.ctx, { workflow, input: "x" });
 
 			const dir = join(tmpDir, ".rpiv", "workflows");
 			const files = readdirSync(dir);
@@ -1333,33 +1233,16 @@ describe("runWorkflow", () => {
 				],
 			});
 
-			const predicate = (ctx: PredicateContext) => {
-				const count = Number((ctx.manifest?.data as Record<string, unknown>)?.severeIssueCount ?? 0);
-				return count > 0 ? "revise" : "commit";
-			};
-
-			const dag: WorkflowDag = {
-				edges: [{ from: "code-review", to: ["revise", "commit"], condition: "predicate", predicate }],
-				presets: { flow: ["research", "code-review", "revise", "commit"] },
-				nodes: {
-					research: {
-						kind: "skill",
-						skill: "research",
-						completionStrategy: "artifact-emit",
-						sessionPolicy: "fresh",
-					},
-					"code-review": {
-						kind: "skill",
-						skill: "code-review",
-						completionStrategy: "artifact-emit",
-						sessionPolicy: "fresh",
-					},
-					revise: { kind: "skill", skill: "revise", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					commit: { kind: "skill", skill: "commit", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+			const workflow = wf(
+				"flow",
+				["research", "code-review", "revise", "commit"],
+				{},
+				{
+					"code-review": threshold("severeIssueCount", 0, "revise", "commit"),
 				},
-			};
+			);
 
-			const result = await runWorkflow(chain.ctx, { preset: "flow", input: "x", dag });
+			const result = await runWorkflow(chain.ctx, { workflow, input: "x" });
 			expect(result.success).toBe(true);
 
 			const { stages } = readState(tmpDir);
@@ -1383,33 +1266,16 @@ describe("runWorkflow", () => {
 				],
 			});
 
-			const predicate = (ctx: PredicateContext) => {
-				const count = Number((ctx.manifest?.data as Record<string, unknown>)?.severeIssueCount ?? 0);
-				return count > 0 ? "revise" : "commit";
-			};
-
-			const dag: WorkflowDag = {
-				edges: [{ from: "code-review", to: ["revise", "commit"], condition: "predicate", predicate }],
-				presets: { flow: ["research", "code-review", "revise", "commit"] },
-				nodes: {
-					research: {
-						kind: "skill",
-						skill: "research",
-						completionStrategy: "artifact-emit",
-						sessionPolicy: "fresh",
-					},
-					"code-review": {
-						kind: "skill",
-						skill: "code-review",
-						completionStrategy: "artifact-emit",
-						sessionPolicy: "fresh",
-					},
-					revise: { kind: "skill", skill: "revise", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					commit: { kind: "skill", skill: "commit", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+			const workflow = wf(
+				"flow",
+				["research", "code-review", "revise", "commit"],
+				{},
+				{
+					"code-review": threshold("severeIssueCount", 0, "revise", "commit"),
 				},
-			};
+			);
 
-			const result = await runWorkflow(chain.ctx, { preset: "flow", input: "x", dag });
+			const result = await runWorkflow(chain.ctx, { workflow, input: "x" });
 			expect(result.success).toBe(true);
 
 			// Find the runId from the JSONL file
@@ -1428,60 +1294,44 @@ describe("runWorkflow", () => {
 	});
 
 	describe("backward-jump cycle guard", () => {
-		it("halts the chain when backward jumps exceed MAX_BACKWARD_JUMPS", async () => {
+		it("halts the chain when re-entries exceed MAX_BACKWARD_JUMPS", async () => {
 			writeArtifact(tmpDir, ".rpiv/artifacts/a/a1.md");
 			writeArtifact(tmpDir, ".rpiv/artifacts/b/b1.md");
 			writeArtifact(tmpDir, ".rpiv/artifacts/a/a2.md");
 			writeArtifact(tmpDir, ".rpiv/artifacts/b/b2.md");
-			writeArtifact(tmpDir, ".rpiv/artifacts/a/a3.md");
-			writeArtifact(tmpDir, ".rpiv/artifacts/b/b3.md");
 
 			const chain = createMockSessionChain({
 				cwd: tmpDir,
 				steps: [
-					// a(0) first pass — routes to b(1) forward
+					// a first visit — advances to b (b not visited yet → forward).
 					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/a/a1.md")] },
-					// b(1) first pass — auto edge to a(0), backward jump 1 (counter→1)
+					// b first visit — advances to a (a visited → re-entry 1).
 					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/b/b1.md")] },
-					// a(0) second pass — routes to b(1) forward
+					// a second visit — advances to b (b visited → re-entry 2).
 					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/a/a2.md")] },
-					// b(1) second pass — auto edge to a(0), backward jump 2 (counter→2)
+					// b second visit — advances to a (a visited → re-entry 3, exceeds MAX=2). HALT.
 					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/b/b2.md")] },
-					// a(0) third pass — routes to b(1) forward
-					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/a/a3.md")] },
-					// b(1) third pass — auto edge to a(0), backward jump 3 (counter→3 > MAX=2), HALT
-					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/b/b3.md")] },
 				],
 			});
 
-			const dag: WorkflowDag = {
-				edges: [
-					{ from: "a", to: ["b"], condition: "auto" },
-					{ from: "b", to: ["a"], condition: "auto" },
-				],
-				presets: { cycle: ["a", "b", "c"] },
-				nodes: {
-					a: { kind: "skill", skill: "a", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					b: { kind: "skill", skill: "b", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					c: { kind: "skill", skill: "c", completionStrategy: "agent-end", sessionPolicy: "fresh" },
-				},
-			};
+			// a→b inherited from linear order; b→a override creates the cycle. `c`
+			// is declared but unreachable — exercised to confirm the runner halts
+			// via the backward-jump guard, not via running into `c`.
+			const workflow = wf("cycle", ["a", "b", "c"], {}, { b: "a" });
 
-			const result = await runWorkflow(chain.ctx, { preset: "cycle", input: "x", dag });
+			const result = await runWorkflow(chain.ctx, { workflow, input: "x" });
 
 			expect(result.success).toBe(false);
 			expect(result.error).toMatch(/backward-jump limit exceeded/i);
 			expect(result.error).toMatch(/3.*max 2/);
-			expect(result.stagesCompleted).toBe(6); // 3×a + 3×b
-			expect(chain.remaining()).toBe(0); // All steps consumed
+			// Re-entry counter (visited-set semantics): 4 stages run (a, b, a, b)
+			// before the would-be 3rd entry into `a` exceeds MAX=2 and halts.
+			expect(result.stagesCompleted).toBe(4);
+			expect(chain.remaining()).toBe(0);
 
-			// Every stage that ran completed successfully — the halt is at the
-			// chain layer, not the stage layer, so no "failed" row is written.
-			// (`stages` interleaves stage rows and routing-decision rows; filter
-			// on `stageNumber` to count actual stage rows.)
 			const { stages } = readState(tmpDir);
 			const stageRows = stages.filter((s) => typeof s.stageNumber === "number");
-			expect(stageRows).toHaveLength(6); // 3×a + 3×b, all completed
+			expect(stageRows).toHaveLength(4);
 			expect(stageRows.every((s) => s.status === "completed")).toBe(true);
 			expect(stageRows.filter((s) => s.status === "failed")).toHaveLength(0);
 
@@ -1489,52 +1339,30 @@ describe("runWorkflow", () => {
 			expect(exhaustionNotice?.level).toBe("error");
 		});
 
-		it("allows backward jumps within limit before halting on next exceedance", async () => {
+		it("allows re-entries within limit before halting on next exceedance", async () => {
 			writeArtifact(tmpDir, ".rpiv/artifacts/a/a1.md");
 			writeArtifact(tmpDir, ".rpiv/artifacts/b/b1.md");
 			writeArtifact(tmpDir, ".rpiv/artifacts/a/a2.md");
-			writeArtifact(tmpDir, ".rpiv/artifacts/b/b2.md");
 
 			const chain = createMockSessionChain({
 				cwd: tmpDir,
 				steps: [
-					// a(0) first pass
+					// a first visit — advances to b (forward).
 					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/a/a1.md")] },
-					// b(1) first pass, backward jump 1 (counter→1 ≤ maxBackwardJumps:1)
+					// b first visit — advances to a (re-entry 1, ≤ MAX=1).
 					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/b/b1.md")] },
-					// a(0) second pass
+					// a second visit — advances to b (re-entry 2 > MAX=1). HALT.
 					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/a/a2.md")] },
-					// b(1) second pass, backward jump 2 (counter→2 > maxBackwardJumps:1), HALT
-					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/b/b2.md")] },
 				],
 			});
 
-			const dag: WorkflowDag = {
-				edges: [
-					{ from: "a", to: ["b"], condition: "auto" },
-					{ from: "b", to: ["a"], condition: "auto" },
-				],
-				presets: { cycle: ["a", "b", "c"] },
-				nodes: {
-					a: { kind: "skill", skill: "a", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					b: { kind: "skill", skill: "b", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					c: { kind: "skill", skill: "c", completionStrategy: "agent-end", sessionPolicy: "fresh" },
-				},
-			};
+			const workflow = wf("cycle", ["a", "b", "c"], {}, { b: "a" });
 
-			// With maxBackwardJumps: 1, the first backward jump is allowed (counter 1 ≤ 1).
-			// The chain progresses: a, b, a, b (4 stages). The 2nd backward jump halts.
-			const result = await runWorkflow(chain.ctx, {
-				preset: "cycle",
-				input: "x",
-				dag,
-				maxBackwardJumps: 1,
-			});
+			const result = await runWorkflow(chain.ctx, { workflow, input: "x", maxBackwardJumps: 1 });
 
-			// The first backward jump was ALLOWED — 4 stages completed before halt.
-			// This proves the guard does NOT block backward jumps within the limit.
-			expect(result.stagesCompleted).toBe(4); // a, b, a, b
-			expect(result.success).toBe(false); // Still fails because 2nd backward jump exceeds limit
+			// First re-entry allowed (a→b→a). Second re-entry attempt halts.
+			expect(result.stagesCompleted).toBe(3);
+			expect(result.success).toBe(false);
 		});
 
 		it("does not count forward jumps as backward jumps", async () => {
@@ -1549,33 +1377,16 @@ describe("runWorkflow", () => {
 				],
 			});
 
-			const predicate = (ctx: PredicateContext) => {
-				const count = Number((ctx.manifest?.data as Record<string, unknown>)?.severeIssueCount ?? 0);
-				return count > 0 ? "revise" : "commit";
-			};
-
-			const dag: WorkflowDag = {
-				edges: [{ from: "code-review", to: ["revise", "commit"], condition: "predicate", predicate }],
-				presets: { flow: ["research", "code-review", "revise", "commit"] },
-				nodes: {
-					research: {
-						kind: "skill",
-						skill: "research",
-						completionStrategy: "artifact-emit",
-						sessionPolicy: "fresh",
-					},
-					"code-review": {
-						kind: "skill",
-						skill: "code-review",
-						completionStrategy: "artifact-emit",
-						sessionPolicy: "fresh",
-					},
-					revise: { kind: "skill", skill: "revise", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					commit: { kind: "skill", skill: "commit", completionStrategy: "agent-end", sessionPolicy: "fresh" },
+			const workflow = wf(
+				"flow",
+				["research", "code-review", "revise", "commit"],
+				{},
+				{
+					"code-review": threshold("severeIssueCount", 0, "revise", "commit"),
 				},
-			};
+			);
 
-			const result = await runWorkflow(chain.ctx, { preset: "flow", input: "x", dag });
+			const result = await runWorkflow(chain.ctx, { workflow, input: "x" });
 
 			expect(result.success).toBe(true);
 			expect(result.stagesCompleted).toBe(3);
@@ -1585,46 +1396,24 @@ describe("runWorkflow", () => {
 			writeArtifact(tmpDir, ".rpiv/artifacts/a/a1.md");
 			writeArtifact(tmpDir, ".rpiv/artifacts/b/b1.md");
 			writeArtifact(tmpDir, ".rpiv/artifacts/a/a2.md");
-			writeArtifact(tmpDir, ".rpiv/artifacts/b/b2.md");
 
 			const chain = createMockSessionChain({
 				cwd: tmpDir,
 				steps: [
-					// a(0) first pass
 					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/a/a1.md")] },
-					// b(1) first pass, backward jump 1 (counter→1)
 					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/b/b1.md")] },
-					// a(0) second pass
 					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/a/a2.md")] },
-					// b(1) second pass, backward jump 2 (counter→2 > maxBackwardJumps: 1), HALT
-					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/b/b2.md")] },
 				],
 			});
 
-			const dag: WorkflowDag = {
-				edges: [
-					{ from: "a", to: ["b"], condition: "auto" },
-					{ from: "b", to: ["a"], condition: "auto" },
-				],
-				presets: { cycle: ["a", "b", "c"] },
-				nodes: {
-					a: { kind: "skill", skill: "a", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					b: { kind: "skill", skill: "b", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					c: { kind: "skill", skill: "c", completionStrategy: "agent-end", sessionPolicy: "fresh" },
-				},
-			};
+			const workflow = wf("cycle", ["a", "b", "c"], {}, { b: "a" });
 
-			const result = await runWorkflow(chain.ctx, {
-				preset: "cycle",
-				input: "x",
-				dag,
-				maxBackwardJumps: 1,
-			});
+			const result = await runWorkflow(chain.ctx, { workflow, input: "x", maxBackwardJumps: 1 });
 
 			expect(result.success).toBe(false);
 			expect(result.error).toMatch(/backward-jump limit exceeded/i);
 			expect(result.error).toMatch(/2.*max 1/);
-			expect(result.stagesCompleted).toBe(4); // 2×a + 2×b
+			expect(result.stagesCompleted).toBe(3);
 		});
 
 		it("clears status line on backward-jump exhaustion", async () => {
@@ -1639,20 +1428,12 @@ describe("runWorkflow", () => {
 				],
 			});
 
-			const dag: WorkflowDag = {
-				edges: [
-					{ from: "a", to: ["b"], condition: "auto" },
-					{ from: "b", to: ["a"], condition: "auto" },
-				],
-				presets: { cycle: ["a", "b", "c"] },
-				nodes: {
-					a: { kind: "skill", skill: "a", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					b: { kind: "skill", skill: "b", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					c: { kind: "skill", skill: "c", completionStrategy: "agent-end", sessionPolicy: "fresh" },
-				},
-			};
+			// a→b inherited from linear order; b→a override creates the cycle. `c`
+			// is declared but unreachable — exercised to confirm the runner halts
+			// via the backward-jump guard, not via running into `c`.
+			const workflow = wf("cycle", ["a", "b", "c"], {}, { b: "a" });
 
-			await runWorkflow(chain.ctx, { preset: "cycle", input: "x", dag, maxBackwardJumps: 0 });
+			await runWorkflow(chain.ctx, { workflow, input: "x", maxBackwardJumps: 0 });
 
 			expect(chain.statusUpdates.at(-1)).toEqual({ key: "rpiv-workflow", value: undefined });
 		});
@@ -1669,20 +1450,12 @@ describe("runWorkflow", () => {
 				],
 			});
 
-			const dag: WorkflowDag = {
-				edges: [
-					{ from: "a", to: ["b"], condition: "auto" },
-					{ from: "b", to: ["a"], condition: "auto" },
-				],
-				presets: { cycle: ["a", "b", "c"] },
-				nodes: {
-					a: { kind: "skill", skill: "a", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					b: { kind: "skill", skill: "b", completionStrategy: "artifact-emit", sessionPolicy: "fresh" },
-					c: { kind: "skill", skill: "c", completionStrategy: "agent-end", sessionPolicy: "fresh" },
-				},
-			};
+			// a→b inherited from linear order; b→a override creates the cycle. `c`
+			// is declared but unreachable — exercised to confirm the runner halts
+			// via the backward-jump guard, not via running into `c`.
+			const workflow = wf("cycle", ["a", "b", "c"], {}, { b: "a" });
 
-			await runWorkflow(chain.ctx, { preset: "cycle", input: "x", dag, maxBackwardJumps: 0 });
+			await runWorkflow(chain.ctx, { workflow, input: "x", maxBackwardJumps: 0 });
 
 			// Both stages completed successfully before the guard halted the
 			// chain — no phantom "failed" row for the same skill that just

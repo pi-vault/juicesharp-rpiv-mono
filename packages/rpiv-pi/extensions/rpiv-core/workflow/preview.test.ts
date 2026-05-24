@@ -1,58 +1,64 @@
 /**
- * Tests for the preset list/detail formatters. Pure functions over a
- * hand-built LoadedConfig — no filesystem, no Pi.
+ * Tests for the workflow list/detail formatters. Pure functions over a
+ * hand-built LoadedWorkflows — no filesystem, no Pi.
  */
 
 import { describe, expect, it } from "vitest";
-import type { DagNode } from "./dag.js";
+import { action, defineWorkflow, type NodeDef, skill, threshold, type Workflow } from "./api.js";
 import { gitCommitExtractor } from "./extractors/index.js";
-import type { LoadedConfig } from "./loadConfig.js";
-import { formatPresetDetails, formatPresetList } from "./preview.js";
+import type { LoadedWorkflows } from "./load.js";
+import { formatWorkflowDetails, formatWorkflowList } from "./preview.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const skillNode = (overrides: Partial<DagNode> = {}): DagNode =>
-	({
-		kind: "skill",
-		skill: "test",
-		completionStrategy: "agent-end",
-		sessionPolicy: "fresh",
-		...overrides,
-	}) as DagNode;
+const node = (overrides: Partial<NodeDef> & { name: string; skill: string }): NodeDef => ({
+	completionStrategy: "agent-end",
+	sessionPolicy: "fresh",
+	...overrides,
+});
 
-const baseConfig = (overrides: Partial<LoadedConfig> = {}): LoadedConfig => ({
-	dag: {
-		edges: [],
-		presets: {
-			mid: ["research", "implement", "commit"],
-			tiny: ["research", "commit"],
-		},
-		nodes: {
-			research: skillNode({ skill: "research", completionStrategy: "artifact-emit" }),
-			implement: skillNode({ skill: "implement" }),
-			commit: skillNode({ skill: "commit", extractor: gitCommitExtractor }),
-		},
+const midWorkflow = defineWorkflow({
+	name: "mid",
+	start: "research",
+	nodes: {
+		research: node({ name: "research", skill: "research", completionStrategy: "artifact-emit" }),
+		implement: node({ name: "implement", skill: "implement" }),
+		commit: node({ name: "commit", skill: "commit", extractor: gitCommitExtractor }),
 	},
-	presetNames: new Set(["mid", "tiny"]),
-	defaultPreset: "mid",
-	source: "project",
-	layers: ["built-in", "project"],
-	presetSources: new Map([
+	edges: { research: "implement", implement: "commit", commit: "stop" },
+});
+
+const tinyWorkflow = defineWorkflow({
+	name: "tiny",
+	start: "research",
+	nodes: {
+		research: skill("research"),
+		commit: action("commit"),
+	},
+	edges: { research: "commit", commit: "stop" },
+});
+
+const baseLoaded = (overrides: Partial<LoadedWorkflows> = {}): LoadedWorkflows => ({
+	workflows: [midWorkflow, tinyWorkflow],
+	default: "mid",
+	workflowSources: new Map([
 		["mid", "built-in"],
 		["tiny", "project"],
 	]),
+	layers: ["built-in", "project"],
+	issues: [],
 	...overrides,
 });
 
 // ---------------------------------------------------------------------------
-// formatPresetList
+// formatWorkflowList
 // ---------------------------------------------------------------------------
 
-describe("formatPresetList", () => {
-	it("lists every preset with its stage count and source layer", () => {
-		const out = formatPresetList(baseConfig());
+describe("formatWorkflowList", () => {
+	it("lists every workflow with its stage count and source layer", () => {
+		const out = formatWorkflowList(baseLoaded());
 		expect(out).toContain("mid");
 		expect(out).toContain("3 stages");
 		expect(out).toContain("[built-in]");
@@ -61,8 +67,8 @@ describe("formatPresetList", () => {
 		expect(out).toContain("[project]");
 	});
 
-	it("annotates the default preset with (default)", () => {
-		const out = formatPresetList(baseConfig());
+	it("annotates the default workflow with (default)", () => {
+		const out = formatWorkflowList(baseLoaded());
 		const midLine = out.split("\n").find((l) => l.trimStart().startsWith("mid")) ?? "";
 		expect(midLine).toContain("(default)");
 		const tinyLine = out.split("\n").find((l) => l.trimStart().startsWith("tiny")) ?? "";
@@ -70,55 +76,49 @@ describe("formatPresetList", () => {
 	});
 
 	it("renders a single-line source banner for the merged layer set", () => {
-		const out = formatPresetList(baseConfig());
+		const out = formatWorkflowList(baseLoaded());
 		expect(out).toContain("Sources: built-in + project");
 	});
 
 	it("includes both usage hints — run and preview", () => {
-		const out = formatPresetList(baseConfig());
-		expect(out).toContain("Usage: /rpiv [preset] <description>");
-		expect(out).toContain("/rpiv <preset>");
+		const out = formatWorkflowList(baseLoaded());
+		expect(out).toContain("Usage: /rpiv [workflow] <description>");
+		expect(out).toContain("/rpiv <workflow>");
 		expect(out).toContain("preview stages");
 	});
 
-	it("falls back to '[built-in]' for presets missing from presetSources", () => {
-		// Defensive: if a preset name slips into presetNames without a source
-		// entry, we don't want a crash or a 'undefined' tag.
-		const config = baseConfig({
-			presetSources: new Map([["mid", "built-in"]]),
-		});
-		const out = formatPresetList(config);
-		const tinyLine = out.split("\n").find((l) => l.trimStart().startsWith("tiny")) ?? "";
-		expect(tinyLine).toContain("[built-in]");
-	});
-
 	it("renders single-layer banner when only built-in is active", () => {
-		const config = baseConfig({
-			layers: ["built-in"],
-			source: "built-in",
-		});
-		expect(formatPresetList(config)).toContain("Sources: built-in");
+		const out = formatWorkflowList(
+			baseLoaded({
+				layers: ["built-in"],
+				workflowSources: new Map([
+					["mid", "built-in"],
+					["tiny", "built-in"],
+				]),
+			}),
+		);
+		expect(out).toContain("Sources: built-in");
 	});
 });
 
 // ---------------------------------------------------------------------------
-// formatPresetDetails
+// formatWorkflowDetails
 // ---------------------------------------------------------------------------
 
-describe("formatPresetDetails", () => {
+describe("formatWorkflowDetails", () => {
 	it("renders the header with layer + default tags", () => {
-		const out = formatPresetDetails(baseConfig(), "mid");
-		expect(out).toContain("preset: mid  (built-in, default)");
+		const out = formatWorkflowDetails(baseLoaded(), "mid");
+		expect(out).toContain("workflow: mid  (built-in, default)");
 	});
 
-	it("renders header without (default) tag for non-default presets", () => {
-		const out = formatPresetDetails(baseConfig(), "tiny");
-		expect(out).toContain("preset: tiny  (project)");
-		expect(out).not.toContain("preset: tiny  (project, default)");
+	it("renders header without (default) tag for non-default workflows", () => {
+		const out = formatWorkflowDetails(baseLoaded(), "tiny");
+		expect(out).toContain("workflow: tiny  (project)");
+		expect(out).not.toContain("workflow: tiny  (project, default)");
 	});
 
 	it("numbers stages 1-based and shows completionStrategy + sessionPolicy", () => {
-		const out = formatPresetDetails(baseConfig(), "mid");
+		const out = formatWorkflowDetails(baseLoaded(), "mid");
 		const lines = out.split("\n");
 		expect(lines.some((l) => /^\s+1\.\s+research\b/.test(l))).toBe(true);
 		expect(lines.some((l) => /^\s+2\.\s+implement\b/.test(l))).toBe(true);
@@ -129,35 +129,53 @@ describe("formatPresetDetails", () => {
 	});
 
 	it("decorates stages whose node carries snapshot / extractor", () => {
-		const out = formatPresetDetails(baseConfig(), "mid");
-		const commitLine = out.split("\n").find((l) => /commit/.test(l)) ?? "";
+		const out = formatWorkflowDetails(baseLoaded(), "mid");
+		const commitLine = out.split("\n").find((l) => /^\s+\d+\.\s+commit\b/.test(l)) ?? "";
 		expect(commitLine).toContain("snapshot");
 		expect(commitLine).toContain("extractor");
 	});
 
 	it("does NOT show snapshot / extractor decoration for plain nodes", () => {
-		const out = formatPresetDetails(baseConfig(), "mid");
-		const implementLine = out.split("\n").find((l) => /implement/.test(l)) ?? "";
+		const out = formatWorkflowDetails(baseLoaded(), "mid");
+		const implementLine = out.split("\n").find((l) => /^\s+\d+\.\s+implement\b/.test(l)) ?? "";
 		expect(implementLine).not.toContain("snapshot");
 		expect(implementLine).not.toContain("extractor");
 	});
 
-	it("falls through to formatPresetList for unknown preset names", () => {
-		const out = formatPresetDetails(baseConfig(), "does-not-exist");
-		expect(out).toContain("Available presets:");
+	it("falls through to formatWorkflowList for unknown workflow names", () => {
+		const out = formatWorkflowDetails(baseLoaded(), "does-not-exist");
+		expect(out).toContain("Available workflows:");
 	});
 
-	it("renders an '(unknown node)' marker for preset stages missing from nodes", () => {
-		const config = baseConfig();
-		config.dag.presets.broken = ["mystery"];
-		(config.presetNames as Set<string>).add("broken");
-		const out = formatPresetDetails(config, "broken");
-		expect(out).toContain("mystery");
-		expect(out).toContain("(unknown node)");
+	it("renders the predicate target set inline for EdgeFn edges", () => {
+		const branchingWorkflow: Workflow = {
+			name: "branching",
+			start: "code-review",
+			nodes: {
+				"code-review": skill("code-review"),
+				revise: skill("revise"),
+				commit: action("commit"),
+			},
+			edges: {
+				"code-review": threshold("severeIssueCount", 0, "revise", "commit"),
+				revise: "commit",
+				commit: "stop",
+			},
+		};
+		const loaded: LoadedWorkflows = {
+			workflows: [branchingWorkflow],
+			default: "branching",
+			workflowSources: new Map([["branching", "built-in"]]),
+			layers: ["built-in"],
+			issues: [],
+		};
+		const out = formatWorkflowDetails(loaded, "branching");
+		const crLine = out.split("\n").find((l) => /code-review/.test(l)) ?? "";
+		expect(crLine).toContain("predicate(revise | commit)");
 	});
 
-	it("emits a per-preset usage hint", () => {
-		const out = formatPresetDetails(baseConfig(), "tiny");
+	it("emits a per-workflow usage hint", () => {
+		const out = formatWorkflowDetails(baseLoaded(), "tiny");
 		expect(out).toContain("Usage: /rpiv tiny <description>");
 	});
 });
