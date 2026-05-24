@@ -1415,6 +1415,33 @@ describe("runWorkflow", () => {
 			expect(result.stagesCompleted).toBe(3);
 		});
 
+		it("counts a self-edge as backward-jump from the first hop", async () => {
+			// SB5 contract: `visited.add(currentName)` happens BEFORE the
+			// backward-jump check on `nextName`. For a self-loop (a → a), that
+			// means the very first re-entry counts. With maxBackwardJumps=0 we
+			// halt after one execution; with maxBackwardJumps=1 we get exactly
+			// two executions before halting.
+			writeArtifact(tmpDir, ".rpiv/artifacts/a/a1.md");
+			writeArtifact(tmpDir, ".rpiv/artifacts/a/a2.md");
+			const chain = createMockSessionChain({
+				cwd: tmpDir,
+				steps: [
+					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/a/a1.md")] },
+					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/a/a2.md")] },
+				],
+			});
+
+			// Single-node workflow with a self-loop. `wf` builds nodes in order;
+			// override the edge to point a → a explicitly.
+			const workflow = wf("self-loop", ["a"], {}, { a: "a" });
+
+			const result = await runWorkflow(chain.ctx, { workflow, input: "x", maxBackwardJumps: 1 });
+
+			expect(result.success).toBe(false);
+			expect(result.error).toMatch(/backward-jump limit exceeded/i);
+			expect(result.stagesCompleted).toBe(2);
+		});
+
 		it("clears status line on backward-jump exhaustion", async () => {
 			writeArtifact(tmpDir, ".rpiv/artifacts/a/a1.md");
 			writeArtifact(tmpDir, ".rpiv/artifacts/b/b1.md");

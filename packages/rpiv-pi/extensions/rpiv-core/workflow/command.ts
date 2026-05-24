@@ -109,8 +109,13 @@ function formatIssue(issue: Issue): string {
 		const where = issue.path ? ` (${issue.path})` : "";
 		return `[${issue.layer} config${where}] ${issue.message}`;
 	}
-	const layerTag = issue.layer ? `${issue.layer} config` : "workflow";
-	const pathTag = issue.path ? ` (${issue.path})` : "";
 	const nodeTag = issue.node ? ` — node "${issue.node}"` : "";
-	return `[${layerTag}${pathTag}] workflow "${issue.workflow}"${nodeTag}: ${issue.message}`;
+	// When the layer is attached (issues that flowed through loadWorkflows),
+	// prefix with `[<layer> config (<path>)]`. Direct validateWorkflow callers
+	// (tests, future programmatic embedders) get the trimmed form.
+	if (issue.layer) {
+		const pathTag = issue.path ? ` (${issue.path})` : "";
+		return `[${issue.layer} config${pathTag}] workflow "${issue.workflow}"${nodeTag}: ${issue.message}`;
+	}
+	return `workflow "${issue.workflow}"${nodeTag}: ${issue.message}`;
 }

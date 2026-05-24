@@ -21,13 +21,15 @@ import { configPath } from "@juicesharp/rpiv-config";
 import { createJiti } from "jiti";
 import type { Workflow } from "./api.js";
 import { builtInWorkflows } from "./built-in.js";
+import type { ConfigLayer } from "./layers.js";
+import { assertNever } from "./transcript.js";
 import { type ValidationIssue, validateWorkflow } from "./validate.js";
 
 // ===========================================================================
 // Public types
 // ===========================================================================
 
-export type ConfigLayer = "built-in" | "user" | "project";
+export type { ConfigLayer } from "./layers.js";
 
 export interface LoadIssue {
 	kind: "load";
@@ -114,8 +116,20 @@ export async function loadWorkflows(cwd: string): Promise<LoadedWorkflows> {
 	// that a future built-in regression surfaces in the same channel as user errors.
 	// Each issue is enriched with its source layer + file path so command.ts can
 	// render Astro-style `(rpiv.config.ts) workflow "ship": ...` errors.
-	const layerPath = (l: ConfigLayer): string | undefined =>
-		l === "project" ? projectPath : l === "user" ? userPath : undefined;
+	// Exhaustive switch — adding a new ConfigLayer triggers a TS error here
+	// instead of silently rendering issues without provenance.
+	const layerPath = (l: ConfigLayer): string | undefined => {
+		switch (l) {
+			case "built-in":
+				return undefined;
+			case "user":
+				return userPath;
+			case "project":
+				return projectPath;
+			default:
+				return assertNever(l);
+		}
+	};
 	for (const w of workflowMap.values()) {
 		const layer = sources.get(w.name) ?? "built-in";
 		const path = layerPath(layer);

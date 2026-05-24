@@ -342,6 +342,12 @@ async function captureStageSnapshot(node: NodeDef, idx: number, run: RunContext)
  * backward-jump guard, then recurse. Wraps the body in try/catch so an
  * EdgeFn throwing lands in `state.error` rather than bubbling out of
  * withSession.
+ *
+ * Backward-jump semantics: a "backward jump" is re-entering a node that
+ * has already been executed in this run. Adding `currentName` to `visited`
+ * BEFORE consulting `nextNode` means a self-edge (`currentName === nextName`)
+ * counts from the first hop — which matches the spirit of "re-entry"; the
+ * stage that just finished IS being re-entered.
  */
 async function advanceChain(curCtx: ChainCtx, currentName: string, idx: number, run: RunContext): Promise<void> {
 	const { cwd, runId, workflow, state } = run;

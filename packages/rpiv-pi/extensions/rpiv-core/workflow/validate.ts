@@ -15,6 +15,7 @@
  */
 
 import { type EdgeTarget, READS_FRONTMATTER, type Workflow } from "./api.js";
+import type { ConfigLayer } from "./layers.js";
 import {
 	MAX_VALIDATION_RETRIES,
 	MAX_VALIDATION_RETRY_TIMEOUT_MS,
@@ -36,7 +37,7 @@ export interface ValidationIssue {
 	 * from. `validateWorkflow` itself doesn't know about layers; the loader
 	 * is the seam that has both `workflowSources` and the issue list in scope.
 	 */
-	layer?: "built-in" | "user" | "project";
+	layer?: ConfigLayer;
 	/** Source path (rpiv.config.ts) when the layer is user or project. */
 	path?: string;
 }
