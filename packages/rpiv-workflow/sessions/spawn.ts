@@ -9,8 +9,8 @@
  * `sessions/` directory is policy-agnostic.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { SessionPolicy } from "../api.js";
+import type { WorkflowHost } from "../host.js";
 import type { RunnerCtx } from "../types.js";
 
 /**
@@ -40,9 +40,9 @@ export interface SessionPolicyHandler {
 		ctx: RunnerCtx,
 		prompt: string,
 		body: (sessionCtx: RunnerCtx) => Promise<void>,
-		pi?: ExtensionAPI,
+		pi?: WorkflowHost,
 	): Promise<{ cancelled: boolean }>;
-	send(ctx: RunnerCtx, msg: string, pi?: ExtensionAPI): Promise<void>;
+	send(ctx: RunnerCtx, msg: string, pi?: WorkflowHost): Promise<void>;
 }
 
 export const FRESH_HANDLER: SessionPolicyHandler = {
@@ -64,7 +64,7 @@ export const FRESH_HANDLER: SessionPolicyHandler = {
 export const CONTINUE_HANDLER: SessionPolicyHandler = {
 	branchOffset: (captured) => captured,
 	async spawn(ctx, prompt, body, pi) {
-		if (!pi) throw new Error("CONTINUE_HANDLER.spawn: continue policy requires pi (ExtensionAPI)");
+		if (!pi) throw new Error("CONTINUE_HANDLER.spawn: continue policy requires a workflow host (pi)");
 		// `pi.sendUserMessage` returns a Promise — pre-I5b we discarded it,
 		// so a rejected send (e.g. transport closed, agent SDK fault)
 		// surfaced as unhandledRejection past the stage boundary and the
@@ -79,7 +79,7 @@ export const CONTINUE_HANDLER: SessionPolicyHandler = {
 		return { cancelled: false };
 	},
 	async send(ctx, msg, pi) {
-		if (!pi) throw new Error("CONTINUE_HANDLER.send: continue policy requires pi (ExtensionAPI)");
+		if (!pi) throw new Error("CONTINUE_HANDLER.send: continue policy requires a workflow host (pi)");
 		await pi.sendUserMessage(msg);
 		await ctx.waitForIdle();
 	},

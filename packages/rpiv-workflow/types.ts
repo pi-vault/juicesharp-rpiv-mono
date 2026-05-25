@@ -20,19 +20,17 @@
  * module are cycle-free).
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { NodeDef, Workflow } from "./api.js";
+import type { WorkflowCommandHost, WorkflowHost } from "./host.js";
 import type { Manifest } from "./manifest.js";
 
 /**
- * Extends `ExtensionCommandContext` with `isIdle`/`waitForIdle` which the SDK
- * guarantees on every event ctx but doesn't surface on the public base type —
- * call sites use plain method syntax instead of an `as` cast each time.
+ * Per-stage runtime ctx. Alias for `WorkflowCommandHost` (the port) —
+ * kept as a domain noun ("the runner's command ctx") so consumers can
+ * read stage/phase code without learning the port name. Identical
+ * shape; rename-only.
  */
-export type RunnerCtx = ExtensionCommandContext & {
-	isIdle(): boolean;
-	waitForIdle(): Promise<void>;
-};
+export type RunnerCtx = WorkflowCommandHost;
 
 /** Mutable per-run bookkeeping threaded through the chain by reference. */
 export interface RunState {
@@ -97,7 +95,7 @@ export interface RunContext {
 	 */
 	visited: Set<string>;
 	/** Required for "continue"-policy stages. */
-	pi?: ExtensionAPI;
+	pi?: WorkflowHost;
 	maxBackwardJumps: number;
 }
 
@@ -124,7 +122,7 @@ export interface StageSession extends SessionContext {
 	/** Pre-stage baseline value (undefined if the node's `outcome` has no `baseline`). */
 	baseline: unknown;
 	/** Required iff `node.sessionPolicy === "continue"`. */
-	pi?: ExtensionAPI;
+	pi?: WorkflowHost;
 	/** Only set for continue stages — branch slice offset. */
 	branchOffset?: number;
 	onFailure?: (ctx: RunnerCtx) => void;

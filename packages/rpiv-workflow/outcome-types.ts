@@ -14,7 +14,6 @@
  * predicates / downstream nodes.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { BranchEntry } from "./transcript.js";
 import type { RunState } from "./types.js";
 
@@ -27,8 +26,6 @@ export interface BaselineCtx {
 	runId: string;
 	stageIndex: number;
 	state: Readonly<RunState>;
-	/** Optional — not all baselines need pi; may be absent in tests. */
-	pi?: ExtensionAPI;
 }
 
 /** Fail-soft: implementations catch and return undefined rather than throwing. */

@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Breaking — Pi types removed from public surface
+- The public type surface no longer names any `@earendil-works/pi-coding-agent`
+  type. Three workflow-owned host ports replace them in
+  signatures: `WorkflowHost` (default export + continue-policy sender),
+  `WorkflowCommandHost` (`runWorkflow`'s ctx + `RunContext.pi` /
+  `RunWorkflowOptions.pi`), and `WorkflowSessionHost` (the replacement
+  ctx delivered to `newSession`'s `withSession` callback).
+- Pi's `ExtensionAPI` / `ExtensionCommandContext` structurally satisfy
+  the new ports, so embedders pass their existing Pi handles to
+  `runWorkflow` without any source change. A compile-time tripwire
+  (`host.test.ts`) fails CI if Pi's API ever drifts below the port shape.
+- `RunContext` is no longer exported from the barrel — it was internal
+  to the runner and had no external consumers.
+- `BaselineCtx.pi` / `ExtractCtx.pi` removed. The field was dead today
+  (the runner never populated `ExtractCtx.pi`, and no bundled outcome
+  read `BaselineCtx.pi`). Custom outcomes that need agent-level access
+  should accept a narrow capability injection at construction time
+  rather than reaching into the runtime ctx.
+
 ### Breaking — on-disk JSONL header
 - `WorkflowHeader.preset` renamed to `workflow`. Audit files written by
   prior versions have a header row that no longer matches the current

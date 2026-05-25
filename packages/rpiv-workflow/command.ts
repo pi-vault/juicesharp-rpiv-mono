@@ -1,6 +1,6 @@
 /** /wf slash command: parse → loadWorkflows → runWorkflow. */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { WorkflowCommandHost, WorkflowHost } from "./host.js";
 import { renderConfigLayer } from "./layers.js";
 import { findWorkflow, type Issue, loadWorkflows } from "./load/index.js";
 import {
@@ -18,10 +18,10 @@ import { runWorkflow } from "./runner/index.js";
 // Public entry
 // ---------------------------------------------------------------------------
 
-export function registerWorkflowCommand(pi: ExtensionAPI): void {
+export function registerWorkflowCommand(pi: WorkflowHost): void {
 	pi.registerCommand("wf", {
 		description: CMD_DESCRIPTION,
-		handler: (args: string, ctx: ExtensionCommandContext) => handleWorkflowCommand(pi, args, ctx),
+		handler: (args: string, ctx: WorkflowCommandHost) => handleWorkflowCommand(pi, args, ctx),
 	});
 }
 
@@ -29,7 +29,7 @@ export function registerWorkflowCommand(pi: ExtensionAPI): void {
 // Orchestrator
 // ---------------------------------------------------------------------------
 
-async function handleWorkflowCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext): Promise<void> {
+async function handleWorkflowCommand(pi: WorkflowHost, args: string, ctx: WorkflowCommandHost): Promise<void> {
 	if (!ctx.hasUI) {
 		ctx.ui.notify(MSG_INTERACTIVE_ONLY, "error");
 		return;
@@ -119,7 +119,7 @@ export function parseArgs(
 // ---------------------------------------------------------------------------
 
 /** Surface every load + validation issue as a notify, prefixed by severity. */
-function surfaceIssues(ctx: ExtensionCommandContext, issues: readonly Issue[]): void {
+function surfaceIssues(ctx: WorkflowCommandHost, issues: readonly Issue[]): void {
 	for (const issue of issues) {
 		const level: "warning" | "error" = issue.severity === "error" ? "error" : "warning";
 		ctx.ui.notify(formatIssue(issue), level);

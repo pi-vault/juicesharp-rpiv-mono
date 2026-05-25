@@ -245,7 +245,7 @@ function enforceSessionInvariants(stage: ResolvedStage, run: RunContext): void {
 		throw new StagePreflightError("invariant", stage.name, MSG_STAGE_THREW(stage.name, reason), reason, false);
 	}
 	if (stage.node.sessionPolicy === "continue" && !run.pi) {
-		const reason = `runStage: node "${stage.name}" uses sessionPolicy "continue" but no pi (ExtensionAPI) was provided to runWorkflow`;
+		const reason = `runStage: node "${stage.name}" uses sessionPolicy "continue" but no workflow host (pi) was provided to runWorkflow`;
 		throw new StagePreflightError("invariant", stage.name, MSG_STAGE_THREW(stage.name, reason), reason, false);
 	}
 }
@@ -318,7 +318,6 @@ async function captureStageBaseline(node: NodeDef, idx: number, run: RunContext)
 			runId: run.runId,
 			stageIndex: idx,
 			state: run.state,
-			pi: run.pi,
 		});
 	} catch {
 		// Baseline capture failure doesn't prevent stage execution.

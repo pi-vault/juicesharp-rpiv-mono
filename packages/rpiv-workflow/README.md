@@ -59,16 +59,38 @@ export default {
 Sibling packages contribute workflows at extension load:
 
 ```ts
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { registerBuiltIns } from "@juicesharp/rpiv-workflow";
+import { registerBuiltIns, type WorkflowHost } from "@juicesharp/rpiv-workflow";
 import { myWorkflows } from "./my-workflows.js";
 
-export default function (pi: ExtensionAPI): void {
+export default function (pi: WorkflowHost): void {
   registerBuiltIns(myWorkflows);
 }
 ```
 
+You can keep using `ExtensionAPI` from `@earendil-works/pi-coding-agent` in the
+signature instead — it structurally satisfies `WorkflowHost`. Either choice
+works; the published types name only the workflow-owned port.
+
 These workflows are merged into the lowest layer (`built-in`); user/project overlays still override by name.
+
+## Host boundary
+
+`rpiv-workflow`'s public type surface names **zero** `@earendil-works/pi-coding-agent`
+types. The runtime declares three workflow-owned port interfaces in
+`./host.js`:
+
+- `WorkflowHost` — registry-level host (default export, continue-policy
+  sends, skill-registration preflight).
+- `WorkflowCommandHost` — per-command ctx for `runWorkflow`.
+- `WorkflowSessionHost` — the replacement ctx delivered to
+  `newSession`'s `withSession` callback.
+
+Pi's `ExtensionAPI` / `ExtensionCommandContext` structurally satisfy these
+ports, so existing embedders pass their Pi handles through unchanged. A
+compile-time tripwire (`host.test.ts`) fails immediately if Pi's API ever
+drifts below the port shape. A future non-Pi host implements the three
+port interfaces and drives the runtime without any pi-coding-agent
+dependency.
 
 ## Custom extractors
 

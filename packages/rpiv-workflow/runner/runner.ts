@@ -24,9 +24,9 @@
  * `## Phase N:` subdivision inside an implement plan artifact.
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { Workflow } from "../api.js";
 import { notifyPartialArtifacts, nowIso, recordTerminalFailure } from "../audit.js";
+import type { WorkflowCommandHost, WorkflowHost } from "../host.js";
 import { currentArtifactPath } from "../internal-utils.js";
 import { MSG_STAGE_THREW, MSG_WORKFLOW_COMPLETE, STATUS_KEY } from "../messages.js";
 import { generateRunId, writeHeader } from "../state/index.js";
@@ -58,7 +58,7 @@ export interface RunWorkflowOptions {
 	/** Passed to the start node as its argument. */
 	input: string;
 	/** Required for "continue"-policy stages (pi.sendUserMessage). */
-	pi?: ExtensionAPI;
+	pi?: WorkflowHost;
 	/** Defaults to MAX_BACKWARD_JUMPS. */
 	maxBackwardJumps?: number;
 }
@@ -98,10 +98,7 @@ export interface RunWorkflowResult {
  * previous withSession — never on a captured outer ctx (which Pi invalidates
  * as soon as the session is replaced).
  */
-export async function runWorkflow(
-	ctx: ExtensionCommandContext,
-	options: RunWorkflowOptions,
-): Promise<RunWorkflowResult> {
+export async function runWorkflow(ctx: WorkflowCommandHost, options: RunWorkflowOptions): Promise<RunWorkflowResult> {
 	const { workflow } = options;
 	if (!workflow.nodes[workflow.start]) {
 		return {
@@ -111,14 +108,15 @@ export async function runWorkflow(
 		};
 	}
 
-	// Continue-policy stages thread the prior session via Pi's ExtensionAPI; if no
-	// pi was passed, enforceSessionInvariants would throw at the first such stage.
+	// Continue-policy stages thread the prior session via the host's
+	// sendUserMessage; if no host was passed, enforceSessionInvariants would
+	// throw at the first such stage.
 	// Reject at workflow entry so embedders get a clean envelope instead of a throw.
 	if (options.pi === undefined && Object.values(workflow.nodes).some((n) => n.sessionPolicy === "continue")) {
 		return {
 			stagesCompleted: 0,
 			success: false,
-			error: "workflow contains continue-policy nodes which require pi (ExtensionAPI)",
+			error: "workflow contains continue-policy nodes which require a workflow host (pi)",
 		};
 	}
 

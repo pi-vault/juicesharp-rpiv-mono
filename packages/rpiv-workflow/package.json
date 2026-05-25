@@ -38,6 +38,7 @@
     "built-ins.ts",
     "command.ts",
     "fanout.ts",
+    "host.ts",
     "internal-utils.ts",
     "layers.ts",
     "load",

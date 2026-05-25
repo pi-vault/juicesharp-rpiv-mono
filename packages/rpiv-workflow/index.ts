@@ -22,9 +22,13 @@
  *      `defineStatePredicate`, `READS_FRONTMATTER`, the runtime-mirror
  *      `*_VALUES` arrays, and `typeboxSchema` (the TypeBox adapter).
  *
- *   2. Runner (programmatic embedders) — `./runner/index.js`
+ *   2. Runner (programmatic embedders) — `./runner/index.js`, `./host.js`
  *      Drive a workflow from outside `/wf`: `runWorkflow`,
- *      `RunWorkflowOptions`, `RunWorkflowResult`.
+ *      `RunWorkflowOptions`, `RunWorkflowResult`. Embedders type their
+ *      host handles against `WorkflowHost` / `WorkflowCommandHost` /
+ *      `WorkflowSessionHost` (the host ports) — Pi's `ExtensionAPI` /
+ *      `ExtensionCommandContext` structurally satisfy them, so the
+ *      values pass through without casting.
  *
  *   3. Loader (programmatic embedders) — `./load/index.js`
  *      Materialise the merged workflow registry: `loadWorkflows`,
@@ -60,14 +64,36 @@
  *      test; runner owns row writes — embedders never need it.
  *
  *   9. Runtime types — `./types.js`
- *      `RunContext`, `RunState`.
+ *      `RunState`.
  *
  * Per-module deep imports (`from "@juicesharp/rpiv-workflow/api.js"`)
  * are NOT supported across the package boundary.
+ *
+ * ─── Pi-coupling boundary ───────────────────────────────────────────────
+ *
+ * The package's public type surface names ZERO `@earendil-works/pi-coding-agent`
+ * types. Every host capability the runtime needs is declared as a
+ * workflow-owned port in `./host.js`:
+ *
+ *   • `WorkflowHost`         — registry-level (default export + continue sends)
+ *   • `WorkflowCommandHost`  — per-command ctx for `runWorkflow`
+ *   • `WorkflowSessionHost`  — replacement ctx delivered to `newSession`'s
+ *                              `withSession` callback
+ *
+ * Pi's `ExtensionAPI` / `ExtensionCommandContext` are structurally
+ * compatible with these ports — embedders pass their existing Pi handles
+ * directly. A future non-Pi host implements the three port interfaces.
+ *
+ * The runtime peer-dependency on `@earendil-works/pi-coding-agent`
+ * remains for one value-level helper (`parseFrontmatter` in
+ * `outcomes/artifact-md.js`); no type names cross the boundary.
+ *
+ * `host.test.ts` carries a compile-time tripwire that fails immediately
+ * if Pi's types drift below the port's required shape.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerWorkflowCommand } from "./command.js";
+import type { WorkflowHost } from "./host.js";
 
 export {
 	action,
@@ -95,6 +121,7 @@ export {
 } from "./api.js";
 export { recordStage } from "./audit.js";
 export { getBuiltIns, registerBuiltIns } from "./built-ins.js";
+export type { WorkflowCommandHost, WorkflowHost, WorkflowSessionHost } from "./host.js";
 export type { ConfigLayer, Issue, LoadedWorkflows, LoadIssue, OverlayPaths } from "./load/index.js";
 export { loadWorkflows, projectOverlayPaths, userOverlayPaths } from "./load/index.js";
 export type {
@@ -129,10 +156,10 @@ export {
 	type WorkflowStage,
 } from "./state/index.js";
 export { typeboxSchema } from "./typebox-adapter.js";
-export type { RunContext, RunState } from "./types.js";
+export type { RunState } from "./types.js";
 export { type SchemaValidationFailure, validateManifestData } from "./validate-manifest.js";
 export { validateWorkflow, type WorkflowValidationIssue } from "./validate-workflow.js";
 
-export default function (pi: ExtensionAPI): void {
+export default function (pi: WorkflowHost): void {
 	registerWorkflowCommand(pi);
 }

@@ -835,7 +835,7 @@ describe("runWorkflow", () => {
 			});
 
 			expect(result.success).toBe(false);
-			expect(result.error).toBe("workflow contains continue-policy nodes which require pi (ExtensionAPI)");
+			expect(result.error).toBe("workflow contains continue-policy nodes which require a workflow host (pi)");
 			expect(result.stagesCompleted).toBe(0);
 
 			// Preflight short-circuits before writeHeader / any recordStage call —
