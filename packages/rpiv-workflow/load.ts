@@ -70,7 +70,7 @@ export interface LoadedWorkflows {
 	default: string;
 	/** Which layer each merged workflow name came from. */
 	workflowSources: ReadonlyMap<string, ConfigLayer>;
-	/** Every layer that contributed, low-to-high. Always starts with "built-in". */
+	/** Every layer that registered at least one workflow, low-to-high. */
 	layers: readonly ConfigLayer[];
 	/** Aggregated load + validation issues. Errors block the runner; warnings are advisory. */
 	issues: readonly Issue[];
@@ -125,7 +125,7 @@ interface ParsedConfig {
  */
 export async function loadWorkflows(cwd: string): Promise<LoadedWorkflows> {
 	const issues: Issue[] = [];
-	const layers: ConfigLayer[] = ["built-in"];
+	const layers: ConfigLayer[] = getBuiltIns().length > 0 ? ["built-in"] : [];
 
 	// `workflowSources` maps name → layer for the public API; `sourcePaths`
 	// tracks the exact file each surviving workflow came from so validation
@@ -264,16 +264,6 @@ async function loadOverlayFile(
 		issues.push({ kind: "load", layer, path, severity: "error", message: parsed.error });
 		return undefined;
 	}
-	if (kind === "drop-in" && parsed.value.default !== undefined) {
-		issues.push({
-			kind: "load",
-			layer,
-			path,
-			severity: "warning",
-			message: `drop-in workflow file declared \`default: "${parsed.value.default}"\` — ignored. \`default\` lives only in the canonical workflows.config.ts.`,
-		});
-		parsed.value.default = undefined;
-	}
 	return parsed.value;
 }
 
@@ -283,8 +273,7 @@ type NormalizeResult = { kind: "ok"; value: ParsedConfig } | { kind: "err"; erro
  * Canonical files accept three default-export shapes; drop-ins accept only
  * the first two (`Workflow | Workflow[]`). The envelope form is rejected
  * for drop-ins so authors don't trip the silent "default lives somewhere
- * else" gotcha — the warning at `loadOverlayFile` covers any leaked
- * `default` from a Workflow that someone hand-shaped as `{ workflows, default }`.
+ * else" gotcha.
  */
 function normalizeDefaultExport(raw: unknown, kind: FileKind): NormalizeResult {
 	if (isWorkflow(raw)) return { kind: "ok", value: { workflows: [raw] } };
@@ -339,23 +328,21 @@ interface Envelope {
 }
 
 function isWorkflow(v: unknown): v is Workflow {
+	if (!v || typeof v !== "object") return false;
+	const o = v as Record<string, unknown>;
 	return (
-		!!v &&
-		typeof v === "object" &&
-		typeof (v as { name?: unknown }).name === "string" &&
-		typeof (v as { start?: unknown }).start === "string" &&
-		!!(v as { nodes?: unknown }).nodes &&
-		!!(v as { edges?: unknown }).edges
+		typeof o.name === "string" &&
+		typeof o.start === "string" &&
+		typeof o.nodes === "object" &&
+		o.nodes !== null &&
+		typeof o.edges === "object" &&
+		o.edges !== null
 	);
 }
 
 function isEnvelope(v: unknown): v is Envelope {
-	return (
-		!!v &&
-		typeof v === "object" &&
-		Array.isArray((v as { workflows?: unknown }).workflows) &&
-		(typeof (v as { default?: unknown }).default === "string" || (v as { default?: unknown }).default === undefined)
-	);
+	if (!v || typeof v !== "object") return false;
+	return Array.isArray((v as Record<string, unknown>).workflows);
 }
 
 function describe(v: unknown): string {
