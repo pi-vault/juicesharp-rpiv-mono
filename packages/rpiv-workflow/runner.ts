@@ -17,7 +17,7 @@
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { NodeDef, Workflow } from "./api.js";
-import { notifyPartialArtifacts, nowIso, recordStage } from "./audit.js";
+import { notifyPartialArtifacts, nowIso, recordTerminalFailure } from "./audit.js";
 import { countPhases, runImplementPhases } from "./implement-phases.js";
 import { currentArtifactPath } from "./internal-utils.js";
 import {
@@ -247,12 +247,12 @@ async function runStageOrRecordFailure(curCtx: RunnerCtx, name: string, idx: num
 	try {
 		await runStage(curCtx, name, idx, run);
 	} catch (e) {
-		const { cwd, runId, state } = run;
-		curCtx.ui.setStatus(STATUS_KEY, undefined);
 		const reason = e instanceof Error ? e.message : String(e);
-		recordStage(cwd, runId, { skill: name, status: "failed", ts: nowIso() }, state);
-		curCtx.ui.notify(MSG_STAGE_THREW(name, reason), "error");
-		state.termination.error = reason;
+		recordTerminalFailure(
+			curCtx,
+			{ cwd: run.cwd, runId: run.runId, state: run.state, skill: name },
+			{ status: "failed", notifyMsg: MSG_STAGE_THREW(name, reason), notifyLevel: "error", errMsg: reason },
+		);
 	}
 }
 
@@ -375,11 +375,17 @@ function ensureSkillRegistered(curCtx: RunnerCtx, stage: ResolvedStage, run: Run
 	}
 	if (registered.has(stage.skill)) return true;
 
-	recordStage(run.cwd, run.runId, { skill: stage.skill, status: "failed", ts: nowIso() }, run.state);
-	curCtx.ui.setStatus(STATUS_KEY, undefined);
-	curCtx.ui.notify(MSG_SKILL_NOT_REGISTERED(stage.skill), "error");
-	notifyPartialArtifacts(curCtx, run.cwd, run.runId);
-	run.state.termination.error = ERR_SKILL_NOT_REGISTERED(stage.skill, stage.stageNumber);
+	recordTerminalFailure(
+		curCtx,
+		{ cwd: run.cwd, runId: run.runId, state: run.state, skill: stage.skill },
+		{
+			status: "failed",
+			notifyMsg: MSG_SKILL_NOT_REGISTERED(stage.skill),
+			notifyLevel: "error",
+			errMsg: ERR_SKILL_NOT_REGISTERED(stage.skill, stage.stageNumber),
+		},
+		(ctx) => notifyPartialArtifacts(ctx, run.cwd, run.runId),
+	);
 	return false;
 }
 
@@ -395,11 +401,17 @@ function ensureUpstreamArtifact(
 	run: RunContext,
 ): boolean {
 	if (currentName === run.workflow.start || currentArtifactPath(run.state)) return true;
-	recordStage(run.cwd, run.runId, { skill: stage.skill, status: "failed", ts: nowIso() }, run.state);
-	curCtx.ui.setStatus(STATUS_KEY, undefined);
-	curCtx.ui.notify(MSG_MISSING_ARTIFACT(stage.skill), "error");
-	notifyPartialArtifacts(curCtx, run.cwd, run.runId);
-	run.state.termination.error = ERR_MISSING_ARTIFACT(stage.skill, stage.stageNumber);
+	recordTerminalFailure(
+		curCtx,
+		{ cwd: run.cwd, runId: run.runId, state: run.state, skill: stage.skill },
+		{
+			status: "failed",
+			notifyMsg: MSG_MISSING_ARTIFACT(stage.skill),
+			notifyLevel: "error",
+			errMsg: ERR_MISSING_ARTIFACT(stage.skill, stage.stageNumber),
+		},
+		(ctx) => notifyPartialArtifacts(ctx, run.cwd, run.runId),
+	);
 	return false;
 }
 
@@ -430,11 +442,17 @@ function ensureInputValid(curCtx: RunnerCtx, stage: ResolvedStage, run: RunConte
 
 	const failureSummary = result.failures.map((f) => `${f.path}: ${f.message}`).join("; ");
 	const prevSkill = run.state.manifest.meta.skill || "unknown";
-	recordStage(run.cwd, run.runId, { skill: stage.skill, status: "failed", ts: nowIso() }, run.state);
-	curCtx.ui.setStatus(STATUS_KEY, undefined);
-	curCtx.ui.notify(MSG_INPUT_VALIDATION_FAILED(stage.skill, prevSkill), "error");
-	notifyPartialArtifacts(curCtx, run.cwd, run.runId);
-	run.state.termination.error = ERR_INPUT_VALIDATION_FAILED(stage.skill, prevSkill, failureSummary);
+	recordTerminalFailure(
+		curCtx,
+		{ cwd: run.cwd, runId: run.runId, state: run.state, skill: stage.skill },
+		{
+			status: "failed",
+			notifyMsg: MSG_INPUT_VALIDATION_FAILED(stage.skill, prevSkill),
+			notifyLevel: "error",
+			errMsg: ERR_INPUT_VALIDATION_FAILED(stage.skill, prevSkill, failureSummary),
+		},
+		(ctx) => notifyPartialArtifacts(ctx, run.cwd, run.runId),
+	);
 	return false;
 }
 
@@ -526,17 +544,17 @@ async function advanceChain(curCtx: RunnerCtx, currentName: string, idx: number,
 			if (run.visited.has(nextName)) {
 				state.telemetry.backwardJumps++;
 				if (state.telemetry.backwardJumps > run.maxBackwardJumps) {
-					curCtx.ui.setStatus(STATUS_KEY, undefined);
-					curCtx.ui.notify(
-						MSG_BACKWARD_JUMP_EXHAUSTED(state.telemetry.backwardJumps, run.maxBackwardJumps),
-						"error",
-					);
 					// Attribute to nextName — the stage the guard refused to
 					// re-enter. currentName already completed successfully.
-					recordStage(cwd, runId, { skill: nextName, status: "failed", ts: nowIso() }, state);
-					state.termination.error = ERR_BACKWARD_JUMP_EXHAUSTED(
-						state.telemetry.backwardJumps,
-						run.maxBackwardJumps,
+					recordTerminalFailure(
+						curCtx,
+						{ cwd, runId, state, skill: nextName },
+						{
+							status: "failed",
+							notifyMsg: MSG_BACKWARD_JUMP_EXHAUSTED(state.telemetry.backwardJumps, run.maxBackwardJumps),
+							notifyLevel: "error",
+							errMsg: ERR_BACKWARD_JUMP_EXHAUSTED(state.telemetry.backwardJumps, run.maxBackwardJumps),
+						},
 					);
 					return;
 				}
@@ -556,10 +574,16 @@ async function advanceChain(curCtx: RunnerCtx, currentName: string, idx: number,
 		// remaining surface `currentName` IS the correct attribution: the
 		// thrown predicate / edge function belongs to the just-completed
 		// node's outgoing edge.
-		curCtx.ui.setStatus(STATUS_KEY, undefined);
 		const reason = e instanceof Error ? e.message : String(e);
-		recordStage(cwd, runId, { skill: currentName, status: "failed", ts: nowIso() }, state);
-		curCtx.ui.notify(MSG_CHAIN_ADVANCE_FAILED(currentName, reason), "error");
-		state.termination.error = reason;
+		recordTerminalFailure(
+			curCtx,
+			{ cwd, runId, state, skill: currentName },
+			{
+				status: "failed",
+				notifyMsg: MSG_CHAIN_ADVANCE_FAILED(currentName, reason),
+				notifyLevel: "error",
+				errMsg: reason,
+			},
+		);
 	}
 }
