@@ -41,16 +41,32 @@ export const MIN_VALIDATION_RETRY_TIMEOUT_MS = 1_000;
 // Validation
 // ---------------------------------------------------------------------------
 
-export function validateManifestData(schema: NodeSchema, data: unknown): ValidationResult {
+/**
+ * Returns the schema's verdict on `data`. Standard Schema permits `validate`
+ * to return synchronously or as a Promise; this function mirrors that —
+ * callers must `await` the result. Both seams that drive validation
+ * (`retryUntilValid` in extraction.ts and `ensureInputValid` in
+ * stage-lifecycle.ts) are async, so awaiting a sync value is free (one
+ * microtask) and async schemas (I/O-backed checks, async-by-default libs
+ * like ArkType) round-trip without a sync-only escape hatch.
+ */
+export function validateManifestData(schema: NodeSchema, data: unknown): ValidationResult | Promise<ValidationResult> {
 	const result = schema["~standard"].validate(data);
 	if (result instanceof Promise) {
-		// Standard Schema permits async `validate`. Our retry-loop is synchronous
-		// at this seam (the schema fires inside `extractAndValidateManifest`),
-		// so async schemas would silently miss failures. Surface a clear error
-		// rather than degrade to "always valid". If a user genuinely wants
-		// async validation, the retry loop needs an awaitable refactor first.
-		throw new Error("validateManifestData: async schema validation is not supported");
+		return result.then((resolved) => buildResult(resolved, data));
 	}
+	return buildResult(result, data);
+}
+
+function buildResult(
+	result: {
+		readonly issues?: readonly {
+			readonly message: string;
+			readonly path?: readonly (PropertyKey | { readonly key: PropertyKey })[];
+		}[];
+	},
+	data: unknown,
+): ValidationResult {
 	if (!result.issues) {
 		return { valid: true, failures: [] };
 	}

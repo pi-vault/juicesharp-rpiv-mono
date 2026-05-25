@@ -181,7 +181,6 @@ function checkNodeSemantics(w: Workflow, issues: WorkflowValidationIssue[]): voi
 		checkTimeoutBounds(w, name, node, issues);
 		checkNodeEnums(w, name, node, issues);
 		checkFanoutContinueInvariant(w, name, node, issues);
-		checkSchemasNotAsync(w, name, node, issues);
 	}
 }
 
@@ -269,54 +268,6 @@ function checkFanoutContinueInvariant(
 				`node "${name}" cannot combine fanout with sessionPolicy "continue" — fanout requires per-unit session isolation`,
 			),
 		);
-	}
-}
-
-/**
- * Async schemas can't drive the runner's synchronous retry loop. Probe each
- * schema with an empty object at load time and reject ones whose
- * `~standard.validate` returns a Promise. Without this, `extractAndValidateManifest`
- * throws mid-stage and the audit trail surfaces an opaque chain-advance error
- * instead of a workflow-load error pointing at the offending node.
- *
- * Looping over the slot names keeps the contract symmetric and adds the next
- * schema slot in one place.
- */
-function checkSchemasNotAsync(w: Workflow, name: string, node: NodeDef, issues: WorkflowValidationIssue[]): void {
-	for (const slot of ["outputSchema", "inputSchema"] as const) {
-		const schema = node[slot];
-		if (schema && isAsyncSchema(schema)) {
-			issues.push(
-				error(
-					w.name,
-					name,
-					`${slot} declares an async \`~standard.validate\` — workflow runner is synchronous at the validation seam; refactor the schema to be synchronous or drop the schema entirely`,
-				),
-			);
-		}
-	}
-}
-
-/**
- * Probe a Standard Schema with an empty object and report whether its
- * `~standard.validate` returned a Promise. The probe value is intentionally
- * meaningless — we don't care about the validation outcome, only its
- * sync/async shape. Any schema that throws on the probe is treated as
- * "not async" (the throw bubbles to the runner anyway and surfaces under
- * the same fatal-extraction path).
- *
- * Best-effort: a schema whose synchronous arm throws on the empty-object
- * probe is reported as non-async; if such a schema is in fact async, the
- * runtime `validateManifestData` throw is the load-bearing safety net —
- * see `validate-manifest.ts:validateManifestData` (the `result instanceof Promise`
- * branch).
- */
-function isAsyncSchema(schema: { "~standard": { validate: (data: unknown) => unknown } }): boolean {
-	try {
-		const result = schema["~standard"].validate({});
-		return result instanceof Promise;
-	} catch {
-		return false;
 	}
 }
 

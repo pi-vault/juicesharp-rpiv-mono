@@ -133,7 +133,8 @@ describe("[I6] code-review predicate must not silently route to commit on missin
 		const schema = mid.nodes["code-review"]?.outputSchema;
 		if (!schema) throw new Error("code-review outputSchema missing — fix I6 first");
 		const { validateManifestData } = await import("@juicesharp/rpiv-workflow");
-		expect(validateManifestData(schema, {}).valid).toBe(false);
+		const result = await validateManifestData(schema, {});
+		expect(result.valid).toBe(false);
 	});
 
 	it("every built-in workflow validates without errors or warnings", () => {

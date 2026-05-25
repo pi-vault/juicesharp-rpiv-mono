@@ -69,7 +69,14 @@ export class StagePreflightError extends Error {
 interface PreflightCheck {
 	name: string;
 	kind: "halt" | "invariant";
-	run(stage: ResolvedStage, run: RunContext): void;
+	/**
+	 * Checks may be sync (`enforceSessionInvariants`, `ensureSkillRegistered`,
+	 * `ensureUpstreamArtifact`) or async (`ensureInputValid` once schemas may
+	 * be async). `runStage` awaits the return value, so sync checks pay only
+	 * one microtask and async checks (filesystem-backed, registry-backed,
+	 * async-by-default schema libs) round-trip cleanly.
+	 */
+	run(stage: ResolvedStage, run: RunContext): void | Promise<void>;
 }
 
 /**
@@ -106,7 +113,7 @@ export async function runStage(curCtx: RunnerCtx, currentName: string, idx: numb
 	const stage = resolveStageNode(currentName, idx, run);
 
 	if (await tryFanout(curCtx, stage, idx, run)) return;
-	for (const check of PRE_PROMPT_CHECKS) check.run(stage, run);
+	for (const check of PRE_PROMPT_CHECKS) await check.run(stage, run);
 
 	const isStart = currentName === run.workflow.start;
 	const inputForStage = isStart ? run.state.originalInput : currentArtifactPath(run.state)!;
@@ -114,7 +121,7 @@ export async function runStage(curCtx: RunnerCtx, currentName: string, idx: numb
 	curCtx.ui.setStatus(STATUS_KEY, STATUS_STAGE(stage.stageNumber, run.totalStages, stage.skill));
 	const branchOffset = computeBranchOffset(curCtx, stage.node);
 
-	for (const check of POST_PROMPT_CHECKS) check.run(stage, run);
+	for (const check of POST_PROMPT_CHECKS) await check.run(stage, run);
 
 	const baseline = await captureStageBaseline(stage.node, idx, run);
 
@@ -242,9 +249,9 @@ function computeBranchOffset(curCtx: RunnerCtx, node: NodeDef): number | undefin
 	return readBranch(curCtx).length;
 }
 
-function ensureInputValid(stage: ResolvedStage, run: RunContext): void {
+async function ensureInputValid(stage: ResolvedStage, run: RunContext): Promise<void> {
 	if (!stage.node.inputSchema || run.state.manifest?.data === undefined) return;
-	const result = validateManifestData(stage.node.inputSchema, run.state.manifest.data);
+	const result = await validateManifestData(stage.node.inputSchema, run.state.manifest.data);
 	if (result.valid) return;
 
 	const failureSummary = result.failures.map((f) => `${f.path}: ${f.message}`).join("; ");

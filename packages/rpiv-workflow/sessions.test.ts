@@ -416,17 +416,15 @@ describe("sessions — validation retry loop", () => {
 	});
 
 	// -----------------------------------------------------------------------
-	// Q15+IC — an async-returning schema that slipped past the load-time
-	// `isAsyncSchema` probe (or a programmatic runWorkflow that bypassed
-	// loadWorkflows entirely) used to throw from validateManifestData,
-	// escape retryUntilValid → postStage, and land in runStageOrRecordFailure's
-	// outer catch as MSG_STAGE_THREW — the wrong error class for a schema
-	// constraint the workflow author owns. validateOrFatal funnels the
-	// throw through the canonical kind:"fatal" path so the failure carries
-	// the right error class (MSG_STAGE_FAILED via haltStageWithExtractionError),
-	// fires onFailure, and exits cleanly without escaping the session.
+	// Async schemas (Standard Schema permits async `validate`; libs like
+	// ArkType return Promises by default, and filesystem-backed schemas need
+	// I/O). The validation seam awaits the schema result, so a Promise-
+	// returning schema flows through retryUntilValid the same as a sync one —
+	// passing schemas advance the stage, failing schemas drive the retry
+	// loop, and a rejected Promise surfaces as fatal-extraction (not as an
+	// escaped throw under MSG_STAGE_THREW).
 	// -----------------------------------------------------------------------
-	it("async-returning schema halts the stage via fatal-extraction, not via an escaped throw", async () => {
+	it("async-returning schema that resolves clean lets the stage complete", async () => {
 		const chain = createMockSessionChain({
 			cwd: tmpDir,
 			steps: [{ branch: [mockAssistantMessage("done")] }],
@@ -435,14 +433,11 @@ describe("sessions — validation retry loop", () => {
 		const onSuccess = vi.fn(async () => {});
 		const onFailure = vi.fn();
 
-		// Hand-rolled async Standard Schema: validate() returns a Promise. The
-		// runtime guard at validate-manifest.ts:70 throws synchronously when it sees
-		// the Promise result; validateOrFatal catches and converts to fatal.
-		const asyncSchema: NodeSchema<unknown, unknown> = {
+		const asyncOkSchema: NodeSchema<unknown, unknown> = {
 			"~standard": {
 				version: 1,
 				vendor: "test-async",
-				validate: () => Promise.resolve({ issues: [] }),
+				validate: () => Promise.resolve({ value: { foo: 2 } }),
 			},
 		};
 
@@ -451,26 +446,58 @@ describe("sessions — validation retry loop", () => {
 			stageSession({
 				cwd: tmpDir,
 				state,
-				node: node({ outputSchema: asyncSchema, outcome: scriptedOutcome([okPayload({ foo: 2 })]) }),
+				node: node({ outputSchema: asyncOkSchema, outcome: scriptedOutcome([okPayload({ foo: 2 })]) }),
 				onSuccess,
 				onFailure,
 			}),
 		);
 
-		// Stage halted cleanly — onSuccess never ran, onFailure did.
+		expect(onFailure).not.toHaveBeenCalled();
+		expect(onSuccess).toHaveBeenCalledTimes(1);
+		expect(chain.notifications.some((n) => n.msg === MSG_STAGE_COMPLETE("test"))).toBe(true);
+	});
+
+	it("async-rejected schema halts the stage via fatal-extraction, not via an escaped throw", async () => {
+		const chain = createMockSessionChain({
+			cwd: tmpDir,
+			steps: [{ branch: [mockAssistantMessage("done")] }],
+		});
+		const state = freshRunState();
+		const onSuccess = vi.fn(async () => {});
+		const onFailure = vi.fn();
+
+		// Hand-rolled async Standard Schema that rejects (e.g. an I/O probe
+		// raised mid-validation). validateOrFatal funnels the rejection
+		// through the canonical kind:"fatal" path so the failure carries the
+		// right error class (MSG_STAGE_FAILED via haltStageWithExtractionError),
+		// fires onFailure, and exits cleanly without escaping the session.
+		const asyncFailingSchema: NodeSchema<unknown, unknown> = {
+			"~standard": {
+				version: 1,
+				vendor: "test-async",
+				validate: () => Promise.reject(new Error("io-probe blew up")),
+			},
+		};
+
+		await runStageSession(
+			chain.ctx as RunnerCtx,
+			stageSession({
+				cwd: tmpDir,
+				state,
+				node: node({ outputSchema: asyncFailingSchema, outcome: scriptedOutcome([okPayload({ foo: 2 })]) }),
+				onSuccess,
+				onFailure,
+			}),
+		);
+
 		expect(onSuccess).not.toHaveBeenCalled();
 		expect(onFailure).toHaveBeenCalledTimes(1);
 
-		// Right error class: MSG_STAGE_FAILED (fatal-extraction path).
-		// NOT MSG_STAGE_THREW (which would mean the throw escaped).
 		expect(chain.notifications.some((n) => n.msg === MSG_STAGE_FAILED("test"))).toBe(true);
 		expect(chain.notifications.some((n) => /failed to start/.test(n.msg))).toBe(false);
 
-		// state.termination.error carries the schema-shape diagnostic prefixed by skill,
-		// so the user can find the offending node.
-		expect(state.termination.error).toMatch(/test:.*async schema validation is not supported/);
+		expect(state.termination.error).toMatch(/test:.*io-probe blew up/);
 
-		// JSONL row was written (not orphan) and attributed to `test`.
 		const rows = readStageRows(tmpDir);
 		const failedRows = rows.filter((r) => r.status === "failed");
 		expect(failedRows).toHaveLength(1);

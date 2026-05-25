@@ -140,7 +140,7 @@ async function retryUntilValid(
 	);
 
 	let manifest = initial;
-	const initialValidation = validateOrFatal(schema, manifest.data, s.skill);
+	const initialValidation = await validateOrFatal(schema, manifest.data, s.skill);
 	if (initialValidation.kind === "fatal") return initialValidation;
 	let result = initialValidation.result;
 	let attempts = 0;
@@ -171,7 +171,7 @@ async function retryUntilValid(
 		}
 
 		manifest = reExtracted.manifest;
-		const reValidation = validateOrFatal(schema, manifest.data, s.skill);
+		const reValidation = await validateOrFatal(schema, manifest.data, s.skill);
 		if (reValidation.kind === "fatal") return reValidation;
 		result = reValidation.result;
 	}
@@ -181,25 +181,24 @@ async function retryUntilValid(
 }
 
 /**
- * Translate a thrown `validateManifestData` (the async-schema runtime check at
- * validate-manifest.ts:70 is the known thrower) into the canonical fatal-extraction
+ * Translate a thrown `validateManifestData` (user-authored schemas may throw
+ * synchronously or reject their Promise) into the canonical fatal-extraction
  * outcome. Without this, the throw escapes retryUntilValid → postStage →
- * runStageOrRecordFailure's catch, surfacing as MSG_STAGE_THREW — the wrong error
- * class for a schema-shape constraint the workflow author owns. Routing
- * through `kind: "fatal"` puts the failure through `haltStageWithExtractionError`,
- * which attributes the row to `skill`, fires MSG_STAGE_FAILED, and exits
- * cleanly through the same path validation-exhausted uses.
- *
- * The load-time `isAsyncSchema` probe in validate-workflow.ts is a best-effort UX hint;
- * this is the load-bearing safety net behind it.
+ * runStageOrRecordFailure's catch, surfacing as MSG_STAGE_THREW — the wrong
+ * error class for a schema-shape constraint the workflow author owns. Routing
+ * through `kind: "fatal"` puts the failure through
+ * `haltStageWithExtractionError`, which attributes the row to `skill`, fires
+ * MSG_STAGE_FAILED, and exits cleanly through the same path
+ * validation-exhausted uses.
  */
-function validateOrFatal(
+async function validateOrFatal(
 	schema: NodeSchema,
 	data: unknown,
 	skill: string,
-): { kind: "ok"; result: ValidationResult } | { kind: "fatal"; message: string } {
+): Promise<{ kind: "ok"; result: ValidationResult } | { kind: "fatal"; message: string }> {
 	try {
-		return { kind: "ok", result: validateManifestData(schema, data) };
+		const result = await validateManifestData(schema, data);
+		return { kind: "ok", result };
 	} catch (e) {
 		const reason = e instanceof Error ? e.message : String(e);
 		return { kind: "fatal", message: `${skill}: ${reason}` };
