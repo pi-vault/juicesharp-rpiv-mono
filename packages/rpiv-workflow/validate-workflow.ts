@@ -103,12 +103,14 @@ function checkEdgeKeys(w: Workflow, issues: WorkflowValidationIssue[]): void {
 
 /**
  * Every edge target must resolve to a declared node or the `"stop"` sentinel.
- * String targets are checked directly. `EdgeFn` targets are checked via
- * `.targets` metadata when present, or by probing — see `enumerateEdgeFnTargets`.
+ * String targets are checked directly. `EdgeFn` targets are checked via the
+ * paired `checkEdgeFnTargets` (emits the no-`.targets` error) and enumerated
+ * via the pure `enumerateTargets`.
  */
 function checkEdgeTargets(w: Workflow, issues: WorkflowValidationIssue[]): void {
 	for (const [from, target] of Object.entries(w.edges)) {
-		for (const candidate of enumerateTargets(target, w.name, from, issues)) {
+		checkEdgeFnTargets(target, { workflow: w.name, from }, issues);
+		for (const candidate of enumerateTargets(target)) {
 			if (candidate === STOP) continue;
 			if (!w.nodes[candidate]) {
 				issues.push(
@@ -152,7 +154,7 @@ function checkReachability(w: Workflow, issues: WorkflowValidationIssue[]): void
 		const target = w.edges[cur];
 		if (target === undefined || target === STOP) continue;
 
-		for (const next of enumerateTargets(target, w.name, cur, [])) {
+		for (const next of enumerateTargets(target)) {
 			if (next !== STOP && w.nodes[next] && !reachable.has(next)) frontier.push(next);
 		}
 	}
@@ -325,32 +327,44 @@ function checkPredicateSchemas(w: Workflow, issues: WorkflowValidationIssue[]): 
 
 /**
  * Returns the set of possible string targets an `EdgeTarget` could resolve to.
+ * Pure — no issue emission, no caller-supplied discard buffer.
  *
  * - String → singleton.
  * - `EdgeFn` with `.targets` metadata → declared targets.
- * - `EdgeFn` without `.targets` → error; the missing metadata makes reachability
- *   analysis and the runtime status-line denominator structurally unsound.
- *   Users authoring predicates by hand MUST go through `definePredicate(targets, fn)`.
- *
- * Issues collected via the `issues` array — pass an empty array when you're
- * only interested in enumeration (reachability traversal).
+ * - `EdgeFn` without `.targets` → empty list. The missing-metadata error is
+ *   the responsibility of `checkEdgeFnTargets` (paired emit-only function);
+ *   call it alongside `enumerateTargets` only at sites that lint edges
+ *   (currently `checkEdgeTargets`). Reachability traversal calls only the
+ *   pure form.
  */
-function enumerateTargets(
-	target: EdgeTarget,
-	workflow: string,
-	from: string,
-	issues: WorkflowValidationIssue[],
-): string[] {
+function enumerateTargets(target: EdgeTarget): string[] {
 	if (typeof target === "string") return [target];
 	if (Array.isArray(target.targets) && target.targets.length > 0) return [...target.targets];
+	return [];
+}
+
+/**
+ * Emits the "EdgeFn without `.targets` metadata" error for an `EdgeTarget`
+ * that's a hand-rolled `EdgeFn` lacking the marker. Pairs with
+ * `enumerateTargets`: lint sites call both; reachability calls only the
+ * enumerator. Users authoring predicates by hand MUST go through
+ * `definePredicate(targets, fn)` so the `.targets` metadata is structurally
+ * attached.
+ */
+function checkEdgeFnTargets(
+	target: EdgeTarget,
+	ctx: { workflow: string; from: string },
+	issues: WorkflowValidationIssue[],
+): void {
+	if (typeof target === "string") return;
+	if (Array.isArray(target.targets) && target.targets.length > 0) return;
 	issues.push(
 		error(
-			workflow,
-			from,
-			`edges["${from}"] is an EdgeFn without \`.targets\` metadata — use definePredicate([...], fn) or threshold() so reachability can enumerate branches`,
+			ctx.workflow,
+			ctx.from,
+			`edges["${ctx.from}"] is an EdgeFn without \`.targets\` metadata — use definePredicate([...], fn) or threshold() so reachability can enumerate branches`,
 		),
 	);
-	return [];
 }
 
 // ===========================================================================
