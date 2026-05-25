@@ -4,6 +4,15 @@ Pi extension. Chain Pi skills into typed multi-stage workflows with audited JSON
 
 **Skill-agnostic.** The runner sends `/skill:<name>` via Pi's native dispatch — it doesn't know or care who shipped the skill. Install on its own and write workflows over your own `~/.pi/agent/skills/`, or pair with [`@juicesharp/rpiv-pi`](../rpiv-pi) to use rpiv-pi's bundled `mid`, `large`, `small` workflows over rpiv-pi's bundled skills.
 
+## Pick your lane
+
+This package serves four overlapping audiences. Find yours, then jump to the matching section:
+
+- **I want to run workflows over my own Pi skills.** → [Install](#install) → [Use](#use) → [Configure](#configure).
+- **I'm shipping a workflow pack others install.** → [Configure](#configure) (the "config vs pack" split is what makes packs safe) → [Authoring DSL](#authoring-dsl).
+- **I'm bundling workflows inside my own Pi extension.** → [Programmatic registration](#programmatic-registration).
+- **I'm embedding the runtime in a non-Pi host.** → [Host boundary](#host-boundary) + [`runWorkflow`](#programmatic-runner).
+
 ## Install
 
 ```sh
@@ -24,35 +33,56 @@ The loader merges workflows from three layers (each later layer overrides earlie
 
 ```
 built-in (programmatic — registered by sibling packages like rpiv-pi)
-  ← user drop-ins      (~/.config/rpiv-workflow/workflows/*.ts, alpha-sorted)
-  ← user canonical     (~/.config/rpiv-workflow/workflows.config.ts)
-  ← project drop-ins   (<cwd>/.rpiv-workflow/workflows/*.ts, alpha-sorted)
-  ← project canonical  (<cwd>/.rpiv-workflow/workflows.config.ts)
+  ← user packs        (~/.config/rpiv-workflow/workflows/*.ts, alpha-sorted)
+  ← user config       (~/.config/rpiv-workflow/workflows.config.ts)
+  ← project packs     (<cwd>/.rpiv-workflow/workflows/*.ts, alpha-sorted)
+  ← project config    (<cwd>/.rpiv-workflow/workflows.config.ts)
 ```
 
-**Canonical files** accept three default-export shapes:
+Two file roles per layer:
+
+- **Config file** — the one TypeScript file you hand-edit. Accepts three default-export shapes:
+
+  ```ts
+  // 1. A single Workflow
+  import { defineWorkflow, artifact, action } from "@juicesharp/rpiv-workflow";
+  export default defineWorkflow({
+    name: "ship",
+    start: "implement",
+    nodes: { implement: action(), commit: action() },
+    edges: { implement: "commit", commit: "stop" },
+  });
+
+  // 2. A Workflow[] with a single entry
+  export default [ /* one workflow */ ];
+
+  // 3. The envelope form — required when shipping multiple workflows
+  export default {
+    workflows: [ /* many */ ],
+    default: "ship",   // which one `/wf <input>` runs without a name
+  };
+  ```
+
+- **Pack files** (`workflows/*.ts`) — installable bundles others can drop in. Accept only `Workflow | Workflow[]`. Packs **cannot** set `default` — that lives in the config file. This is what makes installable workflow packs safe: a pack contributes new workflows without overriding the user's default.
+
+## Authoring DSL
+
+A workflow is a typed graph: named entry point, a `nodes` record, and an `edges` table that maps each node to another node name, the sentinel `"stop"`, or a predicate function that chooses at runtime.
+
+Two factories for the two stage shapes:
+
+- `artifact(overrides?)` — the skill writes a file the next stage reads. Halts the chain if the path doesn't appear in the transcript.
+- `action(overrides?)` — the skill's side effect IS the work (commit, implement). The next stage inherits the prior artifact list forward (see the inheritance note below).
+
+> **Inheritance note (until Phase 10).** Action stages currently inherit the upstream artifact list with no opt-out. A future `terminal()` factory will close this gap — a stage that does NOT pass upstream artifacts forward. Track in the polish plan.
+
+Conditional routing uses `threshold(field, n, ifAbove, ifBelow)`:
 
 ```ts
-// 1. A single Workflow
-import { defineWorkflow, artifact, action } from "@juicesharp/rpiv-workflow";
-export default defineWorkflow({
-  name: "ship",
-  start: "implement",
-  nodes: { implement: action(), commit: action() },
-  edges: { implement: "commit", commit: "stop" },
-});
-
-// 2. A Workflow[] with a single entry
-export default [ /* one workflow */ ];
-
-// 3. The envelope form — required when shipping multiple workflows
-export default {
-  workflows: [ /* many */ ],
-  default: "ship",   // which one `/wf <input>` runs without a name
-};
+edges: { "code-review": threshold("blockers_count", 0, "revise", "commit") }
 ```
 
-**Drop-in files** accept only `Workflow | Workflow[]`. They cannot set `default` — that lives in the canonical file (one source of truth per layer). This makes installable workflow packs safe: a pack can contribute new workflows without overriding the user's default.
+Hand-rolled predicates use `definePredicate(targets, fn)` (reads `manifest.data`, requires the source node to declare an `outputSchema`) or `defineStatePredicate(targets, fn)` (consults only `state` / `manifest.meta`).
 
 ## Programmatic registration
 
@@ -91,6 +121,22 @@ compile-time tripwire (`host.test.ts`) fails immediately if Pi's API ever
 drifts below the port shape. A future non-Pi host implements the three
 port interfaces and drives the runtime without any pi-coding-agent
 dependency.
+
+## Programmatic runner
+
+Embedders drive workflows from outside `/wf`:
+
+```ts
+import { runWorkflow } from "@juicesharp/rpiv-workflow";
+
+const result = await runWorkflow({
+  workflow: myFlow,
+  input: "task description",
+  pi: piHost,  // any WorkflowHost-shaped value
+});
+```
+
+Returns `{ runId, stagesCompleted, success }`. Past-run inspection uses `listRuns(cwd)` / `readHeader` / `readLastStage` / `listArtifacts`.
 
 ## Outcomes — resolvers and readers
 
@@ -138,20 +184,42 @@ const codegenResolver = defineResolver<GitHeadSnapshot | undefined>({
 
 ### Bundled resolver catalog
 
-The framework ships only host-agnostic primitives — no Pi tool-name defaults, no `.rpiv/artifacts/` defaults, no domain helpers. Wrap them or compose with `unionResolvers` to build your own conventions.
+The framework ships only host-agnostic primitives — no Pi tool-name defaults, no `.rpiv/artifacts/` defaults, no domain helpers. Wrap them or compose with `unionResolvers` to build your own conventions. Grouped by discovery model:
+
+**Scan the agent's text**
 
 | Resolver | Signature | What it does |
 | --- | --- | --- |
 | `transcriptPathResolver` | `({ pattern: RegExp })` | Scans assistant text for the last regex match; emits one `fs` artifact. Pattern is required — no framework default. |
-| `toolCallResolver` | `({ match, toHandle })` | Walks every `tool_use` part; emits N artifacts via the author's mappers. Universal across any Pi tool name. |
-| `workspaceDiffResolver` | `({ filter? })` | Captures `git status --porcelain` pre-stage, diffs post-stage. One `fs` artifact per file the stage touched. Fail-soft when not a git repo. |
-| `gitCommitResolver` | — | Detects a new HEAD commit vs. the pre-stage snapshot; emits an `opaque(sha)` artifact tagged `role: "commit"`. |
 | `directoryPathResolver` | `({ dir, ext? })` | Ergonomic wrapper over `transcriptPathResolver` for the `<dir>/<file>.<ext>` shape. |
 | `urlResolver` | `({ pattern? })` | Scans for `https?://…`; emits a `url` handle. Default pattern is RFC-3986-flavoured; override for narrower hosts. |
-| `unionResolvers(...rs)` | — | Composition: run N resolvers, concatenate artifacts. Fatal only when every sub-resolver fataled. |
-| `noopResolver` | — | Always returns `{ kind: "ok", artifacts: [] }`. The primitive `sideEffectOutcome` is built from it. |
 
-Handle constructors:`fs(path)`, `url(href)`, `opaque(id)`, `inline(bytes, mime?)` — replace the verbose `{ kind: …, … }` literal at call sites. Serialise any handle to its canonical string with `handleToString`.
+**Observe tool use**
+
+| Resolver | Signature | What it does |
+| --- | --- | --- |
+| `toolCallResolver` | `({ match, toHandle })` | Walks every `tool_use` part; emits N artifacts via the author's mappers. Universal across any Pi tool name. |
+
+**Diff the filesystem**
+
+| Resolver | Signature | What it does |
+| --- | --- | --- |
+| `workspaceDiffResolver` | `({ filter? })` | Captures `git status --porcelain` pre-stage, diffs post-stage. One `fs` artifact per file the stage touched. Fail-soft when not a git repo. |
+
+**Git**
+
+| Resolver | Signature | What it does |
+| --- | --- | --- |
+| `gitCommitResolver` | — | Detects a new HEAD commit vs. the pre-stage snapshot; emits an `opaque(sha)` artifact tagged `role: "commit"`. |
+
+**Composition + empty**
+
+| Resolver | Signature | What it does |
+| --- | --- | --- |
+| `unionResolvers(...rs)` | — | Run N resolvers, concatenate artifacts. Fatal only when every sub-resolver fataled. |
+| `noopResolver` | — | Always returns `{ kind: "ok", artifacts: [] }`. The primitive `sideEffectOutcome` is built directly from it: `sideEffectOutcome = { resolver: noopResolver }`. |
+
+Handle constructors: `fs(path)`, `url(href)`, `opaque(id)`, `inline(bytes, mime?)` — replace the verbose `{ kind: …, … }` literal at call sites. Serialise any handle to its canonical string with `handleToString`.
 
 ### Bundled reader catalog
 
