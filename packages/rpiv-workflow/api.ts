@@ -28,6 +28,15 @@ export type { Outcome } from "./manifest.js";
  * ArkType, TypeBox, et al.) — re-exported under a name that doesn't leak the
  * spec version into our public surface. When the spec versions, this alias
  * picks the right one in a single line.
+ *
+ * Sync schemas are the default and the recommended shape for the 95% case
+ * (pure shape contracts: `Type.Object({ … })`, `z.object({ … })`). Async
+ * schemas are supported at both seams — the runner awaits `~standard.validate`
+ * — and are the right answer when correctness needs I/O (filesystem probes,
+ * registry lookups, async-by-default libs like ArkType). A hanging async
+ * schema is bounded by the node's `validationRetryTimeoutMs`. See the
+ * "Validators: sync vs async" section of the package README for the full
+ * rationale.
  */
 export type NodeSchema<Input = unknown, Output = Input> = StandardSchemaV1<Input, Output>;
 

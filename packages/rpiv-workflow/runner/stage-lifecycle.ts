@@ -12,10 +12,11 @@
 import type { NodeDef } from "../api.js";
 import { notifyPartialArtifacts } from "../audit.js";
 import { runFanout } from "../fanout.js";
-import { currentArtifactPath } from "../internal-utils.js";
+import { currentArtifactPath, withTimeout } from "../internal-utils.js";
 import {
 	ERR_INPUT_VALIDATION_FAILED,
 	ERR_MISSING_ARTIFACT,
+	ERR_SCHEMA_TIMEOUT,
 	ERR_SKILL_NOT_REGISTERED,
 	MSG_INPUT_VALIDATION_FAILED,
 	MSG_MISSING_ARTIFACT,
@@ -27,7 +28,13 @@ import {
 import { runFanoutSession, runStageSession } from "../sessions/index.js";
 import { readBranch } from "../transcript.js";
 import type { RunContext, RunnerCtx } from "../types.js";
-import { validateManifestData } from "../validate-manifest.js";
+import {
+	DEFAULT_VALIDATION_RETRY_TIMEOUT_MS,
+	MAX_VALIDATION_RETRY_TIMEOUT_MS,
+	MIN_VALIDATION_RETRY_TIMEOUT_MS,
+	type ValidationResult,
+	validateManifestData,
+} from "../validate-manifest.js";
 import { advanceChain } from "./chain-advance.js";
 
 export interface ResolvedStage {
@@ -251,17 +258,54 @@ function computeBranchOffset(curCtx: RunnerCtx, node: NodeDef): number | undefin
 
 async function ensureInputValid(stage: ResolvedStage, run: RunContext): Promise<void> {
 	if (!stage.node.inputSchema || run.state.manifest?.data === undefined) return;
-	const result = await validateManifestData(stage.node.inputSchema, run.state.manifest.data);
+	const timeoutMs = clampValidationTimeoutMs(stage.node.validationRetryTimeoutMs);
+	const prevSkill = run.state.manifest.meta.skill || "unknown";
+
+	let result: ValidationResult;
+	try {
+		result = await withTimeout(
+			Promise.resolve(validateManifestData(stage.node.inputSchema, run.state.manifest.data)),
+			timeoutMs,
+			ERR_SCHEMA_TIMEOUT("inputSchema", timeoutMs),
+		);
+	} catch (e) {
+		// Async schema rejected, or schema timed out. Same fatal-extraction
+		// posture as the outputSchema seam — surface as a halt-class
+		// StagePreflightError so the row attribution and notify message
+		// match every other preflight failure.
+		const reason = e instanceof Error ? e.message : String(e);
+		throw new StagePreflightError(
+			"halt",
+			stage.skill,
+			MSG_INPUT_VALIDATION_FAILED(stage.skill, prevSkill),
+			ERR_INPUT_VALIDATION_FAILED(stage.skill, prevSkill, reason),
+			true,
+		);
+	}
+
 	if (result.valid) return;
 
 	const failureSummary = result.failures.map((f) => `${f.path}: ${f.message}`).join("; ");
-	const prevSkill = run.state.manifest.meta.skill || "unknown";
 	throw new StagePreflightError(
 		"halt",
 		stage.skill,
 		MSG_INPUT_VALIDATION_FAILED(stage.skill, prevSkill),
 		ERR_INPUT_VALIDATION_FAILED(stage.skill, prevSkill, failureSummary),
 		true,
+	);
+}
+
+/**
+ * Mirror of the clamp in extraction.ts:retryUntilValid. Same defense-in-depth
+ * posture: validateWorkflow rejects out-of-range values at load, but
+ * programmatic callers that embed runWorkflow can bypass it; clamping here
+ * means a misconfigured node degrades to the spec-default behavior instead
+ * of firing a 100 ms timeout before a real I/O probe gets a chance to settle.
+ */
+function clampValidationTimeoutMs(raw: number | undefined): number {
+	return Math.max(
+		MIN_VALIDATION_RETRY_TIMEOUT_MS,
+		Math.min(raw ?? DEFAULT_VALIDATION_RETRY_TIMEOUT_MS, MAX_VALIDATION_RETRY_TIMEOUT_MS),
 	);
 }
 

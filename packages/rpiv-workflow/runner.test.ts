@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createMockPi, createMockSessionChain, mockAssistantMessage } from "@juicesharp/rpiv-test-utils";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CompletionStrategy, EdgeTarget, FanoutFn, NodeDef, Workflow } from "./api.js";
+import type { CompletionStrategy, EdgeTarget, FanoutFn, NodeDef, NodeSchema, Workflow } from "./api.js";
 import { definePredicate, defineStatePredicate, defineWorkflow, threshold } from "./api.js";
 import { runWorkflow } from "./runner/index.js";
 import { appendRoutingDecision, readRoutingDecisions } from "./state/index.js";
@@ -1044,6 +1044,37 @@ describe("runWorkflow", () => {
 			// Status line cleared
 			expect(chain.statusUpdates.at(-1)).toEqual({ key: "rpiv-workflow", value: undefined });
 		});
+
+		// inputSchema mirrors outputSchema's async-safety posture: an async
+		// schema whose Promise never settles must halt the stage within the
+		// configured budget rather than hang the preflight pipeline.
+		it("halts when an async inputSchema's Promise never settles within validationRetryTimeoutMs", async () => {
+			writeArtifact(tmpDir, ".rpiv/artifacts/research/r.md", "---\nfoo: 1\n---\n\nContent");
+			const chain = createMockSessionChain({
+				cwd: tmpDir,
+				steps: [{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/research/r.md")] }],
+			});
+
+			const hangingSchema: NodeSchema<unknown, unknown> = {
+				"~standard": {
+					version: 1,
+					vendor: "test-async",
+					validate: () => new Promise<never>(() => {}),
+				},
+			};
+
+			const result = await runWorkflow(chain.ctx, {
+				workflow: wf("two", ["research", "design"], {
+					design: { inputSchema: hangingSchema, validationRetryTimeoutMs: 1_000 },
+				}),
+				input: "x",
+			});
+
+			expect(result.success).toBe(false);
+			expect(result.error).toMatch(/inputSchema validation exceeded 1000ms/);
+			const { stages } = readState(tmpDir);
+			expect(stages[1]).toMatchObject({ skill: "design", status: "failed" });
+		}, 5_000);
 	});
 
 	describe("predicate routing (Phase 6)", () => {

@@ -503,6 +503,50 @@ describe("sessions — validation retry loop", () => {
 		expect(failedRows).toHaveLength(1);
 		expect(failedRows[0]?.skill).toBe("test");
 	});
+
+	// An async schema whose Promise never settles would otherwise hang the
+	// stage indefinitely — sync schemas can't hang, but I/O-backed schemas
+	// (fs probes, registry lookups, missing AbortSignal on fetch) can.
+	// `validationRetryTimeoutMs` is the same budget that bounds
+	// `askAgentToFix`; reusing it for the schema call keeps the public
+	// surface narrow and surfaces a clear schema-timeout message.
+	it("async schema that never settles halts via fatal-extraction within validationRetryTimeoutMs", async () => {
+		const chain = createMockSessionChain({
+			cwd: tmpDir,
+			steps: [{ branch: [mockAssistantMessage("done")] }],
+		});
+		const state = freshRunState();
+		const onSuccess = vi.fn(async () => {});
+		const onFailure = vi.fn();
+
+		const hangingSchema: NodeSchema<unknown, unknown> = {
+			"~standard": {
+				version: 1,
+				vendor: "test-async",
+				validate: () => new Promise<never>(() => {}),
+			},
+		};
+
+		await runStageSession(
+			chain.ctx as RunnerCtx,
+			stageSession({
+				cwd: tmpDir,
+				state,
+				node: node({
+					outputSchema: hangingSchema,
+					validationRetryTimeoutMs: 1_000,
+					outcome: scriptedOutcome([okPayload({ foo: 2 })]),
+				}),
+				onSuccess,
+				onFailure,
+			}),
+		);
+
+		expect(onSuccess).not.toHaveBeenCalled();
+		expect(onFailure).toHaveBeenCalledTimes(1);
+		expect(chain.notifications.some((n) => n.msg === MSG_STAGE_FAILED("test"))).toBe(true);
+		expect(state.termination.error).toMatch(/outputSchema validation exceeded 1000ms/);
+	}, 5_000);
 });
 
 // ---------------------------------------------------------------------------

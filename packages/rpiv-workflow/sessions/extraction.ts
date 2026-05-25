@@ -13,7 +13,7 @@ import type { NodeDef, NodeSchema } from "../api.js";
 import { nowIso } from "../audit.js";
 import { assertNever, withTimeout } from "../internal-utils.js";
 import { type ExtractCtx, type ExtractPayload, finalizeManifest, type Manifest, type Outcome } from "../manifest.js";
-import { MSG_VALIDATION_RETRY, MSG_VALIDATION_RETRY_PROMPT } from "../messages.js";
+import { ERR_SCHEMA_TIMEOUT, MSG_VALIDATION_RETRY, MSG_VALIDATION_RETRY_PROMPT } from "../messages.js";
 import { artifactMdOutcome, sideEffectOutcome } from "../outcomes/index.js";
 import { type BranchEntry, readBranch } from "../transcript.js";
 import type { RunnerCtx, StageSession } from "../types.js";
@@ -140,7 +140,7 @@ async function retryUntilValid(
 	);
 
 	let manifest = initial;
-	const initialValidation = await validateOrFatal(schema, manifest.data, s.skill);
+	const initialValidation = await validateOrFatal(schema, manifest.data, s.skill, timeoutMs);
 	if (initialValidation.kind === "fatal") return initialValidation;
 	let result = initialValidation.result;
 	let attempts = 0;
@@ -171,7 +171,7 @@ async function retryUntilValid(
 		}
 
 		manifest = reExtracted.manifest;
-		const reValidation = await validateOrFatal(schema, manifest.data, s.skill);
+		const reValidation = await validateOrFatal(schema, manifest.data, s.skill, timeoutMs);
 		if (reValidation.kind === "fatal") return reValidation;
 		result = reValidation.result;
 	}
@@ -190,14 +190,25 @@ async function retryUntilValid(
  * `haltStageWithExtractionError`, which attributes the row to `skill`, fires
  * MSG_STAGE_FAILED, and exits cleanly through the same path
  * validation-exhausted uses.
+ *
+ * Async schemas (filesystem probes, registry lookups, async-by-default libs)
+ * are guarded by `timeoutMs` — the same `validationRetryTimeoutMs` budget
+ * that bounds the agent-settle step on a retry. A schema whose Promise
+ * never settles surfaces as fatal-extraction with the schema-timeout
+ * message; sync schemas resolve in one microtask and never trip it.
  */
 async function validateOrFatal(
 	schema: NodeSchema,
 	data: unknown,
 	skill: string,
+	timeoutMs: number,
 ): Promise<{ kind: "ok"; result: ValidationResult } | { kind: "fatal"; message: string }> {
 	try {
-		const result = await validateManifestData(schema, data);
+		const result = await withTimeout(
+			Promise.resolve(validateManifestData(schema, data)),
+			timeoutMs,
+			ERR_SCHEMA_TIMEOUT("outputSchema", timeoutMs),
+		);
 		return { kind: "ok", result };
 	} catch (e) {
 		const reason = e instanceof Error ? e.message : String(e);

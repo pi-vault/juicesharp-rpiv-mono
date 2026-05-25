@@ -56,6 +56,17 @@ export const MSG_INPUT_VALIDATION_FAILED = (currentSkill: string, prevSkill: str
 export const ERR_INPUT_VALIDATION_FAILED = (currentSkill: string, prevSkill: string, failures: string) =>
 	`Input validation failed for '${currentSkill}': upstream '${prevSkill}' produced invalid data: ${failures}`;
 
+/**
+ * Bound on a single schema-validate call. Sync schemas resolve in one
+ * microtask and never trip this; async schemas (filesystem probes, registry
+ * lookups, async-by-default libs) that fail to settle within
+ * `validationRetryTimeoutMs` halt the stage rather than hang it. Skill
+ * attribution is added by the caller's fatal-extraction wrapper, so the
+ * factory itself doesn't repeat the skill prefix.
+ */
+export const ERR_SCHEMA_TIMEOUT = (slot: "outputSchema" | "inputSchema", ms: number) =>
+	`${slot} validation exceeded ${ms}ms — schema's ~standard.validate did not settle`;
+
 export const MSG_MISSING_ARTIFACT = (currentSkill: string) =>
 	`✗ ${currentSkill} has no upstream artifact to consume — stopping workflow`;
 export const ERR_MISSING_ARTIFACT = (currentSkill: string, stageNumber: number) =>
