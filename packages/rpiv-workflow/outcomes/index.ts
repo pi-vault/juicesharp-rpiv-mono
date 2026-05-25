@@ -5,7 +5,8 @@
  * `.rpiv/artifacts/<bucket>/<file>.md` layout is an rpiv-pi convention,
  * not a framework truth. rpiv-pi ships its own `rpivArtifactMdOutcome`
  * (and `rpivArtifactResolver` / `rpivBucketResolver` helpers) built on
- * top of the framework primitives.
+ * top of the framework primitives re-exported from `./resolvers` and
+ * `./readers`.
  */
 
 export {
@@ -16,4 +17,6 @@ export {
 	gitCommitResolver,
 	gitHeadSnapshot,
 } from "./git-commit.js";
+export * from "./readers/index.js";
+export * from "./resolvers/index.js";
 export { noopResolver, sideEffectOutcome } from "./side-effect.js";

@@ -45,12 +45,20 @@
  *      `Artifact`, `ArtifactHandle` + constructors `fs`/`url`/
  *      `opaque`/`inline`/`handleToString`) + bundled outcomes
  *      (`sideEffectOutcome`, `gitCommitOutcome`, `GitCommitData`,
- *      `gitHeadSnapshot`, `GitHeadSnapshot`) + the standalone
- *      primitives they're built from (`noopResolver`,
- *      `gitCommitResolver`, `gitCommitReader`). The
- *      `.rpiv/artifacts/<bucket>/<file>.md` outcome lives in
- *      `@juicesharp/rpiv-pi` as `rpivArtifactMdOutcome` — it's an rpiv
- *      convention, not a framework default.
+ *      `gitHeadSnapshot`, `GitHeadSnapshot`) + the bundled
+ *      resolver/reader catalog wireable into any custom `Outcome`:
+ *        - resolvers: `transcriptPathResolver` (regex over assistant
+ *          text), `toolCallResolver` (universal tool_use observer),
+ *          `workspaceDiffResolver` (git status diff pre/post),
+ *          `gitCommitResolver` (commit detection), the wrappers
+ *          `directoryPathResolver` / `urlResolver`, plus composition
+ *          `unionResolvers` and the empty-list primitive `noopResolver`.
+ *        - readers: `jsonBodyReader` (parses primary fs body),
+ *          `gitCommitReader`.
+ *      The `.rpiv/artifacts/<bucket>/<file>.md` outcome + the
+ *      markdown-frontmatter reader live in `@juicesharp/rpiv-pi`
+ *      (`rpivArtifactMdOutcome` / `frontmatterReader`) — those are
+ *      rpiv conventions, not framework defaults.
  *
  *   6. Custom-outcome authoring surface — `./manifest.js`
  *      `Outcome<Baseline, Kind, Data>` (resolver + optional reader),
@@ -158,14 +166,28 @@ export type {
 } from "./manifest.js";
 export { defineReader, defineResolver } from "./outcome-types.js";
 export {
+	type DirectoryPathResolverOpts,
+	directoryPathResolver,
 	type GitCommitData,
 	type GitHeadSnapshot,
 	gitCommitOutcome,
 	gitCommitReader,
 	gitCommitResolver,
 	gitHeadSnapshot,
+	jsonBodyReader,
 	noopResolver,
 	sideEffectOutcome,
+	type ToolCall,
+	type ToolCallResolverOpts,
+	type TranscriptPathResolverOpts,
+	toolCallResolver,
+	transcriptPathResolver,
+	type UrlResolverOpts,
+	unionResolvers,
+	urlResolver,
+	type WorkspaceDiffBaseline,
+	type WorkspaceDiffResolverOpts,
+	workspaceDiffResolver,
 } from "./outcomes/index.js";
 export { type RunWorkflowOptions, type RunWorkflowResult, runWorkflow } from "./runner/index.js";
 export {

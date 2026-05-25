@@ -6,9 +6,10 @@
  * through it.
  *
  * No artifact-path scanning lives here — discovery is the resolver's
- * job (see `outcome-types.ts:ArtifactResolver`). Resolvers that scan
- * the transcript text for paths (e.g. rpiv-pi's `rpivArtifactResolver`)
- * walk this shape themselves.
+ * job (see `outcome-types.ts:ArtifactResolver`). Resolvers that scan the
+ * transcript (`transcriptPathResolver`, `urlResolver`, `toolCallResolver`,
+ * …) walk this shape themselves; `lastMatchInBranch` is the shared
+ * "find the last regex match in assistant text" helper they reuse.
  */
 
 /** Mirror of pi-ai's StopReason union — values pi attaches to AssistantMessage. */
@@ -27,11 +28,28 @@ export function classifyStop(branch: BranchEntry[], offsetStart?: number): StopS
 	return lastAssistantStopReason(branch, offsetStart) ?? "stop";
 }
 
+/**
+ * One content part inside an assistant message. Pi's internal union
+ * carries more variants than these two; we model the ones resolvers
+ * walk over and let unknown parts pass through structurally (every
+ * field besides `type` is optional).
+ *
+ *   - `text` parts carry user-visible markdown via `text`.
+ *   - `tool_use` parts carry a tool invocation: `name` + `input` (the
+ *     JSON object the agent called the tool with).
+ */
+export type BranchContentPart = {
+	type: string;
+	text?: string;
+	name?: string;
+	input?: Record<string, unknown>;
+};
+
 export type BranchEntry = {
 	type: string;
 	message?: {
 		role?: string;
-		content?: Array<{ type: string; text?: string }>;
+		content?: BranchContentPart[];
 		stopReason?: StopReason;
 	};
 };
@@ -70,4 +88,69 @@ export function lastAssistantStopReason(branch: BranchEntry[], offsetStart?: num
 		return entry.message.stopReason;
 	}
 	return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Shared resolver building blocks
+// ---------------------------------------------------------------------------
+
+/**
+ * Scan assistant text blocks in reverse for `pattern`; return the last
+ * match. Pure — no I/O. Used by `transcriptPathResolver`, `urlResolver`,
+ * and any author building a transcript-scan resolver.
+ *
+ * Reverse scan because the agent's final message is usually where the
+ * actionable path/URL lands; iterating from the tail short-circuits on
+ * the first hit. Thinking/tool_use blocks are ignored — only spoken
+ * `text` parts count.
+ *
+ * `offsetStart` — continue-policy stages pass the prior branch length
+ * so prior-stage entries don't leak into the result.
+ *
+ * The pattern's flags are caller-owned. `g` makes `String.match` return
+ * every occurrence (this helper takes the last); without `g`, only the
+ * first match in each block is considered. Both shapes work.
+ */
+export function lastMatchInBranch(branch: BranchEntry[], pattern: RegExp, offsetStart?: number): string | undefined {
+	const start = Math.max(offsetStart ?? 0, 0);
+	for (let i = branch.length - 1; i >= start; i--) {
+		const entry = branch[i]!;
+		if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+		const content = entry.message.content;
+		if (!Array.isArray(content)) continue;
+		for (let j = content.length - 1; j >= 0; j--) {
+			const part = content[j]!;
+			if (part.type === "text" && typeof part.text === "string") {
+				const matches = part.text.match(pattern);
+				if (matches && matches.length > 0) return matches[matches.length - 1];
+			}
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Yield every tool_use part the assistant emitted in branch order
+ * (forward — the typical "what did the agent do during this stage?"
+ * scan direction). Pure — no I/O. `toolCallResolver` walks this to
+ * apply the author's match/toHandle pair.
+ *
+ * `offsetStart` — continue-policy stages pass the prior branch length.
+ */
+export function* iterToolUses(
+	branch: BranchEntry[],
+	offsetStart?: number,
+): Generator<{ name: string; input: Record<string, unknown> }> {
+	const start = Math.max(offsetStart ?? 0, 0);
+	for (let i = start; i < branch.length; i++) {
+		const entry = branch[i]!;
+		if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+		const content = entry.message.content;
+		if (!Array.isArray(content)) continue;
+		for (const part of content) {
+			if (part.type !== "tool_use") continue;
+			if (typeof part.name !== "string") continue;
+			yield { name: part.name, input: part.input ?? {} };
+		}
+	}
 }
