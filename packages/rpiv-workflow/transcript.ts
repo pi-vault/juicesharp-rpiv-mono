@@ -4,9 +4,12 @@
  * all re-exported; `readBranch(ctx)` is the single boundary that applies
  * the `as unknown as` cast — every consumer in the workflow module goes
  * through it.
+ *
+ * No artifact-path scanning lives here — discovery is the resolver's
+ * job (see `outcome-types.ts:ArtifactResolver`). Resolvers that scan
+ * the transcript text for paths (e.g. rpiv-pi's `rpivArtifactResolver`)
+ * walk this shape themselves.
  */
-
-import { ARTIFACT_PATH_REGEX_SOURCE } from "./artifacts-layout.js";
 
 /** Mirror of pi-ai's StopReason union — values pi attaches to AssistantMessage. */
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
@@ -46,40 +49,6 @@ export type BranchEntry = {
  */
 export function readBranch(ctx: { sessionManager: { getBranch(): unknown } }): BranchEntry[] {
 	return ctx.sessionManager.getBranch() as unknown as BranchEntry[];
-}
-
-/** Source lives in `artifacts-layout.ts` — single layout authority. */
-const ARTIFACT_PATH_REGEX = new RegExp(ARTIFACT_PATH_REGEX_SOURCE, "g");
-
-/**
- * Last `.rpiv/artifacts/...` mentioned in assistant text content. Scans
- * messages + blocks in reverse. Thinking/tool_call blocks ignored —
- * artifact paths the user is meant to consume only appear in spoken text.
- *
- * `offsetStart` — continue stages pass the prior branch length so prior-
- * stage entries don't leak into the result.
- */
-export function extractArtifactPath(branch: BranchEntry[], offsetStart?: number): string | undefined {
-	const start = Math.max(offsetStart ?? 0, 0);
-	for (let i = branch.length - 1; i >= start; i--) {
-		const entry = branch[i]!;
-		if (entry.type !== "message") continue;
-		if (!entry.message || entry.message.role !== "assistant") continue;
-
-		const content = entry.message.content;
-		if (!Array.isArray(content)) continue;
-
-		for (let j = content.length - 1; j >= 0; j--) {
-			const part = content[j]!;
-			if (part.type === "text" && part.text) {
-				const matches = part.text.match(ARTIFACT_PATH_REGEX);
-				if (matches && matches.length > 0) {
-					return matches[matches.length - 1];
-				}
-			}
-		}
-	}
-	return undefined;
 }
 
 export function hasAssistantMessage(branch: BranchEntry[], offsetStart?: number): boolean {

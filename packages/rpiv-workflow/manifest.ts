@@ -1,14 +1,16 @@
 /**
- * Manifest types — the inter-stage data channel. A manifest is produced
- * by an outcome's `extract` (not authored by the agent), flows through
- * RunState, and is persisted to the JSONL audit log.
+ * Manifest envelope — the inter-stage data channel a stage's resolver +
+ * reader produce on settlement. Flows through `RunState`, persists to
+ * the JSONL audit log, and is read by downstream predicates / nodes.
  *
  * Audience: predicate authors and downstream-node authors reading
- * `manifest.data`. The outcome authoring surface (the API a custom
- * `Outcome` implements) lives in `outcome-types.ts`.
+ * `manifest.artifacts` (the storage references) and `manifest.data`
+ * (the typed channel a reader shaped). The producer-side surface
+ * (`ArtifactResolver` / `ArtifactReader` / `Outcome`) lives in
+ * `outcome-types.ts`.
  */
 
-import type { ExtractPayload } from "./outcome-types.js";
+import type { Artifact } from "./handle.js";
 import type { GitCommitData } from "./outcomes/git-commit.js";
 
 // ---------------------------------------------------------------------------
@@ -25,55 +27,69 @@ export interface ManifestMeta {
 	runId: string;
 }
 
+/**
+ * One stage's contribution to the chain. `artifacts` is always present
+ * (possibly empty for side-effect stages); `data` is whatever the reader
+ * shaped (or the artifact list itself when no reader is wired).
+ *
+ * `kind` discriminates the data shape so downstream consumers narrow
+ * via `manifest.kind === "git-commit"` etc. The literal `"artifacts"`
+ * is the default reader-less shape.
+ */
 export interface Manifest<K extends string = string, D = unknown> {
 	kind: K;
-	/** Present when the stage produced a file consumable by downstream stages. */
-	artifact_path?: string;
+	artifacts: readonly Artifact[];
 	data: D;
 	meta: ManifestMeta;
 }
 
 // ---------------------------------------------------------------------------
-// Built-in manifest kinds
+// Built-in manifest kind aliases
 //
-// Aliases enable consumer-side tagged-union narrowing on `manifest.kind` —
-// the value of the abstraction is the narrowing pattern, not the count of
-// current importers. Data shapes live with their producing outcomes;
-// `GitCommitData` is sourced from `outcomes/git-commit.ts` (type-only
-// import — no runtime cycle).
+// Tagged-union narrowing convenience for consumers. Data shapes live
+// with their producing outcomes; `GitCommitData` is type-only imported
+// from `outcomes/git-commit.ts` (no runtime cycle).
 // ---------------------------------------------------------------------------
 
-export type ArtifactMdManifest = Manifest<"artifact-md", Record<string, unknown>>;
+export type ArtifactsManifest = Manifest<"artifacts", readonly Artifact[]>;
 export type SideEffectManifest = Manifest<"side-effect", Record<string, never>>;
 export type GitCommitManifest = Manifest<"git-commit", GitCommitData>;
 
 // ---------------------------------------------------------------------------
-// Outcome types — re-exported here so consumers can `import { Outcome,
-// ExtractCtx, ... } from "../manifest.js"` without rewriting every site.
-// The canonical definitions live in `outcome-types.ts`; new code can
-// import from there directly.
+// Outcome types — re-exported so consumers can `import { Outcome,
+// ResolveCtx, ... } from "../manifest.js"` without rewriting every
+// site. Canonical definitions live in `outcome-types.ts`.
 // ---------------------------------------------------------------------------
 
 export type {
+	ArtifactReader,
+	ArtifactResolver,
 	BaselineCtx,
 	BaselineFn,
-	ExtractCtx,
-	ExtractFn,
-	ExtractPayload,
-	ExtractResult,
 	Outcome,
+	ReadCtx,
+	ReadResult,
+	ResolveCtx,
+	ResolveResult,
 } from "./outcome-types.js";
 
 // ---------------------------------------------------------------------------
 // Manifest construction
 // ---------------------------------------------------------------------------
 
-/** Single source of manifest metadata authorship. */
-export function finalizeManifest(payload: ExtractPayload, meta: ManifestMeta): Manifest {
+/**
+ * Single source of manifest metadata authorship. The runner calls this
+ * after a stage's resolver returned `artifacts` and the reader (or
+ * reader-less default) returned `{ kind, data }`.
+ */
+export function finalizeManifest<K extends string, D>(
+	args: { kind: K; artifacts: readonly Artifact[]; data: D },
+	meta: ManifestMeta,
+): Manifest<K, D> {
 	return {
-		kind: payload.kind,
-		artifact_path: payload.artifact_path,
-		data: payload.data,
+		kind: args.kind,
+		artifacts: args.artifacts,
+		data: args.data,
 		meta,
 	};
 }

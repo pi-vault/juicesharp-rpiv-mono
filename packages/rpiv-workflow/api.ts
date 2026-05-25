@@ -48,7 +48,7 @@ export type NodeSchema<Input = unknown, Output = Input> = StandardSchemaV1<Input
  * - `"artifact-emit"` — protocol skills that write `.rpiv/artifacts/<bucket>/<file>.md`.
  *   The runner halts the chain if the path doesn't appear in the transcript.
  * - `"agent-end"` — action skills (commit, implement) where the side effect IS
- *   the work; the chain inherits the prior `currentArtifactPath(state)`.
+ *   the work; the chain inherits the prior `currentPrimaryArtifact(state)`.
  *
  * The `as const` array is the single source of truth: the literal-union type
  * is derived via `(typeof ARRAY)[number]`, and `validate-workflow.ts` consumes
@@ -100,12 +100,14 @@ export type FanoutFn = (ctx: FanoutContext) => readonly FanoutUnit[] | Promise<r
 export interface FanoutContext {
 	cwd: string;
 	/**
-	 * Artifact path inherited from the upstream stage (or undefined when the
-	 * fanout node is the entry point). FanoutFns that need to read an upstream
-	 * artifact short-circuit to `[]` when undefined — the runner treats that
-	 * as "no fanout" and runs the single-stage path.
+	 * Primary artifact inherited from the upstream stage (or undefined when
+	 * the fanout node is the entry point). FanoutFns that need to read an
+	 * upstream artifact short-circuit to `[]` when undefined — the runner
+	 * treats that as "no fanout" and runs the single-stage path. The
+	 * handle's serialized form (path / URL / opaque id) is what most
+	 * FanoutFns weave into their per-unit prompt body.
 	 */
-	artifactPath: string | undefined;
+	artifact: import("./handle.js").Artifact | undefined;
 	state: Readonly<RunState>;
 }
 

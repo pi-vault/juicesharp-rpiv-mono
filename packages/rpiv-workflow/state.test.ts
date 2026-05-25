@@ -88,14 +88,12 @@ describe("writeHeader + readAllStages + readLastStage", () => {
 		const stage1: WorkflowStage = {
 			stageNumber: 1,
 			skill: "discover",
-			artifact: ".rpiv/artifacts/discover/frd.md",
 			status: "completed",
 			ts: "2026-05-20T15:31:00-0400",
 		};
 		const stage2: WorkflowStage = {
 			stageNumber: 2,
 			skill: "research",
-			artifact: ".rpiv/artifacts/research/res.md",
 			status: "completed",
 			ts: "2026-05-20T15:35:00-0400",
 		};
@@ -130,7 +128,7 @@ describe("writeHeader + readAllStages + readLastStage", () => {
 
 		const last = readLastStage(tmpDir, runId);
 		expect(last).toEqual(failed);
-		expect(last?.artifact).toBeUndefined();
+		expect(last?.manifest).toBeUndefined();
 	});
 });
 
@@ -298,29 +296,36 @@ describe("listRuns", () => {
 });
 
 describe("listArtifacts", () => {
-	it("projects stage rows that carry an artifact into {skill, artifact} pairs", () => {
+	const mkManifest = (artifacts: Array<{ kind: "fs"; path: string }>) => ({
+		kind: "artifact-md",
+		artifacts: artifacts.map((handle) => ({ handle })),
+		data: {},
+		meta: { skill: "x", stageNumber: 1, ts: "2026", runId: "x" },
+	});
+
+	it("projects every artifact across stage rows (one entry per artifact, in stage order)", () => {
 		const runId = "artifacts-run";
 		writeHeader(tmpDir, { runId, workflow: "mid", input: "x", ts: "2026" });
 		appendStage(tmpDir, runId, {
 			stageNumber: 1,
 			skill: "research",
-			artifact: ".rpiv/artifacts/research/r.md",
 			status: "completed",
 			ts: "2026",
+			manifest: mkManifest([{ kind: "fs", path: ".rpiv/artifacts/research/r.md" }]),
 		});
-		// Stage without an artifact — should NOT appear in the list.
+		// Stage without artifacts — should NOT appear in the list.
 		appendStage(tmpDir, runId, { stageNumber: 2, skill: "commit", status: "completed", ts: "2026" });
 		appendStage(tmpDir, runId, {
 			stageNumber: 3,
 			skill: "design",
-			artifact: ".rpiv/artifacts/design/d.md",
 			status: "completed",
 			ts: "2026",
+			manifest: mkManifest([{ kind: "fs", path: ".rpiv/artifacts/design/d.md" }]),
 		});
 
 		expect(listArtifacts(tmpDir, runId)).toEqual([
-			{ skill: "research", artifact: ".rpiv/artifacts/research/r.md" },
-			{ skill: "design", artifact: ".rpiv/artifacts/design/d.md" },
+			{ skill: "research", artifact: { handle: { kind: "fs", path: ".rpiv/artifacts/research/r.md" } } },
+			{ skill: "design", artifact: { handle: { kind: "fs", path: ".rpiv/artifacts/design/d.md" } } },
 		]);
 	});
 

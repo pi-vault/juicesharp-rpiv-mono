@@ -103,12 +103,10 @@ describe("action", () => {
 	});
 
 	it("attaches an Outcome when supplied (commit-style nodes)", () => {
-		const captured: unknown[] = [];
 		const outcome: Outcome = {
-			baseline: () => "pre-state",
-			extract: (ctx) => {
-				captured.push(ctx.baseline);
-				return { kind: "ok", payload: { kind: "test", data: {} } };
+			resolver: {
+				baseline: () => "pre-state",
+				resolve: () => ({ kind: "ok", artifacts: [] }),
 			},
 		};
 		const n = action({ outcome });
@@ -127,6 +125,7 @@ describe("threshold", () => {
 		({
 			manifest: {
 				kind: "artifact-md",
+				artifacts: [],
 				data: { severeIssueCount: n },
 				meta: { skill: "code-review", stageNumber: 1, ts: "", runId: "" },
 			},
@@ -146,6 +145,7 @@ describe("threshold", () => {
 			pick({
 				manifest: {
 					kind: "artifact-md",
+					artifacts: [],
 					data: {},
 					meta: { skill: "code-review", stageNumber: 1, ts: "", runId: "" },
 				},
@@ -163,6 +163,7 @@ describe("threshold", () => {
 			pick({
 				manifest: {
 					kind: "artifact-md",
+					artifacts: [],
 					data: { severeIssueCount: "not a number" },
 					meta: { skill: "code-review", stageNumber: 1, ts: "", runId: "" },
 				},
@@ -192,7 +193,12 @@ describe("definePredicate", () => {
 		);
 		expect(
 			fn({
-				manifest: { kind: "test", data: { ok: true }, meta: { skill: "x", stageNumber: 1, ts: "", runId: "" } },
+				manifest: {
+					kind: "test",
+					artifacts: [],
+					data: { ok: true },
+					meta: { skill: "x", stageNumber: 1, ts: "", runId: "" },
+				},
 				state: {} as never,
 			}),
 		).toBe("good");

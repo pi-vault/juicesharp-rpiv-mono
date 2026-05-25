@@ -17,6 +17,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import type { Artifact } from "../handle.js";
 import { resolveStateFile, resolveWorkflowsDir } from "./paths.js";
 import type { RoutingDecision, RunSummary, WorkflowHeader, WorkflowStage } from "./state.js";
 
@@ -92,16 +93,21 @@ export function readRoutingDecisions(cwd: string, runId: string): RoutingDecisio
 }
 
 /**
- * Project a run's stage rows to the (skill, artifact) pairs that actually
- * carried an artifact. Used by `notifyPartialArtifacts` for the failure
- * recap and by past-runs UIs (the `listRuns` API) for run summaries —
- * extracting it keeps the "filter + project" data step reusable without
- * the notify side effect.
+ * Project a run's stage rows to the (skill, artifact) pairs that
+ * actually carried at least one artifact. One entry per artifact —
+ * stages with multi-artifact resolvers expand to N entries. Used by
+ * `notifyPartialArtifacts` for the failure recap and by past-runs UIs
+ * (the `listRuns` API) for run summaries.
+ *
+ * Reads from `manifest.artifacts` (single source); rows without a
+ * manifest, or with an empty artifacts list, contribute nothing.
  */
-export function listArtifacts(cwd: string, runId: string): Array<{ skill: string; artifact: string }> {
-	const out: Array<{ skill: string; artifact: string }> = [];
+export function listArtifacts(cwd: string, runId: string): Array<{ skill: string; artifact: Artifact }> {
+	const out: Array<{ skill: string; artifact: Artifact }> = [];
 	for (const s of readAllStages(cwd, runId)) {
-		if (s.artifact) out.push({ skill: s.skill, artifact: s.artifact });
+		const artifacts = s.manifest?.artifacts;
+		if (!artifacts) continue;
+		for (const artifact of artifacts) out.push({ skill: s.skill, artifact });
 	}
 	return out;
 }

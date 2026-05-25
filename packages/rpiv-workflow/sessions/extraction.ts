@@ -1,20 +1,28 @@
 /**
- * Manifest extraction + validation retry loop. Sits between the
+ * Manifest production + validation retry loop. Sits between the
  * post-session classifier (which decides "stage finished cleanly?") and
  * the persistence helpers ("record this stage").
  *
- * Public entry: `extractAndValidateManifest`. Returns a tagged outcome
- * — `ok` with the manifest, `fatal` (halt with a wording the outcome
- * supplied), or `validation-exhausted` (halt after the retry budget
- * tripped without a passing schema).
+ * Public entry: `produceAndValidateManifest`. Returns a tagged outcome
+ * — `ok` with the manifest, `fatal` (halt with a wording the
+ * resolver/reader supplied), or `validation-exhausted` (halt after the
+ * retry budget tripped without a passing schema).
+ *
+ * The two-step contract:
+ *   1. `outcome.resolver.resolve(ctx)` — enumerate artifacts.
+ *   2. `outcome.reader?.read(ctx)`     — shape the typed data channel
+ *                                        (default: data = artifacts,
+ *                                        kind = "artifacts").
  */
 
 import type { NodeDef, NodeSchema } from "../api.js";
 import { nowIso } from "../audit.js";
+import type { Artifact } from "../handle.js";
 import { assertNever, withTimeout } from "../internal-utils.js";
-import { type ExtractCtx, type ExtractPayload, finalizeManifest, type Manifest, type Outcome } from "../manifest.js";
+import { finalizeManifest, type Manifest } from "../manifest.js";
 import { ERR_SCHEMA_TIMEOUT, MSG_VALIDATION_RETRY, MSG_VALIDATION_RETRY_PROMPT } from "../messages.js";
-import { artifactMdOutcome, sideEffectOutcome } from "../outcomes/index.js";
+import type { Outcome, ResolveCtx } from "../outcome-types.js";
+import { sideEffectOutcome } from "../outcomes/index.js";
 import { type BranchEntry, readBranch } from "../transcript.js";
 import type { RunnerCtx, StageSession } from "../types.js";
 import {
@@ -30,37 +38,53 @@ import {
 } from "../validate-manifest.js";
 import { handlerFor } from "./spawn.js";
 
-export type ExtractionOutcome =
-	| { kind: "ok"; manifest: Manifest | undefined }
+export type ManifestProduction =
+	| { kind: "ok"; manifest: Manifest }
 	| { kind: "fatal"; message: string }
 	| { kind: "validation-exhausted"; failureSummary: string };
 
-/** Retry loop re-extracts against the latest branch after each fix request — `retryUntilValid` reads the branch directly. */
-export async function extractAndValidateManifest(
+/** Retry loop re-produces against the latest branch after each fix request. */
+export async function produceAndValidateManifest(
 	ctx: RunnerCtx,
 	s: StageSession,
 	branch: BranchEntry[],
 	branchOffset: number | undefined,
-): Promise<ExtractionOutcome> {
-	const outcome = resolveOutcome(s.node);
-	const extractCtx = buildExtractCtx(s, branch, branchOffset);
-	const finalize = (payload: ExtractPayload) => wrapManifest(s, payload);
+): Promise<ManifestProduction> {
+	const outcome = resolveOutcome(s.node, s.skill);
+	const resolveCtx = buildResolveCtx(s, branch, branchOffset);
+	const finalize = (parts: { kind: string; artifacts: readonly Artifact[]; data: unknown }) => wrapManifest(s, parts);
 
-	const first = await runExtract(outcome, extractCtx, finalize);
+	const first = await runOutcome(outcome, resolveCtx, finalize);
 	if (first.kind === "fatal") return first;
-	if (!shouldValidateOutput(s.node, first.manifest)) return first;
+	const initialManifest = enforceCompletionContract(s.node, s.skill, first.manifest);
+	if (initialManifest.kind === "fatal") return initialManifest;
 
-	return retryUntilValid(ctx, s, { outcome, extractCtx, finalize }, first.manifest);
+	if (!shouldValidateOutput(s.node, initialManifest.manifest)) return initialManifest;
+
+	return retryUntilValid(ctx, s, { outcome, resolveCtx, finalize }, initialManifest.manifest);
 }
 
-/** Explicit override > default-by-completionStrategy. Exhaustive — assertNever lights future variants. */
-function resolveOutcome(node: NodeDef): Outcome {
+/**
+ * Explicit `node.outcome` wins. Defaults:
+ *  - `agent-end`     → `sideEffectOutcome` (universal — emits empty artifacts).
+ *  - `artifact-emit` → throws. There is no framework-wide default; the
+ *    `.rpiv/artifacts/<bucket>/<file>.md` layout is an rpiv-pi convention
+ *    and lives in that package. `validate-workflow.ts` rejects this at
+ *    load time; the runtime throw is defense-in-depth for programmatic
+ *    embedders that bypassed validation.
+ */
+function resolveOutcome(node: NodeDef, skill: string): Outcome {
 	if (node.outcome) return node.outcome;
 	switch (node.completionStrategy) {
-		case "artifact-emit":
-			return artifactMdOutcome;
 		case "agent-end":
 			return sideEffectOutcome;
+		case "artifact-emit":
+			throw new Error(
+				`runStage: node "${skill}" has completionStrategy "artifact-emit" but no \`outcome\` — ` +
+					"there is no framework default for artifact-emit nodes (the `.rpiv/artifacts/` layout is " +
+					"an rpiv-pi convention). Either wire `outcome: rpivArtifactMdOutcome` (from @juicesharp/rpiv-pi) " +
+					"or supply your own `{ resolver, reader? }`.",
+			);
 		default:
 			return assertNever(node.completionStrategy);
 	}
@@ -69,12 +93,11 @@ function resolveOutcome(node: NodeDef): Outcome {
 /**
  * L6-05 contract: `branch` is always the FULL unsliced branch and
  * `branchOffset` is always the policy-derived offset (continue → the
- * stage's captured offset; fresh → undefined). Extractors slice on
- * demand via the `offsetStart` parameter on `extractArtifactPath`. The
- * initial extraction and the retry path use the same offset value — the
- * closed-I4 defect can't re-introduce.
+ * stage's captured offset; fresh → undefined). Resolvers slice on
+ * demand via the `branchOffset` field. Initial production and retry
+ * production use the same offset value.
  */
-function buildExtractCtx(s: StageSession, branch: BranchEntry[], branchOffset: number | undefined): ExtractCtx {
+function buildResolveCtx(s: StageSession, branch: BranchEntry[], branchOffset: number | undefined): ResolveCtx {
 	return {
 		cwd: s.cwd,
 		runId: s.runId,
@@ -87,8 +110,11 @@ function buildExtractCtx(s: StageSession, branch: BranchEntry[], branchOffset: n
 	};
 }
 
-function wrapManifest(s: StageSession, payload: ExtractPayload): Manifest {
-	return finalizeManifest(payload, {
+function wrapManifest(
+	s: StageSession,
+	parts: { kind: string; artifacts: readonly Artifact[]; data: unknown },
+): Manifest {
+	return finalizeManifest(parts, {
 		skill: s.skill,
 		stageNumber: s.state.lastAllocatedStageNumber + 1,
 		ts: nowIso(),
@@ -96,24 +122,69 @@ function wrapManifest(s: StageSession, payload: ExtractPayload): Manifest {
 	});
 }
 
-async function runExtract(
+type RunOutcomeResult = { kind: "ok"; manifest: Manifest } | { kind: "fatal"; message: string };
+
+/**
+ * The resolver → reader pipeline. When `reader` is omitted, the
+ * manifest emits `kind: "artifacts"` with `data = artifacts` — a node
+ * that only needs to enumerate doesn't have to write a reader.
+ */
+async function runOutcome(
 	outcome: Outcome,
-	extractCtx: ExtractCtx,
-	finalize: (p: ExtractPayload) => Manifest,
-): Promise<{ kind: "ok"; manifest: Manifest | undefined } | { kind: "fatal"; message: string }> {
-	const result = await outcome.extract(extractCtx);
-	if (result.kind === "fatal") return result;
-	return { kind: "ok", manifest: result.payload ? finalize(result.payload) : undefined };
+	ctx: ResolveCtx,
+	finalize: (parts: { kind: string; artifacts: readonly Artifact[]; data: unknown }) => Manifest,
+): Promise<RunOutcomeResult> {
+	const resolved = await outcome.resolver.resolve(ctx);
+	if (resolved.kind === "fatal") return resolved;
+
+	if (!outcome.reader) {
+		return {
+			kind: "ok",
+			manifest: finalize({ kind: "artifacts", artifacts: resolved.artifacts, data: resolved.artifacts }),
+		};
+	}
+
+	const read = await outcome.reader.read({ ...ctx, artifacts: resolved.artifacts });
+	if (read.kind === "fatal") return read;
+	return {
+		kind: "ok",
+		manifest: finalize({
+			kind: read.payload.kind,
+			artifacts: resolved.artifacts,
+			data: read.payload.data,
+		}),
+	};
 }
 
-function shouldValidateOutput(node: NodeDef, manifest: Manifest | undefined): manifest is Manifest {
-	return !!(node.outputSchema && manifest?.data);
+/**
+ * Contract check: artifact-emit stages MUST produce at least one
+ * artifact. The resolver/reader pair can succeed structurally
+ * (kind: "ok") with zero artifacts — that's a chain halt for
+ * artifact-emit (the stage promised an output and didn't deliver)
+ * but a normal pass-through for agent-end.
+ */
+function enforceCompletionContract(
+	node: NodeDef,
+	skill: string,
+	manifest: Manifest,
+): { kind: "ok"; manifest: Manifest } | { kind: "fatal"; message: string } {
+	if (node.completionStrategy === "artifact-emit" && manifest.artifacts.length === 0) {
+		return {
+			kind: "fatal",
+			message: `${skill} finished without producing any artifact (resolver returned an empty list)`,
+		};
+	}
+	return { kind: "ok", manifest };
+}
+
+function shouldValidateOutput(node: NodeDef, manifest: Manifest): boolean {
+	return !!(node.outputSchema && manifest.data !== undefined);
 }
 
 interface RetryDeps {
 	outcome: Outcome;
-	extractCtx: ExtractCtx;
-	finalize: (p: ExtractPayload) => Manifest;
+	resolveCtx: ResolveCtx;
+	finalize: (parts: { kind: string; artifacts: readonly Artifact[]; data: unknown }) => Manifest;
 }
 
 async function retryUntilValid(
@@ -121,15 +192,8 @@ async function retryUntilValid(
 	s: StageSession,
 	deps: RetryDeps,
 	initial: Manifest,
-): Promise<ExtractionOutcome> {
+): Promise<ManifestProduction> {
 	const schema = s.node.outputSchema!;
-	// Defense-in-depth: validateWorkflow's checkNodeSemantics already errors
-	// on out-of-range values and command.ts blocks execution on errors, so
-	// the runtime should never see them. The lower clamps cover the path
-	// where a caller programmatically embeds runWorkflow without going
-	// through loadWorkflows. Without them, `maxValidationRetries: -1`
-	// silently disables retries and a 100 ms timeout fires before the agent
-	// emits its first token.
 	const maxRetries = Math.max(
 		MIN_VALIDATION_RETRIES,
 		Math.min(s.node.maxValidationRetries ?? DEFAULT_VALIDATION_RETRIES, MAX_VALIDATION_RETRIES),
@@ -150,27 +214,18 @@ async function retryUntilValid(
 		try {
 			await askAgentToFix(ctx, s, attempts, result.failures, timeoutMs);
 		} catch (e) {
-			// askAgentToFix throws on walltime cap; surface as fatal so the
-			// runner halts cleanly instead of the chain unwinding through
-			// withSession with an unstructured error.
 			const msg = e instanceof Error ? e.message : String(e);
 			return { kind: "fatal", message: msg };
 		}
 
-		// Re-extract against the latest branch with the SAME offset the initial
-		// extraction used (L6-05). `deps.extractCtx.branchOffset` was set
-		// once at stage entry via the handler-derived offset, so spreading it
-		// over a fresh `readBranch(ctx)` preserves the prior-stage prefix
-		// skip and the closed-I4 defect can't re-introduce.
 		const retryBranch = readBranch(ctx);
-		const retryCtx: ExtractCtx = { ...deps.extractCtx, branch: retryBranch };
-		const reExtracted = await runExtract(deps.outcome, retryCtx, deps.finalize);
-		if (reExtracted.kind === "fatal") return reExtracted;
-		if (!reExtracted.manifest) {
-			return { kind: "fatal", message: `${s.skill}: outcome returned no manifest on retry ${attempts}` };
-		}
+		const retryCtx: ResolveCtx = { ...deps.resolveCtx, branch: retryBranch };
+		const reRun = await runOutcome(deps.outcome, retryCtx, deps.finalize);
+		if (reRun.kind === "fatal") return reRun;
+		const contract = enforceCompletionContract(s.node, s.skill, reRun.manifest);
+		if (contract.kind === "fatal") return contract;
 
-		manifest = reExtracted.manifest;
+		manifest = contract.manifest;
 		const reValidation = await validateOrFatal(schema, manifest.data, s.skill, timeoutMs);
 		if (reValidation.kind === "fatal") return reValidation;
 		result = reValidation.result;
@@ -183,19 +238,9 @@ async function retryUntilValid(
 /**
  * Translate a thrown `validateManifestData` (user-authored schemas may throw
  * synchronously or reject their Promise) into the canonical fatal-extraction
- * outcome. Without this, the throw escapes retryUntilValid → postStage →
- * runStageOrRecordFailure's catch, surfacing as MSG_STAGE_THREW — the wrong
- * error class for a schema-shape constraint the workflow author owns. Routing
- * through `kind: "fatal"` puts the failure through
- * `haltStageWithExtractionError`, which attributes the row to `skill`, fires
- * MSG_STAGE_FAILED, and exits cleanly through the same path
- * validation-exhausted uses.
- *
- * Async schemas (filesystem probes, registry lookups, async-by-default libs)
- * are guarded by `timeoutMs` — the same `validationRetryTimeoutMs` budget
- * that bounds the agent-settle step on a retry. A schema whose Promise
- * never settles surfaces as fatal-extraction with the schema-timeout
- * message; sync schemas resolve in one microtask and never trip it.
+ * outcome. Async schemas are guarded by `timeoutMs` — the same
+ * `validationRetryTimeoutMs` budget that bounds the agent-settle step on a
+ * retry.
  */
 async function validateOrFatal(
 	schema: NodeSchema,
@@ -216,12 +261,6 @@ async function validateOrFatal(
 	}
 }
 
-/**
- * Sends the fix request and races settlement against `timeoutMs`. waitForIdle
- * has no abort signal, so on timeout the underlying promise keeps draining in
- * the background; the next stage's `newSession` replaces the ctx and renders
- * it inert.
- */
 async function askAgentToFix(
 	ctx: RunnerCtx,
 	s: StageSession,
@@ -238,7 +277,7 @@ async function askAgentToFix(
 	);
 }
 
-function validationExhausted(failures: SchemaValidationFailure[]): ExtractionOutcome {
+function validationExhausted(failures: SchemaValidationFailure[]): ManifestProduction {
 	const failureSummary = failures.map((f) => `${f.path}: ${f.message}`).join("; ");
 	return { kind: "validation-exhausted", failureSummary };
 }

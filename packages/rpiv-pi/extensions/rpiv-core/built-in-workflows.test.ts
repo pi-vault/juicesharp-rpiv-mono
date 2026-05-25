@@ -41,6 +41,7 @@ import {
 	type Workflow,
 } from "@juicesharp/rpiv-workflow";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { rpivArtifactMdOutcome } from "./artifact-resolver.js";
 import { builtInWorkflows } from "./built-in-workflows.js";
 
 const findWorkflow = (name: string): Workflow => {
@@ -234,7 +235,7 @@ describe("[I3] recordStage signals success and advances stageNumber monotonicall
 
 	const freshState = (): RunState => ({
 		originalInput: "",
-		fallbackArtifactPath: undefined,
+		primaryArtifact: undefined,
 		manifest: undefined,
 		stagesCompleted: 0,
 		lastAllocatedStageNumber: 0,
@@ -358,13 +359,14 @@ describe("[I9] phase fanout labels by skill name, not by aliased node name", () 
 		// Local copy of the `## Phase N:` convention used by rpiv-pi's built-in
 		// workflows — mirrors `PHASE_FANOUT` in `built-in-workflows.ts`. Inlined
 		// rather than imported so the test exercises the public FanoutFn shape.
-		const phaseFanout: FanoutFn = ({ artifactPath, cwd }) => {
-			if (!artifactPath) return [];
-			const abs = isAbsolute(artifactPath) ? artifactPath : join(cwd, artifactPath);
+		const phaseFanout: FanoutFn = ({ artifact: primary, cwd }) => {
+			if (!primary || primary.handle.kind !== "fs") return [];
+			const path = primary.handle.path;
+			const abs = isAbsolute(path) ? path : join(cwd, path);
 			const content = readFileSync(abs, "utf-8");
 			const matches = [...content.matchAll(/^## Phase (\d+):/gm)];
 			return matches.map((m, i) => ({
-				prompt: `${artifactPath} Phase ${m[1]}`,
+				prompt: `${path} Phase ${m[1]}`,
 				label: `phase ${i + 1}/${matches.length}`,
 			}));
 		};
@@ -373,7 +375,7 @@ describe("[I9] phase fanout labels by skill name, not by aliased node name", () 
 			name: "tiny",
 			start: "research",
 			nodes: {
-				research: artifact(),
+				research: artifact({ outcome: rpivArtifactMdOutcome }),
 				"implement-after-revise": action({ skill: "implement", fanout: phaseFanout }),
 			},
 			edges: { research: "implement-after-revise", "implement-after-revise": "stop" },

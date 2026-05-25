@@ -40,15 +40,23 @@
  *      `registerBuiltIns`, `getBuiltIns`.
  *
  *   5. Manifest envelope + bundled outcomes — `./manifest.js`,
- *      `./outcomes/index.js`
- *      Inter-stage data channel (`Manifest<K, D>`, `ManifestMeta`) +
- *      bundled outcomes (`artifactMdOutcome`, `sideEffectOutcome`,
- *      `gitCommitOutcome`, `GitCommitData`, `gitHeadSnapshot`,
- *      `GitHeadSnapshot`).
+ *      `./outcomes/index.js`, `./handle.js`
+ *      Inter-stage data channel (`Manifest<K, D>`, `ManifestMeta`,
+ *      `Artifact`, `ArtifactHandle` + constructors `fs`/`url`/
+ *      `opaque`/`inline`/`handleToString`) + bundled outcomes
+ *      (`sideEffectOutcome`, `gitCommitOutcome`, `GitCommitData`,
+ *      `gitHeadSnapshot`, `GitHeadSnapshot`) + the standalone
+ *      primitives they're built from (`noopResolver`,
+ *      `gitCommitResolver`, `gitCommitReader`). The
+ *      `.rpiv/artifacts/<bucket>/<file>.md` outcome lives in
+ *      `@juicesharp/rpiv-pi` as `rpivArtifactMdOutcome` — it's an rpiv
+ *      convention, not a framework default.
  *
  *   6. Custom-outcome authoring surface — `./manifest.js`
- *      `Outcome<Baseline, Kind, Data>`, `ExtractCtx`, `ExtractPayload`,
- *      `ExtractResult`, `ExtractFn`, `BaselineCtx`, `BaselineFn`.
+ *      `Outcome<Baseline, Kind, Data>` (resolver + optional reader),
+ *      `ArtifactResolver`, `ArtifactReader`, `ResolveCtx`,
+ *      `ResolveResult`, `ReadCtx`, `ReadResult`, `BaselineCtx`,
+ *      `BaselineFn`. Sugar: `defineResolver` / `defineReader`.
  *
  *   7. Validation surfaces — `./validate-workflow.js`,
  *      `./validate-manifest.js`
@@ -84,9 +92,11 @@
  * compatible with these ports — embedders pass their existing Pi handles
  * directly. A future non-Pi host implements the three port interfaces.
  *
- * The runtime peer-dependency on `@earendil-works/pi-coding-agent`
- * remains for one value-level helper (`parseFrontmatter` in
- * `outcomes/artifact-md.js`); no type names cross the boundary.
+ * The package no longer imports any value from
+ * `@earendil-works/pi-coding-agent` — `parseFrontmatter` moved to
+ * `@juicesharp/rpiv-pi` along with the rpiv-flavoured outcome
+ * (`rpivArtifactMdOutcome`). The peer dep stays for `pi-tui` types
+ * structural-compatibility only.
  *
  * `host.test.ts` carries a compile-time tripwire that fails immediately
  * if Pi's types drift below the port's required shape.
@@ -121,26 +131,40 @@ export {
 } from "./api.js";
 export { recordStage } from "./audit.js";
 export { getBuiltIns, registerBuiltIns } from "./built-ins.js";
+export {
+	type Artifact,
+	type ArtifactHandle,
+	fs,
+	handleToString,
+	inline,
+	opaque,
+	url,
+} from "./handle.js";
 export type { WorkflowCommandHost, WorkflowHost, WorkflowSessionHost } from "./host.js";
 export type { ConfigLayer, Issue, LoadedWorkflows, LoadIssue, OverlayPaths } from "./load/index.js";
 export { loadWorkflows, projectOverlayPaths, userOverlayPaths } from "./load/index.js";
 export type {
+	ArtifactReader,
+	ArtifactResolver,
 	BaselineCtx,
 	BaselineFn,
-	ExtractCtx,
-	ExtractFn,
-	ExtractPayload,
-	ExtractResult,
 	Manifest,
 	ManifestMeta,
 	Outcome,
+	ReadCtx,
+	ReadResult,
+	ResolveCtx,
+	ResolveResult,
 } from "./manifest.js";
+export { defineReader, defineResolver } from "./outcome-types.js";
 export {
-	artifactMdOutcome,
 	type GitCommitData,
 	type GitHeadSnapshot,
 	gitCommitOutcome,
+	gitCommitReader,
+	gitCommitResolver,
 	gitHeadSnapshot,
+	noopResolver,
 	sideEffectOutcome,
 } from "./outcomes/index.js";
 export { type RunWorkflowOptions, type RunWorkflowResult, runWorkflow } from "./runner/index.js";

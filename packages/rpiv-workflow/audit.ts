@@ -4,6 +4,7 @@
  * neither imports back. Depends only on state + messages.
  */
 
+import { handleToString } from "./handle.js";
 import { assertNever } from "./internal-utils.js";
 import {
 	ERR_STAGE_ABORTED,
@@ -67,7 +68,7 @@ export function recordStage(
 export function notifyPartialArtifacts(ctx: RunnerCtx, cwd: string, runId: string): void {
 	const items = listArtifacts(cwd, runId);
 	if (items.length === 0) return;
-	const artifactList = items.map((i) => `  • ${i.skill}: ${i.artifact}`).join("\n");
+	const artifactList = items.map((i) => `  • ${i.skill}: ${handleToString(i.artifact.handle)}`).join("\n");
 	ctx.ui.notify(MSG_PARTIAL_ARTIFACTS(artifactList), "info");
 }
 

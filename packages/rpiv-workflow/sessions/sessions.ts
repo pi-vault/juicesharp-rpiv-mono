@@ -4,14 +4,13 @@
  *
  * The fresh-vs-continue policy split is owned by `SessionPolicyHandler`
  * (see `spawn.ts`): `FRESH_HANDLER` and `CONTINUE_HANDLER` implement
- * the three policy-specific decisions (branch offset for extraction,
- * spawn shape, send-into-existing-session). Everything in this file —
+ * the three policy-specific decisions. Everything in this file —
  * post-processing, halt routing, success persistence, outcome reading
  * — is policy-agnostic.
  *
  * Companion modules:
- *   - extraction.ts — extractAndValidateManifest + retry loop +
- *                     outcome helpers.
+ *   - extraction.ts — produceAndValidateManifest + retry loop +
+ *                     outcome helpers (resolver → reader pipeline).
  *   - spawn.ts      — SessionPolicyHandler + FRESH/CONTINUE handlers +
  *                     handlerFor.
  */
@@ -34,9 +33,9 @@ import {
 	MSG_STAGE_FAILED,
 	MSG_VALIDATION_EXHAUSTED,
 } from "../messages.js";
-import { type BranchEntry, classifyStop, extractArtifactPath, readBranch, type StopSignal } from "../transcript.js";
+import { type BranchEntry, classifyStop, readBranch, type StopSignal } from "../transcript.js";
 import type { FanoutSession, RunnerCtx, SessionContext, StageSession } from "../types.js";
-import { extractAndValidateManifest } from "./extraction.js";
+import { produceAndValidateManifest } from "./extraction.js";
 import { FRESH_HANDLER, handlerFor } from "./spawn.js";
 
 // ===========================================================================
@@ -60,19 +59,19 @@ export async function runFanoutSession(ctx: RunnerCtx, s: FanoutSession): Promis
 // POST-PROCESSING — runs after the agent loop settles
 // ===========================================================================
 
-/** Stage post-processing: classify outcome → extract & validate → persist → chain. */
+/** Stage post-processing: classify outcome → produce & validate manifest → persist → chain. */
 async function postStage(ctx: RunnerCtx, s: StageSession): Promise<void> {
 	const handler = handlerFor(s.node.sessionPolicy);
 	const offset = handler.branchOffset(s.branchOffset);
 	const outcome = readSessionOutcome(ctx, offset);
 	if (outcome.stop !== "stop") return haltStage(ctx, s, outcome.stop);
 
-	const result = await extractAndValidateManifest(ctx, s, outcome.branch, offset);
+	const result = await produceAndValidateManifest(ctx, s, outcome.branch, offset);
 	if (result.kind === "fatal") return haltStageWithExtractionError(ctx, s, result.message);
 	if (result.kind === "validation-exhausted") return haltStageWithValidationFailure(ctx, s, result.failureSummary);
 
-	if (!recordStageSuccess(ctx, s, outcome.artifact, result.manifest)) return;
-	await s.onSuccess(ctx, outcome.artifact);
+	if (!recordStageSuccess(ctx, s, result.manifest)) return;
+	await s.onSuccess(ctx, result.manifest.artifacts[0]);
 }
 
 /** Fanout-unit post-processing: classify outcome → persist bare row → chain. */
@@ -80,7 +79,7 @@ async function postFanout(ctx: RunnerCtx, s: FanoutSession): Promise<void> {
 	const outcome = readSessionOutcome(ctx, undefined);
 	if (outcome.stop !== "stop") return haltFanout(ctx, s, outcome.stop);
 
-	if (!recordFanoutSuccess(s, outcome.artifact)) return;
+	if (!recordFanoutSuccess(s)) return;
 	await s.onSuccess(ctx);
 }
 
@@ -125,45 +124,51 @@ function haltFanout(ctx: RunnerCtx, s: FanoutSession, stop: Exclude<StopSignal, 
 
 /**
  * Write + counter-increment guard shared by `recordStageSuccess` and
- * `recordPhaseSuccess`. Returns `true` iff the JSONL row landed. Manifest
- * assignment lives here so both callers get the same "manifest is set iff
- * the row that carried it landed" invariant. Caller-specific bits (notify,
- * `state.termination.error`, `state.fallbackArtifactPath`) stay outside.
+ * `recordFanoutSuccess`. Returns `true` iff the JSONL row landed.
+ * Manifest assignment lives here so callers get the same "manifest is
+ * set iff the row that carried it landed" invariant.
  */
-function tryRecordStage(s: SessionContext, label: string, args: { artifact?: string; manifest?: Manifest }): boolean {
+function tryRecordStage(s: SessionContext, label: string, manifest: Manifest | undefined): boolean {
 	const assigned = recordStage(
 		s.cwd,
 		s.runId,
 		{
 			skill: label,
-			artifact: args.artifact,
 			status: "completed",
 			ts: nowIso(),
-			manifest: args.manifest,
+			manifest,
 		},
 		s.state,
 	);
 	if (assigned === undefined) return false;
-	if (args.manifest) s.state.manifest = args.manifest;
+	if (manifest) s.state.manifest = manifest;
 	s.state.stagesCompleted++;
 	return true;
 }
 
 /**
+ * Update the rolling chain-input slot. Only artifact-emit stages whose
+ * resolver returned at least one artifact advance the primary —
+ * agent-end stages (commit, side-effect) leave it in place so a stage
+ * after them inherits the upstream chain input. The first artifact in
+ * the manifest is the primary; `role` is user-facing metadata, not a
+ * framework gate.
+ */
+function maybeAdvancePrimary(s: StageSession, manifest: Manifest): void {
+	if (s.node.completionStrategy !== "artifact-emit") return;
+	const next = manifest.artifacts[0];
+	if (next) s.state.primaryArtifact = next;
+}
+
+/**
  * Returns true on successful write — caller gates `onSuccess` on this so the
  * chain advances only when the audit row landed. On failure, leaves
- * `state.manifest` / `state.fallbackArtifactPath` at their prior values (the
- * disk has no row for what just completed, so the in-memory pointers must not
- * advance past it) and sets `state.termination.error` to halt the run.
+ * `state.manifest` / `state.primaryArtifact` at their prior values and sets
+ * `state.termination.error` to halt the run.
  */
-function recordStageSuccess(
-	ctx: RunnerCtx,
-	s: StageSession,
-	artifact: string | undefined,
-	manifest: Manifest | undefined,
-): boolean {
-	if (tryRecordStage(s, s.skill, { artifact, manifest })) {
-		if (!s.state.manifest?.artifact_path && artifact) s.state.fallbackArtifactPath = artifact;
+function recordStageSuccess(ctx: RunnerCtx, s: StageSession, manifest: Manifest): boolean {
+	if (tryRecordStage(s, s.skill, manifest)) {
+		maybeAdvancePrimary(s, manifest);
 		ctx.ui.notify(MSG_STAGE_COMPLETE(s.skill), "info");
 		return true;
 	}
@@ -172,12 +177,9 @@ function recordStageSuccess(
 	return false;
 }
 
-function recordFanoutSuccess(s: FanoutSession, artifact: string | undefined): boolean {
+function recordFanoutSuccess(s: FanoutSession): boolean {
 	const label = fanoutRowLabel(s);
-	if (tryRecordStage(s, label, { artifact })) {
-		if (artifact) s.state.fallbackArtifactPath = artifact;
-		return true;
-	}
+	if (tryRecordStage(s, label, undefined)) return true;
 	s.state.termination.error = ERR_AUDIT_WRITE_FAILED(label);
 	return false;
 }
@@ -188,22 +190,22 @@ function recordFanoutSuccess(s: FanoutSession, artifact: string | undefined): bo
 
 interface SessionOutcome {
 	branch: BranchEntry[];
-	artifact: string | undefined;
 	stop: StopSignal;
 }
 
 /**
  * Always reads the full unsliced branch + applies the policy-derived
- * `branchOffset` to the helpers that need it. The slice is no longer
- * materialised — `classifyStop` and `extractArtifactPath` both accept an
- * `offsetStart` so they skip the prior-stage prefix in place. Same offset
- * value flows through to extract (L6-05: initial == retry).
+ * `branchOffset` to `classifyStop` so the prior-stage prefix is
+ * skipped in place. The same offset value flows through to
+ * `produceAndValidateManifest` (L6-05: initial == retry).
+ *
+ * No longer scans the transcript for an artifact path — discovery is
+ * the resolver's job, not the runner's.
  */
 function readSessionOutcome(ctx: RunnerCtx, branchOffset: number | undefined): SessionOutcome {
 	const branch = readBranch(ctx);
 	return {
 		branch,
-		artifact: extractArtifactPath(branch, branchOffset),
 		stop: classifyStop(branch, branchOffset),
 	};
 }

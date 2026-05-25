@@ -27,11 +27,14 @@ export type StageStatus = "completed" | "failed" | "skipped" | "aborted";
  * Audit files are debug artifacts — no migration provided. Readers
  * shape-filter on `stageNumber`, so any rows that don't satisfy the
  * current shape are silently skipped.
+ *
+ * The row no longer carries a top-level `artifact` field — discovery
+ * moved into the resolver, and the canonical artifact list lives on
+ * `manifest.artifacts`. Readers project from there via `listArtifacts`.
  */
 export interface WorkflowStage {
 	stageNumber: number;
 	skill: string;
-	artifact?: string;
 	status: StageStatus;
 	ts: string;
 	manifest?: Manifest;

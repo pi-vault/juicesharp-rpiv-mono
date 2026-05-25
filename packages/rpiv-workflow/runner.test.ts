@@ -6,84 +6,22 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CompletionStrategy, EdgeTarget, FanoutFn, NodeDef, NodeSchema, Workflow } from "./api.js";
 import { definePredicate, defineStatePredicate, defineWorkflow, threshold } from "./api.js";
+import { fs as fsHandle } from "./handle.js";
+import type { Outcome } from "./manifest.js";
 import { runWorkflow } from "./runner/index.js";
 import { appendRoutingDecision, readRoutingDecisions } from "./state/index.js";
-import { extractArtifactPath, hasAssistantMessage, lastAssistantStopReason } from "./transcript.js";
+import { hasAssistantMessage, lastAssistantStopReason } from "./transcript.js";
 import { typeboxSchema } from "./typebox-adapter.js";
 
-// ---------------------------------------------------------------------------
-// extractArtifactPath — pure scan over a synthetic branch (no I/O)
-// ---------------------------------------------------------------------------
+// Note: transcript-path scanning moved to rpiv-pi (`rpivArtifactResolver`)
+// since the `.rpiv/artifacts/<bucket>/<file>.md` layout is an rpiv
+// convention, not a framework concern. Tests for that resolver live
+// alongside it in `packages/rpiv-pi/extensions/rpiv-core/`.
 
 /** Helper: build an assistant message branch entry with array content. */
 const asst = (text: string) => ({
 	type: "message",
 	message: { role: "assistant", content: [{ type: "text", text }] },
-});
-
-describe("extractArtifactPath", () => {
-	it("extracts artifact path from text content block", () => {
-		const branch = [asst("Done!\n\nNext step: `/skill:plan .rpiv/artifacts/research/report.md`")];
-		expect(extractArtifactPath(branch)).toBe(".rpiv/artifacts/research/report.md");
-	});
-
-	it("extracts last artifact when multiple text blocks present", () => {
-		const branch = [
-			{
-				type: "message",
-				message: {
-					role: "assistant",
-					content: [
-						{ type: "text", text: "Wrote research to .rpiv/artifacts/research/res.md" },
-						{ type: "text", text: "Also see .rpiv/artifacts/research/res2.md" },
-					],
-				},
-			},
-		];
-		expect(extractArtifactPath(branch)).toBe(".rpiv/artifacts/research/res2.md");
-	});
-
-	it("returns undefined when no artifact path found", () => {
-		const branch = [asst("No artifacts here")];
-		expect(extractArtifactPath(branch)).toBeUndefined();
-	});
-
-	it("skips non-message entries", () => {
-		const branch = [{ type: "thinking_level_change" }, asst("Result: .rpiv/artifacts/designs/design.md")];
-		expect(extractArtifactPath(branch)).toBe(".rpiv/artifacts/designs/design.md");
-	});
-
-	it("skips user messages", () => {
-		const branch = [
-			{
-				type: "message",
-				message: { role: "user", content: [{ type: "text", text: "/skill:discover test" }] },
-			},
-			asst("Produced .rpiv/artifacts/discover/frd.md"),
-		];
-		expect(extractArtifactPath(branch)).toBe(".rpiv/artifacts/discover/frd.md");
-	});
-
-	it("ignores non-text content blocks (thinking, tool_call)", () => {
-		const branch = [
-			{
-				type: "message",
-				message: {
-					role: "assistant",
-					content: [
-						{ type: "thinking", text: ".rpiv/artifacts/research/ignored.md" },
-						{ type: "text", text: ".rpiv/artifacts/research/kept.md" },
-					],
-				},
-			},
-		];
-		expect(extractArtifactPath(branch)).toBe(".rpiv/artifacts/research/kept.md");
-	});
-
-	it("finds artifact in last assistant message (reverse scan)", () => {
-		const branch = [asst("First: .rpiv/artifacts/research/old.md"), asst("Final: .rpiv/artifacts/research/new.md")];
-		expect(extractArtifactPath(branch)).toBe(".rpiv/artifacts/research/new.md");
-	});
 });
 
 // ---------------------------------------------------------------------------
@@ -93,15 +31,87 @@ describe("extractArtifactPath", () => {
 // for an rpiv-pi import.
 // ---------------------------------------------------------------------------
 
-const phaseHeadingsFanout: FanoutFn = ({ artifactPath, cwd }) => {
-	if (!artifactPath) return [];
-	const abs = artifactPath.startsWith("/") ? artifactPath : join(cwd, artifactPath);
+const phaseHeadingsFanout: FanoutFn = ({ artifact, cwd }) => {
+	if (!artifact || artifact.handle.kind !== "fs") return [];
+	const path = artifact.handle.path;
+	const abs = path.startsWith("/") ? path : join(cwd, path);
 	const content = readFileSync(abs, "utf-8");
 	const matches = [...content.matchAll(/^## Phase (\d+):/gm)];
 	return matches.map((m, i) => ({
-		prompt: `${artifactPath} Phase ${m[1]}`,
+		prompt: `${path} Phase ${m[1]}`,
 		label: `phase ${i + 1}/${matches.length}`,
 	}));
+};
+
+// ---------------------------------------------------------------------------
+// Test outcome: scan assistant text for `.rpiv/artifacts/<bucket>/<file>.md`
+// paths (the rpiv-pi convention, inlined so this test file doesn't reach for
+// an rpiv-pi import). Used as the default outcome on artifact-emit nodes
+// built by `wf()` below.
+// ---------------------------------------------------------------------------
+
+const RPIV_ARTIFACT_PATTERN = /\.rpiv\/artifacts\/[\w.-]+\/[\w.-]+\.md/g;
+
+/** Minimal YAML-frontmatter parser for tests: `key: value` lines between `---` fences, scalar values only. */
+const parseFmTestOnly = (content: string): Record<string, unknown> => {
+	const match = content.match(/^---\n([\s\S]*?)\n---/);
+	if (!match) return {};
+	const fm: Record<string, unknown> = {};
+	for (const line of match[1]!.split("\n")) {
+		const m = line.match(/^([\w.-]+)\s*:\s*(.+)$/);
+		if (!m) continue;
+		const v = m[2]!.trim();
+		// Coerce numbers; keep everything else as string.
+		const num = Number(v);
+		fm[m[1]!] = Number.isFinite(num) && v !== "" && /^-?\d/.test(v) ? num : v;
+	}
+	return fm;
+};
+
+const transcriptArtifactMdOutcome: Outcome<unknown, "artifact-md", Record<string, unknown>> = {
+	resolver: {
+		resolve: (ctx) => {
+			let lastMatch: string | undefined;
+			const start = Math.max(ctx.branchOffset ?? 0, 0);
+			for (let i = ctx.branch.length - 1; i >= start && !lastMatch; i--) {
+				const entry = ctx.branch[i]!;
+				if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+				const content = entry.message.content;
+				if (!Array.isArray(content)) continue;
+				for (let j = content.length - 1; j >= 0; j--) {
+					const part = content[j]!;
+					if (part.type === "text" && typeof part.text === "string") {
+						const matches = part.text.match(RPIV_ARTIFACT_PATTERN);
+						if (matches && matches.length > 0) {
+							lastMatch = matches[matches.length - 1];
+							break;
+						}
+					}
+				}
+			}
+			if (!lastMatch) {
+				return {
+					kind: "fatal",
+					message: `${ctx.skill} finished without producing a .rpiv/artifacts/<bucket>/<file>.md path`,
+				};
+			}
+			return { kind: "ok", artifacts: [{ handle: fsHandle(lastMatch), role: "primary" }] };
+		},
+	},
+	reader: {
+		read: (ctx) => {
+			const primary = ctx.artifacts[0];
+			if (!primary || primary.handle.kind !== "fs") {
+				return { kind: "ok", payload: { kind: "artifact-md", data: {} } };
+			}
+			const abs = primary.handle.path.startsWith("/") ? primary.handle.path : join(ctx.cwd, primary.handle.path);
+			if (!existsSync(abs)) return { kind: "ok", payload: { kind: "artifact-md", data: {} } };
+			return {
+				kind: "ok",
+				payload: { kind: "artifact-md", data: parseFmTestOnly(readFileSync(abs, "utf-8")) },
+			};
+		},
+	},
 };
 
 // ---------------------------------------------------------------------------
@@ -153,11 +163,19 @@ describe("runWorkflow", () => {
 				id === "implement" || id === "commit" ? "agent-end" : "artifact-emit";
 			// `skill` omitted — runner defaults it from the record key, matching
 			// the same convention real authors use via `artifact()` / `action()`.
-			nodes[id] = {
+			const base: NodeDef = {
 				completionStrategy: defaultStrategy,
 				sessionPolicy: "fresh",
-				...(nodeOverrides[id] ?? {}),
 			};
+			const merged: NodeDef = { ...base, ...(nodeOverrides[id] ?? {}) };
+			// artifact-emit nodes get a test-local transcript-scan outcome (the
+			// framework no longer ships a default). Decide based on the FINAL
+			// strategy after overrides — if a test overrides to agent-end, we
+			// don't want to attach the artifact-md outcome and force a path scan.
+			if (merged.completionStrategy === "artifact-emit" && !merged.outcome) {
+				merged.outcome = transcriptArtifactMdOutcome;
+			}
+			nodes[id] = merged;
 			edges[id] = edgeOverrides[id] ?? next ?? "stop";
 		}
 		return defineWorkflow({ name, start: stages[0] ?? "__missing__", nodes, edges });
@@ -231,9 +249,11 @@ describe("runWorkflow", () => {
 		expect(stages[0]).toMatchObject({
 			stageNumber: 1,
 			skill: "research",
-			artifact: ".rpiv/artifacts/research/r.md",
 			status: "completed",
 		});
+		expect(
+			(stages[0]?.manifest as { artifacts: Array<{ handle: { path: string } }> }).artifacts[0]?.handle.path,
+		).toBe(".rpiv/artifacts/research/r.md");
 	});
 
 	it("chains the second step on freshCtx — outer.newSession is called exactly once", async () => {
@@ -267,7 +287,9 @@ describe("runWorkflow", () => {
 
 		const { stages } = readState(tmpDir);
 		expect(stages.map((s) => s.status)).toEqual(["completed", "completed"]);
-		expect(stages[1]?.artifact).toBe(".rpiv/artifacts/designs/d.md");
+		expect(
+			(stages[1]?.manifest as { artifacts: Array<{ handle: { path: string } }> }).artifacts[0]?.handle.path,
+		).toBe(".rpiv/artifacts/designs/d.md");
 
 		// The persistent status line updates exactly once per stage (in order),
 		// then clears on workflow completion. Pi's `notify` channel gets
@@ -304,7 +326,7 @@ describe("runWorkflow", () => {
 		const { stages } = readState(tmpDir);
 		expect(stages).toHaveLength(1);
 		expect(stages[0]).toMatchObject({ skill: "research", status: "failed" });
-		expect(stages[0]?.artifact).toBeUndefined();
+		expect(stages[0]?.manifest).toBeUndefined();
 	});
 
 	it("records skipped + emits cancelled notification when outer newSession resolves cancelled", async () => {
@@ -515,7 +537,7 @@ describe("runWorkflow", () => {
 		const { stages } = readState(tmpDir);
 		expect(stages).toHaveLength(1);
 		expect(stages[0]).toMatchObject({ skill: "research", status: "failed" });
-		expect(stages[0]?.artifact).toBeUndefined();
+		expect(stages[0]?.manifest).toBeUndefined();
 
 		// User-visible error notification surfaces the stage-failed verdict.
 		// The outcome's fatal message flows through recordTerminalFailure's
@@ -1760,16 +1782,6 @@ describe("runWorkflow", () => {
 });
 
 describe("transcript offset helpers", () => {
-	it("extractArtifactPath with offsetStart skips prior entries", () => {
-		const branch = [asst("First: .rpiv/artifacts/research/old.md"), asst("Second: .rpiv/artifacts/designs/new.md")];
-		// Without offset, returns the last artifact
-		expect(extractArtifactPath(branch)).toBe(".rpiv/artifacts/designs/new.md");
-		// With offset=1, skips the first entry
-		expect(extractArtifactPath(branch, 1)).toBe(".rpiv/artifacts/designs/new.md");
-		// With offset=2, no entries to scan
-		expect(extractArtifactPath(branch, 2)).toBeUndefined();
-	});
-
 	it("hasAssistantMessage with offsetStart skips prior entries", () => {
 		const branch = [asst("prior stage"), { type: "user_message" }];
 		// Full branch has assistant

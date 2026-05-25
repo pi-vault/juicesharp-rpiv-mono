@@ -12,7 +12,8 @@
 import type { NodeDef } from "../api.js";
 import { notifyPartialArtifacts } from "../audit.js";
 import { runFanout } from "../fanout.js";
-import { currentArtifactPath, withTimeout } from "../internal-utils.js";
+import { handleToString } from "../handle.js";
+import { currentPrimaryArtifact, withTimeout } from "../internal-utils.js";
 import {
 	ERR_INPUT_VALIDATION_FAILED,
 	ERR_MISSING_ARTIFACT,
@@ -110,8 +111,8 @@ function buildPrompt(skill: string, inputForStage: string): string {
  *   3. prompt + status + branchOffset prep.
  *   4. POST_PROMPT_CHECKS        — preflights gated on prompt-prep state.
  *      a. ensureInputValid       — halt: upstream manifest fails inputSchema.
- *   5. captureStageBaseline      — outcome.baseline hook (must run before
- *                                  the Pi session so post-stage diffs work).
+ *   5. captureStageBaseline      — outcome.resolver.baseline hook (must run
+ *                                  before the Pi session so post-stage diffs work).
  *
  * Each `PreflightCheck` throws `StagePreflightError` on failure;
  * `runStageOrRecordFailure` catches and records the JSONL row.
@@ -123,7 +124,7 @@ export async function runStage(curCtx: RunnerCtx, currentName: string, idx: numb
 	for (const check of PRE_PROMPT_CHECKS) await check.run(stage, run);
 
 	const isStart = currentName === run.workflow.start;
-	const inputForStage = isStart ? run.state.originalInput : currentArtifactPath(run.state)!;
+	const inputForStage = isStart ? run.state.originalInput : handleToString(currentPrimaryArtifact(run.state)!.handle);
 	const prompt = buildPrompt(stage.skill, inputForStage);
 	curCtx.ui.setStatus(STATUS_KEY, STATUS_STAGE(stage.stageNumber, run.totalStages, stage.skill));
 	const branchOffset = computeBranchOffset(curCtx, stage.node);
@@ -169,9 +170,10 @@ function resolveStageNode(currentName: string, idx: number, run: RunContext): Re
  */
 async function tryFanout(curCtx: RunnerCtx, stage: ResolvedStage, idx: number, run: RunContext): Promise<boolean> {
 	if (!stage.node.fanout) return false;
+	const primary = currentPrimaryArtifact(run.state);
 	const units = await stage.node.fanout({
 		cwd: run.cwd,
-		artifactPath: currentArtifactPath(run.state),
+		artifact: primary,
 		state: run.state,
 	});
 	if (units.length === 0) return false;
@@ -227,7 +229,7 @@ function ensureSkillRegistered(stage: ResolvedStage, run: RunContext): void {
  * would silently hand a downstream skill the raw feature description.
  */
 function ensureUpstreamArtifact(stage: ResolvedStage, run: RunContext): void {
-	if (stage.name === run.workflow.start || currentArtifactPath(run.state)) return;
+	if (stage.name === run.workflow.start || currentPrimaryArtifact(run.state)) return;
 	throw new StagePreflightError(
 		"halt",
 		stage.skill,
@@ -310,7 +312,7 @@ function clampValidationTimeoutMs(raw: number | undefined): number {
 }
 
 async function captureStageBaseline(node: NodeDef, idx: number, run: RunContext): Promise<unknown> {
-	const baseline = node.outcome?.baseline;
+	const baseline = node.outcome?.resolver.baseline;
 	if (!baseline) return undefined;
 	try {
 		return await baseline({

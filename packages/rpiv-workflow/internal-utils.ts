@@ -7,6 +7,7 @@
  */
 
 import { isAbsolute, join } from "node:path";
+import type { Artifact } from "./handle.js";
 import type { RunState } from "./types.js";
 
 /** Exhaustiveness guard for discriminated-union switches. */
@@ -15,16 +16,14 @@ export function assertNever(value: never): never {
 }
 
 /**
- * Canonical accessor for "the artifact path the chain is currently carrying."
- * Prefers `state.manifest?.artifact_path` (set by artifact-emit stages with a
- * structured frontmatter manifest); falls back to `state.fallbackArtifactPath`,
- * which is only written when (a) an `agent-end` stage extracted a bare path
- * without a manifest, or (b) a phase row committed an artifact. Replaces the
- * load-bearing `state.artifactPath` mirror from earlier versions — the helper
- * IS the invariant.
+ * Canonical accessor for "the primary artifact the chain is currently
+ * carrying." Reads the rolling slot maintained by the runner —
+ * artifact-emit stages update it on success; agent-end stages leave it
+ * alone. Replaces the load-bearing single-string artifact_path mirror
+ * from the pre-resolver shape.
  */
-export function currentArtifactPath(state: RunState): string | undefined {
-	return state.manifest?.artifact_path ?? state.fallbackArtifactPath;
+export function currentPrimaryArtifact(state: RunState): Artifact | undefined {
+	return state.primaryArtifact;
 }
 
 /**

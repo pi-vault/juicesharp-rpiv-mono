@@ -8,7 +8,7 @@
  *  - runner.ts          — runWorkflow + countReachableNodes +
  *                         runStageOrRecordFailure + finalizeWorkflow.
  *  - stage-lifecycle.ts — runStage + StagePreflightError + preflight
- *                         pipeline + outcome.baseline hook.
+ *                         pipeline + outcome.resolver.baseline hook.
  *  - chain-advance.ts   — advanceChain + routing audit + backward-jump
  *                         guard + halt-on-error.
  *
@@ -26,8 +26,9 @@
 
 import type { Workflow } from "../api.js";
 import { notifyPartialArtifacts, nowIso, recordTerminalFailure } from "../audit.js";
+import { handleToString } from "../handle.js";
 import type { WorkflowCommandHost, WorkflowHost } from "../host.js";
-import { currentArtifactPath } from "../internal-utils.js";
+import { currentPrimaryArtifact } from "../internal-utils.js";
 import { MSG_STAGE_THREW, MSG_WORKFLOW_COMPLETE, STATUS_KEY } from "../messages.js";
 import { generateRunId, writeHeader } from "../state/index.js";
 import type { RunContext, RunnerCtx, RunState } from "../types.js";
@@ -76,6 +77,13 @@ export interface RunWorkflowResult {
 	runId?: string;
 	stagesCompleted: number;
 	success: boolean;
+	/**
+	 * Primary artifact at run termination, serialised to its handle's
+	 * canonical string form (fs → path, url → href, opaque → id). Undefined
+	 * if no artifact-emit stage produced one. Callers that need the full
+	 * structured handle read `manifest.artifacts[0]` off the run's last
+	 * recorded stage (via `readLastStage`).
+	 */
 	lastArtifact?: string;
 	error?: string;
 	/**
@@ -133,7 +141,7 @@ export async function runWorkflow(ctx: WorkflowCommandHost, options: RunWorkflow
 
 	const state: RunState = {
 		originalInput: options.input,
-		fallbackArtifactPath: undefined,
+		primaryArtifact: undefined,
 		manifest: undefined,
 		stagesCompleted: 0,
 		lastAllocatedStageNumber: 0,
@@ -168,7 +176,10 @@ export async function runWorkflow(ctx: WorkflowCommandHost, options: RunWorkflow
 		runId,
 		stagesCompleted: state.stagesCompleted,
 		success: state.termination.success,
-		lastArtifact: currentArtifactPath(state),
+		lastArtifact: (() => {
+			const a = currentPrimaryArtifact(state);
+			return a ? handleToString(a.handle) : undefined;
+		})(),
 		error: state.termination.error,
 		...(state.telemetry.droppedRoutingRows.length > 0
 			? { droppedRoutingRows: state.telemetry.droppedRoutingRows }

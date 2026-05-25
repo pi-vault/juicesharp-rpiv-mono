@@ -21,11 +21,13 @@ import {
 	defineWorkflow,
 	type FanoutFn,
 	gitCommitOutcome,
+	handleToString,
 	threshold,
 	typeboxSchema,
 	type Workflow,
 } from "@juicesharp/rpiv-workflow";
 import { Type } from "typebox";
+import { rpivArtifactMdOutcome } from "./artifact-resolver.js";
 
 const CODE_REVIEW_SCHEMA = typeboxSchema(
 	Type.Object({ blockers_count: Type.Integer({ minimum: 0 }) }, { additionalProperties: true }),
@@ -43,18 +45,20 @@ const CODE_REVIEW_SCHEMA = typeboxSchema(
  */
 const MAX_PHASES = 32;
 
-const PHASE_FANOUT: FanoutFn = ({ artifactPath, cwd }) => {
-	if (!artifactPath) return [];
-	const abs = isAbsolute(artifactPath) ? artifactPath : join(cwd, artifactPath);
+const PHASE_FANOUT: FanoutFn = ({ artifact: primary, cwd }) => {
+	if (!primary || primary.handle.kind !== "fs") return [];
+	const path = primary.handle.path;
+	const abs = isAbsolute(path) ? path : join(cwd, path);
 	const content = readFileSync(abs, "utf-8");
 	const matches = [...content.matchAll(/^## Phase (\d+):/gm)];
 	if (matches.length > MAX_PHASES) {
 		throw new Error(
-			`PHASE_FANOUT: plan ${artifactPath} declares ${matches.length} phases — exceeds MAX_PHASES (${MAX_PHASES}); split into smaller plans`,
+			`PHASE_FANOUT: plan ${path} declares ${matches.length} phases — exceeds MAX_PHASES (${MAX_PHASES}); split into smaller plans`,
 		);
 	}
+	const promptPath = handleToString(primary.handle);
 	return matches.map((m, i) => ({
-		prompt: `${artifactPath} Phase ${m[1]}`,
+		prompt: `${promptPath} Phase ${m[1]}`,
 		label: `phase ${i + 1}/${matches.length}`,
 	}));
 };
@@ -67,9 +71,9 @@ const smallWorkflow = defineWorkflow({
 	name: "small",
 	start: "blueprint",
 	nodes: {
-		blueprint: artifact(),
+		blueprint: artifact({ outcome: rpivArtifactMdOutcome }),
 		implement: action({ fanout: PHASE_FANOUT }),
-		validate: artifact(),
+		validate: artifact({ outcome: rpivArtifactMdOutcome }),
 	},
 	edges: {
 		blueprint: "implement",
@@ -87,12 +91,12 @@ const midWorkflow = defineWorkflow({
 	name: "mid",
 	start: "research",
 	nodes: {
-		research: artifact(),
-		blueprint: artifact(),
+		research: artifact({ outcome: rpivArtifactMdOutcome }),
+		blueprint: artifact({ outcome: rpivArtifactMdOutcome }),
 		implement: action({ fanout: PHASE_FANOUT }),
-		validate: artifact(),
-		"code-review": artifact({ outputSchema: CODE_REVIEW_SCHEMA }),
-		revise: artifact(),
+		validate: artifact({ outcome: rpivArtifactMdOutcome }),
+		"code-review": artifact({ outcome: rpivArtifactMdOutcome, outputSchema: CODE_REVIEW_SCHEMA }),
+		revise: artifact({ outcome: rpivArtifactMdOutcome }),
 		"implement-after-revise": action({ skill: "implement", fanout: PHASE_FANOUT }),
 		commit: action({ outcome: gitCommitOutcome }),
 	},
@@ -117,14 +121,18 @@ const largeWorkflow = defineWorkflow({
 	name: "large",
 	start: "research",
 	nodes: {
-		research: artifact(),
-		design: artifact(),
-		plan: artifact(),
+		research: artifact({ outcome: rpivArtifactMdOutcome }),
+		design: artifact({ outcome: rpivArtifactMdOutcome }),
+		plan: artifact({ outcome: rpivArtifactMdOutcome }),
 		implement: action({ fanout: PHASE_FANOUT }),
-		validate: artifact(),
-		"code-review-large": artifact({ skill: "code-review", outputSchema: CODE_REVIEW_SCHEMA }),
-		"design-after-review": artifact({ skill: "design" }),
-		"plan-after-review": artifact({ skill: "plan" }),
+		validate: artifact({ outcome: rpivArtifactMdOutcome }),
+		"code-review-large": artifact({
+			skill: "code-review",
+			outcome: rpivArtifactMdOutcome,
+			outputSchema: CODE_REVIEW_SCHEMA,
+		}),
+		"design-after-review": artifact({ skill: "design", outcome: rpivArtifactMdOutcome }),
+		"plan-after-review": artifact({ skill: "plan", outcome: rpivArtifactMdOutcome }),
 		"implement-after-review": action({ skill: "implement", fanout: PHASE_FANOUT }),
 		commit: action({ outcome: gitCommitOutcome }),
 	},

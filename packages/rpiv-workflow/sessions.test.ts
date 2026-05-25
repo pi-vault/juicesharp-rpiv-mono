@@ -22,8 +22,9 @@ import { createMockPi, createMockSessionChain, mockAssistantMessage } from "@jui
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NodeDef, NodeSchema } from "./api.js";
-import { currentArtifactPath } from "./internal-utils.js";
-import type { ExtractCtx, ExtractFn, ExtractResult, Outcome } from "./manifest.js";
+import { fs as fsHandle } from "./handle.js";
+import { currentPrimaryArtifact } from "./internal-utils.js";
+import type { Outcome, ResolveCtx } from "./manifest.js";
 import {
 	ERR_VALIDATION_FAILED,
 	MSG_STAGE_ABORTED,
@@ -45,7 +46,7 @@ import { MAX_VALIDATION_RETRIES, MAX_VALIDATION_RETRY_TIMEOUT_MS } from "./valid
 /** Bare RunState — every field nullish/zero so tests pin the deltas sessions.ts produces. */
 const freshRunState = (overrides: Partial<RunState> = {}): RunState => ({
 	originalInput: "x",
-	fallbackArtifactPath: undefined,
+	primaryArtifact: undefined,
 	manifest: undefined,
 	stagesCompleted: 0,
 	lastAllocatedStageNumber: 0,
@@ -83,23 +84,41 @@ const stageSession = (overrides: Partial<StageSession> & Pick<StageSession, "cwd
 	...overrides,
 });
 
-/** Stateful extract function: returns scripted payloads in sequence; ignores branch. */
-const scriptedExtract = (results: ExtractResult[]): ExtractFn => {
+/**
+ * Scripted outcome — produces a sequence of {ok+data | fatal} results
+ * across successive `runOutcome` invocations (the retry loop drives
+ * this). Resolver + reader advance in lockstep on the same index.
+ */
+type ScriptedResult = { kind: "ok"; data: Record<string, unknown> } | { kind: "fatal"; message: string };
+
+type ScriptedOutcome = Outcome & { resolveSpy: ReturnType<typeof vi.fn> };
+
+const scriptedOutcome = (results: ScriptedResult[]): ScriptedOutcome => {
 	let i = 0;
-	return () => {
+	const resolveSpy = vi.fn(() => {
 		const r = results[i] ?? results[results.length - 1]!;
 		i++;
-		return r;
+		if (r.kind === "fatal") return { kind: "fatal" as const, message: r.message };
+		return {
+			kind: "ok" as const,
+			artifacts: [{ handle: fsHandle(`scripted-${i}.md`), role: "primary" }],
+		};
+	});
+	const outcome: Outcome = {
+		resolver: { resolve: resolveSpy as ScriptedOutcome["resolver"]["resolve"] },
+		reader: {
+			read: () => {
+				const r = results[i - 1] ?? results[0]!;
+				if (r.kind === "fatal") return { kind: "fatal", message: r.message };
+				return { kind: "ok", payload: { kind: "test", data: r.data } };
+			},
+		},
 	};
+	return Object.assign(outcome, { resolveSpy });
 };
 
-/** Convenience: wrap a scripted extract fn as an Outcome (no `before`). */
-const scriptedOutcome = (results: ExtractResult[]): Outcome => ({ extract: scriptedExtract(results) });
-
-const okPayload = (data: unknown): ExtractResult => ({
-	kind: "ok",
-	payload: { kind: "test", data: data as Record<string, unknown> },
-});
+const okPayload = (data: Record<string, unknown>): ScriptedResult => ({ kind: "ok", data });
+const fatalPayload = (message: string): ScriptedResult => ({ kind: "fatal", message });
 
 const FOO_EQ_2_SCHEMA = typeboxSchema(Type.Object({ foo: Type.Literal(2) }, { additionalProperties: true }));
 
@@ -217,8 +236,7 @@ describe("sessions — validation retry loop", () => {
 			cwd: tmpDir,
 			steps: [{ branch: [mockAssistantMessage("done")] }],
 		});
-		const extract = vi.fn(scriptedExtract([okPayload({ foo: 1 })]));
-		const outcome: Outcome = { extract };
+		const outcome = scriptedOutcome([okPayload({ foo: 1 })]);
 
 		await runStageSession(
 			chain.ctx as RunnerCtx,
@@ -234,8 +252,8 @@ describe("sessions — validation retry loop", () => {
 			}),
 		);
 
-		// Initial extract + MAX retries → MAX+1 calls total.
-		expect(extract).toHaveBeenCalledTimes(MAX_VALIDATION_RETRIES + 1);
+		// Initial resolve + MAX retries → MAX+1 calls total.
+		expect(outcome.resolveSpy).toHaveBeenCalledTimes(MAX_VALIDATION_RETRIES + 1);
 		// One MSG_VALIDATION_RETRY per retry attempt.
 		const retries = chain.notifications.filter((n) => /asking agent to fix/i.test(n.msg));
 		expect(retries).toHaveLength(MAX_VALIDATION_RETRIES);
@@ -246,8 +264,7 @@ describe("sessions — validation retry loop", () => {
 			cwd: tmpDir,
 			steps: [{ branch: [mockAssistantMessage("done")] }],
 		});
-		const extract = vi.fn(scriptedExtract([okPayload({ foo: 1 })]));
-		const outcome: Outcome = { extract };
+		const outcome = scriptedOutcome([okPayload({ foo: 1 })]);
 		const onFailure = vi.fn();
 
 		await runStageSession(
@@ -265,7 +282,7 @@ describe("sessions — validation retry loop", () => {
 			}),
 		);
 
-		expect(extract).toHaveBeenCalledTimes(1);
+		expect(outcome.resolveSpy).toHaveBeenCalledTimes(1);
 		expect(chain.notifications.find((n) => /asking agent to fix/i.test(n.msg))).toBeUndefined();
 		expect(onFailure).toHaveBeenCalledTimes(1);
 	});
@@ -346,10 +363,7 @@ describe("sessions — validation retry loop", () => {
 				node: node({
 					outputSchema: FOO_EQ_2_SCHEMA,
 					maxValidationRetries: 2,
-					outcome: scriptedOutcome([
-						okPayload({ foo: 1 }),
-						{ kind: "fatal", message: "outcome blew up mid-retry" },
-					]),
+					outcome: scriptedOutcome([okPayload({ foo: 1 }), fatalPayload("outcome blew up mid-retry")]),
 				}),
 				onFailure,
 			}),
@@ -359,34 +373,12 @@ describe("sessions — validation retry loop", () => {
 		expect(state.termination.error).toContain("outcome blew up mid-retry");
 	});
 
-	it("outcome returning undefined payload on retry → fatal with explicit message", async () => {
-		const chain = createMockSessionChain({
-			cwd: tmpDir,
-			steps: [{ branch: [mockAssistantMessage("done")] }],
-		});
-		const state = freshRunState();
-		const onFailure = vi.fn();
-
-		await runStageSession(
-			chain.ctx as RunnerCtx,
-			stageSession({
-				cwd: tmpDir,
-				state,
-				node: node({
-					outputSchema: FOO_EQ_2_SCHEMA,
-					maxValidationRetries: 2,
-					outcome: scriptedOutcome([
-						okPayload({ foo: 1 }),
-						{ kind: "ok", payload: undefined }, // ok-no-payload on retry — sessions.ts must synthesize fatal
-					]),
-				}),
-				onFailure,
-			}),
-		);
-
-		expect(onFailure).toHaveBeenCalledTimes(1);
-		expect(state.termination.error).toMatch(/outcome returned no manifest on retry 1/);
-	});
+	// Removed: "outcome returning undefined payload on retry" — the new
+	// resolver/reader split has no `ok-no-payload` state. An empty
+	// resolver result on an artifact-emit node fatals at the contract
+	// check (enforceCompletionContract); the equivalent behaviour for
+	// agent-end nodes is "inherit prior" which is the success path, not
+	// a halt.
 
 	it("clamps validationRetryTimeoutMs above ceiling", async () => {
 		// Smoke: timeoutMs above ceiling must clamp. We assert the clamp
@@ -563,57 +555,53 @@ describe("sessions — outcome resolution", () => {
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	it("explicit node.outcome wins over completionStrategy default", async () => {
+	it("explicit node.outcome wins (artifact-emit has no framework default)", async () => {
 		const chain = createMockSessionChain({
 			cwd: tmpDir,
 			steps: [{ branch: [mockAssistantMessage("done")] }],
 		});
-		const explicitExtract = vi.fn(scriptedExtract([okPayload({ tag: "explicit" })]));
-		const explicit: Outcome = { extract: explicitExtract };
+		const explicit = scriptedOutcome([okPayload({ tag: "explicit" })]);
 
 		await runStageSession(
 			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
-				// artifact-emit would default to artifactMdOutcome (which would fatal — no
-				// .rpiv/artifacts/... in the branch). The explicit outcome MUST win.
 				node: node({ completionStrategy: "artifact-emit", outcome: explicit }),
 			}),
 		);
 
-		expect(explicitExtract).toHaveBeenCalledTimes(1);
+		expect(explicit.resolveSpy).toHaveBeenCalledTimes(1);
 		expect(chain.notifications.some((n) => n.msg === MSG_STAGE_COMPLETE("test"))).toBe(true);
 	});
 
-	it("artifact-emit default routes to artifactMdOutcome (fatal when no artifact in branch)", async () => {
-		const chain = createMockSessionChain({
-			cwd: tmpDir,
-			steps: [{ branch: [mockAssistantMessage("no artifact mentioned here")] }],
-		});
-		const state = freshRunState();
-		const onFailure = vi.fn();
-
-		await runStageSession(
-			chain.ctx as RunnerCtx,
-			stageSession({
-				cwd: tmpDir,
-				state,
-				node: node({ completionStrategy: "artifact-emit" }),
-				onFailure,
-			}),
-		);
-
-		expect(onFailure).toHaveBeenCalledTimes(1);
-		expect(state.termination.error).toMatch(/finished without producing a \.rpiv\/artifacts/);
-	});
-
-	it("agent-end default routes to sideEffectOutcome (inherits prior artifact path)", async () => {
+	it("artifact-emit without outcome throws (load-time validation should reject; runtime is defense-in-depth)", async () => {
 		const chain = createMockSessionChain({
 			cwd: tmpDir,
 			steps: [{ branch: [mockAssistantMessage("done")] }],
 		});
-		const state = freshRunState({ fallbackArtifactPath: ".rpiv/artifacts/research/r.md" });
+		// validateWorkflow rejects this at load — but this test goes
+		// straight through runStageSession, bypassing validation. The
+		// runner's defense-in-depth throw must surface.
+		await expect(
+			runStageSession(
+				chain.ctx as RunnerCtx,
+				stageSession({
+					cwd: tmpDir,
+					state: freshRunState(),
+					node: node({ completionStrategy: "artifact-emit" }),
+				}),
+			),
+		).rejects.toThrow(/no `outcome`/);
+	});
+
+	it("agent-end default (sideEffectOutcome) leaves the rolling primary artifact unchanged", async () => {
+		const chain = createMockSessionChain({
+			cwd: tmpDir,
+			steps: [{ branch: [mockAssistantMessage("done")] }],
+		});
+		const prior = { handle: fsHandle(".rpiv/artifacts/research/r.md"), role: "primary" };
+		const state = freshRunState({ primaryArtifact: prior });
 		const onSuccess = vi.fn(async () => {});
 
 		await runStageSession(
@@ -627,24 +615,27 @@ describe("sessions — outcome resolution", () => {
 		);
 
 		expect(onSuccess).toHaveBeenCalledTimes(1);
-		// sideEffectOutcome pulls currentArtifactPath(state) into
-		// manifest.artifact_path; recordStageSuccess then sets state.manifest.
-		expect(state.manifest?.artifact_path).toBe(".rpiv/artifacts/research/r.md");
+		// Agent-end with no resolver output → empty artifacts list on the
+		// stage's manifest, but the chain's primaryArtifact rolling slot
+		// stays put so the next stage inherits the upstream input.
+		expect(state.manifest?.artifacts).toEqual([]);
+		expect(state.primaryArtifact).toBe(prior);
+		expect(currentPrimaryArtifact(state)).toBe(prior);
 	});
 });
 
 // ---------------------------------------------------------------------------
-// Group 3 — ExtractCtx contract (readSessionOutcome + buildExtractCtx)
+// Group 3 — ResolveCtx contract (readSessionOutcome + buildResolveCtx)
 //
-// Post-L6-05: ExtractCtx.branch is ALWAYS the full unsliced branch;
+// Post-L6-05: ResolveCtx.branch is ALWAYS the full unsliced branch;
 // branchOffset is ALWAYS the policy-derived offset (continue → captured
-// stage offset; fresh → undefined). Extractors slice on demand via the
-// `offsetStart` parameter on `extractArtifactPath` / `classifyStop`. The
-// initial extraction and the retry path emit the same offset value —
-// the closed-I4 defect cannot re-introduce by construction.
+// stage offset; fresh → undefined). Resolvers slice on demand via the
+// `branchOffset` field. The initial production and the retry path emit
+// the same offset value — the closed-I4 defect cannot re-introduce by
+// construction.
 // ---------------------------------------------------------------------------
 
-describe("sessions — outcome ctx (always-unsliced branch + policy-derived offset)", () => {
+describe("sessions — resolver ctx (always-unsliced branch + policy-derived offset)", () => {
 	let tmpDir: string;
 
 	beforeEach(() => {
@@ -654,14 +645,31 @@ describe("sessions — outcome ctx (always-unsliced branch + policy-derived offs
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	it("continue policy: full unsliced branch + branchOffset = captured stage offset", async () => {
-		const captured: ExtractCtx[] = [];
-		const recordingOutcome: Outcome = {
-			extract: (ctx) => {
-				captured.push(ctx);
-				return okPayload({});
+	const recordingOutcomeOf = (results: ScriptedResult[], captured: ResolveCtx[]): Outcome => {
+		let i = 0;
+		return {
+			resolver: {
+				resolve: (ctx) => {
+					captured.push(ctx);
+					const r = results[i] ?? results[results.length - 1]!;
+					i++;
+					if (r.kind === "fatal") return { kind: "fatal", message: r.message };
+					return { kind: "ok", artifacts: [{ handle: fsHandle(`s-${i}.md`), role: "primary" }] };
+				},
+			},
+			reader: {
+				read: () => {
+					const r = results[i - 1] ?? results[0]!;
+					if (r.kind === "fatal") return { kind: "fatal", message: r.message };
+					return { kind: "ok", payload: { kind: "test", data: r.data } };
+				},
 			},
 		};
+	};
+
+	it("continue policy: full unsliced branch + branchOffset = captured stage offset", async () => {
+		const captured: ResolveCtx[] = [];
+		const recordingOutcome = recordingOutcomeOf([okPayload({})], captured);
 
 		// Outer ctx (continue path) — branch contains prior-stage prefix + current-stage tail.
 		const priorPrefix = [mockAssistantMessage("prior stage output")];
@@ -701,18 +709,9 @@ describe("sessions — outcome ctx (always-unsliced branch + policy-derived offs
 		// asymmetric pair that could re-introduce the I4 defect if a future
 		// refactor changed one path without the other.
 		// Post-L6-05: both extractions emit identical `(full branch, captured offset)`.
-		const captured: ExtractCtx[] = [];
-		let firstCall = true;
-		const failThenPassOutcome: Outcome = {
-			extract: (ctx) => {
-				captured.push(ctx);
-				// First call: schema-invalid → triggers retry.
-				// Subsequent calls: schema-valid.
-				const data = firstCall ? { foo: 0 } : { foo: 2 };
-				firstCall = false;
-				return okPayload(data);
-			},
-		};
+		const captured: ResolveCtx[] = [];
+		// First call: schema-invalid → triggers retry. Subsequent: schema-valid.
+		const failThenPassOutcome = recordingOutcomeOf([okPayload({ foo: 0 }), okPayload({ foo: 2 })], captured);
 
 		const priorPrefix = [mockAssistantMessage("prior stage output"), mockAssistantMessage("more prior")];
 		const currentTail = [mockAssistantMessage("current stage output")];
@@ -752,13 +751,8 @@ describe("sessions — outcome ctx (always-unsliced branch + policy-derived offs
 	});
 
 	it("fresh policy: full branch + branchOffset undefined (handler forces undefined regardless of stage carry)", async () => {
-		const captured: ExtractCtx[] = [];
-		const recordingOutcome: Outcome = {
-			extract: (ctx) => {
-				captured.push(ctx);
-				return okPayload({});
-			},
-		};
+		const captured: ResolveCtx[] = [];
+		const recordingOutcome = recordingOutcomeOf([okPayload({})], captured);
 		const branch = [mockAssistantMessage("done")];
 		const chain = createMockSessionChain({ cwd: tmpDir, steps: [{ branch }] });
 
@@ -891,16 +885,18 @@ describe("sessions — success persistence", () => {
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	it("manifest.artifact_path wins over the transcript-extracted artifact", async () => {
+	it("agent-end with a resolver emitting one artifact records the manifest but does NOT advance the chain primary", async () => {
 		const chain = createMockSessionChain({
 			cwd: tmpDir,
-			steps: [{ branch: [mockAssistantMessage("see .rpiv/artifacts/research/from-transcript.md")] }],
+			steps: [{ branch: [mockAssistantMessage("done")] }],
 		});
 		const state = freshRunState();
 
-		// Outcome declares a DIFFERENT artifact_path than what the transcript holds —
-		// manifest's path is the authoritative source.
-		const manifestPath = ".rpiv/artifacts/research/from-manifest.md";
+		// Agent-end outcome that produces an artifact (e.g. a commit-style
+		// stage). manifest.artifacts records it; primaryArtifact stays
+		// undefined because only artifact-emit stages advance the chain
+		// input.
+		const recorded = ".rpiv/artifacts/research/from-resolver.md";
 		await runStageSession(
 			chain.ctx as RunnerCtx,
 			stageSession({
@@ -909,36 +905,51 @@ describe("sessions — success persistence", () => {
 				node: node({
 					completionStrategy: "agent-end",
 					outcome: {
-						extract: () => ({ kind: "ok", payload: { kind: "test", artifact_path: manifestPath, data: {} } }),
+						resolver: {
+							resolve: () => ({
+								kind: "ok",
+								artifacts: [{ handle: fsHandle(recorded), role: "primary" }],
+							}),
+						},
 					},
 				}),
 			}),
 		);
 
-		expect(state.manifest?.artifact_path).toBe(manifestPath);
-		expect(currentArtifactPath(state)).toBe(manifestPath);
+		expect(state.manifest?.artifacts[0]?.handle).toEqual({ kind: "fs", path: recorded });
+		// Chain primary stays put — agent-end never advances the rolling slot.
+		expect(state.primaryArtifact).toBeUndefined();
 	});
 
-	it("no manifest.artifact_path → falls back to outcome.artifact from transcript", async () => {
+	it("artifact-emit advances state.primaryArtifact to the resolver's first artifact", async () => {
 		const chain = createMockSessionChain({
 			cwd: tmpDir,
-			steps: [{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/research/r.md")] }],
+			steps: [{ branch: [mockAssistantMessage("done")] }],
 		});
 		const state = freshRunState();
+		const path = ".rpiv/artifacts/research/r.md";
 
 		await runStageSession(
 			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,
-				// agent-end + sideEffectOutcome leaves artifact_path = currentArtifactPath(state) (undefined),
-				// so no manifest is set; the transcript-extracted path lands in fallbackArtifactPath.
-				node: node({ completionStrategy: "agent-end" }),
+				node: node({
+					completionStrategy: "artifact-emit",
+					outcome: {
+						resolver: {
+							resolve: () => ({
+								kind: "ok",
+								artifacts: [{ handle: fsHandle(path), role: "primary" }],
+							}),
+						},
+					},
+				}),
 			}),
 		);
 
-		expect(state.fallbackArtifactPath).toBe(".rpiv/artifacts/research/r.md");
-		expect(currentArtifactPath(state)).toBe(".rpiv/artifacts/research/r.md");
+		expect(state.primaryArtifact?.handle).toEqual({ kind: "fs", path });
+		expect(currentPrimaryArtifact(state)?.handle).toEqual({ kind: "fs", path });
 	});
 
 	it("stagesCompleted bumps exactly once per successful stage", async () => {
@@ -1092,7 +1103,7 @@ describe("sessions — halt routing", () => {
 				state,
 				node: node({
 					completionStrategy: "agent-end",
-					outcome: { extract: () => ({ kind: "fatal", message: "outcome said no" }) },
+					outcome: { resolver: { resolve: () => ({ kind: "fatal", message: "outcome said no" }) } },
 				}),
 				onFailure,
 			}),

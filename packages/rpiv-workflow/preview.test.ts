@@ -128,17 +128,18 @@ describe("formatWorkflowDetails", () => {
 		expect(lines.find((l) => /research/.test(l))).toContain("fresh");
 	});
 
-	it("tags custom-outcome + baseline nodes with a single 'custom+baseline' decoration", () => {
+	it("tags custom-outcome nodes that declare a baseline + reader with a single 'custom+baseline+reader' decoration", () => {
 		const out = formatWorkflowDetails(baseLoaded(), "mid");
 		const commitLine = out.split("\n").find((l) => /^\s+\d+\.\s+commit\b/.test(l)) ?? "";
-		expect(commitLine).toContain("custom+baseline");
+		// gitCommitOutcome carries both baseline (via resolver) and reader.
+		expect(commitLine).toContain("custom+baseline+reader");
 		expect(commitLine).not.toContain("· custom ·"); // not double-tagged
 	});
 
-	it("tags artifact-emit nodes with the default 'artifact-md' outcome", () => {
+	it("tags artifact-emit nodes without an outcome with '???' (load-time validation should reject; tag is defensive)", () => {
 		const out = formatWorkflowDetails(baseLoaded(), "mid");
 		const researchLine = out.split("\n").find((l) => /^\s+\d+\.\s+research\b/.test(l)) ?? "";
-		expect(researchLine).toContain("artifact-md");
+		expect(researchLine).toContain("???");
 	});
 
 	it("tags agent-end nodes (no override) with the default 'side-effect' outcome", () => {

@@ -1,7 +1,7 @@
 /**
- * Tests for the git-commit outcome — covers the new I/O surface
- * (shelling out to `git` via `execFile`) on the success path, when git
- * isn't on PATH, and when the working tree isn't a git repo.
+ * Tests for the git-commit outcome — covers the resolver + reader pair
+ * on the success path, when git isn't on PATH, and when the working
+ * tree isn't a git repo.
  *
  * The outcome is fail-soft by contract: every git error path collapses
  * to a `noOp: true` payload so the workflow keeps moving. These tests
@@ -14,8 +14,14 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { BaselineCtx, ExtractCtx } from "../manifest.js";
-import { type GitHeadSnapshot, gitCommitOutcome, gitHeadSnapshot } from "./git-commit.js";
+import type { BaselineCtx, ReadCtx, ResolveCtx } from "../manifest.js";
+import {
+	type GitHeadSnapshot,
+	gitCommitOutcome,
+	gitCommitReader,
+	gitCommitResolver,
+	gitHeadSnapshot,
+} from "./git-commit.js";
 
 const hasGit = (() => {
 	try {
@@ -39,7 +45,7 @@ const baselineCtx = (cwd: string): BaselineCtx => ({
 	stageIndex: 0,
 	state: {
 		originalInput: "",
-		fallbackArtifactPath: undefined,
+		primaryArtifact: undefined,
 		manifest: undefined,
 		stagesCompleted: 0,
 		lastAllocatedStageNumber: 0,
@@ -54,13 +60,26 @@ const baselineCtx = (cwd: string): BaselineCtx => ({
 	},
 });
 
-const extractCtx = (cwd: string, baseline: GitHeadSnapshot | undefined): ExtractCtx<GitHeadSnapshot | undefined> => ({
+const resolveCtx = (cwd: string, baseline: GitHeadSnapshot | undefined): ResolveCtx<GitHeadSnapshot | undefined> => ({
 	...baselineCtx(cwd),
 	branch: [],
 	branchOffset: undefined,
 	baseline,
 	skill: "commit",
 });
+
+/**
+ * Run the full outcome (resolver → reader) end-to-end, returning the
+ * commit data the reader produced. Mirrors what `produceAndValidateManifest`
+ * does in the runner.
+ */
+const runOutcome = async (cwd: string, baseline: GitHeadSnapshot | undefined) => {
+	const ctx = resolveCtx(cwd, baseline);
+	const resolved = await gitCommitOutcome.resolver.resolve(ctx);
+	if (resolved.kind === "fatal") return resolved;
+	const readCtx: ReadCtx<GitHeadSnapshot | undefined> = { ...ctx, artifacts: resolved.artifacts };
+	return gitCommitOutcome.reader!.read(readCtx);
+};
 
 describe.runIf(hasGit)("gitHeadSnapshot", () => {
 	let tmpDir: string;
@@ -90,7 +109,7 @@ describe.runIf(hasGit)("gitHeadSnapshot", () => {
 	});
 });
 
-describe.runIf(hasGit)("gitCommitOutcome.extract", () => {
+describe.runIf(hasGit)("gitCommitOutcome end-to-end", () => {
 	let tmpDir: string;
 
 	beforeEach(() => {
@@ -101,7 +120,7 @@ describe.runIf(hasGit)("gitCommitOutcome.extract", () => {
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	it("emits a real commit payload when HEAD moved between snapshot and extract", async () => {
+	it("emits a real commit payload when HEAD moved between snapshot and resolve", async () => {
 		initRepo(tmpDir);
 		const snap = await gitHeadSnapshot(baselineCtx(tmpDir));
 		expect(snap?.baselineSha).toMatch(/^[0-9a-f]{40}$/);
@@ -110,17 +129,11 @@ describe.runIf(hasGit)("gitCommitOutcome.extract", () => {
 		execSync("git add a.txt", { cwd: tmpDir });
 		execSync('git commit -q -m "add a"', { cwd: tmpDir });
 
-		const result = await gitCommitOutcome.extract(extractCtx(tmpDir, snap));
+		const result = await runOutcome(tmpDir, snap);
 		expect(result.kind).toBe("ok");
 		if (result.kind !== "ok") return;
-		expect(result.payload?.kind).toBe("git-commit");
-		const data = result.payload?.data as {
-			sha: string;
-			prevSha: string;
-			subject: string;
-			filesChanged: number;
-			noOp?: boolean;
-		};
+		expect(result.payload.kind).toBe("git-commit");
+		const data = result.payload.data;
 		expect(data.sha).toMatch(/^[0-9a-f]{40}$/);
 		expect(data.prevSha).toBe(snap?.baselineSha);
 		expect(data.subject).toBe("add a");
@@ -131,56 +144,50 @@ describe.runIf(hasGit)("gitCommitOutcome.extract", () => {
 	it("emits noOp payload when HEAD did not move", async () => {
 		initRepo(tmpDir);
 		const snap = await gitHeadSnapshot(baselineCtx(tmpDir));
-		const result = await gitCommitOutcome.extract(extractCtx(tmpDir, snap));
+		const result = await runOutcome(tmpDir, snap);
 		expect(result.kind).toBe("ok");
 		if (result.kind !== "ok") return;
-		const data = result.payload?.data as { noOp?: boolean; prevSha: string };
-		expect(data.noOp).toBe(true);
-		expect(data.prevSha).toBe(snap?.baselineSha);
+		expect(result.payload.data.noOp).toBe(true);
+		expect(result.payload.data.prevSha).toBe(snap?.baselineSha);
 	});
 
 	it("emits noOp payload when snapshot is undefined (snapshot failure upstream)", async () => {
-		const result = await gitCommitOutcome.extract(extractCtx(tmpDir, undefined));
+		const result = await runOutcome(tmpDir, undefined);
 		expect(result.kind).toBe("ok");
 		if (result.kind !== "ok") return;
-		const data = result.payload?.data as { noOp?: boolean };
-		expect(data.noOp).toBe(true);
+		expect(result.payload.data.noOp).toBe(true);
 	});
 
 	it("emits noOp payload when cwd is not a git repo (collectCommitData returns null)", async () => {
-		// Synthesize a snapshot with a fake baseline; extract runs in a non-repo cwd.
-		const result = await gitCommitOutcome.extract(extractCtx(tmpDir, { baselineSha: "deadbeef" }));
+		// Synthesize a snapshot with a fake baseline; resolve runs in a non-repo cwd.
+		const result = await runOutcome(tmpDir, { baselineSha: "deadbeef" });
 		expect(result.kind).toBe("ok");
 		if (result.kind !== "ok") return;
-		const data = result.payload?.data as { noOp?: boolean };
-		expect(data.noOp).toBe(true);
+		expect(result.payload.data.noOp).toBe(true);
 	});
 });
 
-describe("artifact_path inheritance", () => {
+describe("gitCommitResolver always emits one artifact (the commit handle)", () => {
 	let tmpDir: string;
 
 	beforeEach(() => {
-		tmpDir = mkdtempSync(join(tmpdir(), "rpiv-git-ap-"));
+		tmpDir = mkdtempSync(join(tmpdir(), "rpiv-git-res-"));
 	});
 
 	afterEach(() => {
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	it("inherits currentArtifactPath(state) into the payload (chain continuity)", async () => {
-		const ctx: ExtractCtx<GitHeadSnapshot | undefined> = {
-			...extractCtx(tmpDir, { baselineSha: "abc" }),
-			state: {
-				...baselineCtx(tmpDir).state,
-				fallbackArtifactPath: ".rpiv/artifacts/x.md",
-			},
-		};
-		const result = await gitCommitOutcome.extract(ctx);
-		expect(result.kind).toBe("ok");
-		if (result.kind === "ok") expect(result.payload?.artifact_path).toBe(".rpiv/artifacts/x.md");
+	it("emits role:'commit' opaque handle with the post-stage SHA (or empty when unavailable)", async () => {
+		const resolved = await gitCommitResolver.resolve(resolveCtx(tmpDir, { baselineSha: "abc" }));
+		expect(resolved.kind).toBe("ok");
+		if (resolved.kind !== "ok") return;
+		expect(resolved.artifacts).toHaveLength(1);
+		expect(resolved.artifacts[0]?.role).toBe("commit");
+		expect(resolved.artifacts[0]?.handle.kind).toBe("opaque");
 	});
 });
 
 // Suppress unused-import lint when this file runs without git on PATH.
 void existsSync;
+void gitCommitReader;

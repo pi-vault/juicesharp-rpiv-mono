@@ -77,16 +77,22 @@ function formatStageRow(idx: number, nodeName: string, node: NodeDef, workflow: 
 }
 
 /**
- * Single tag per node encoding both the outcome kind and the baseline flag.
- * Default outcomes (resolved by `sessions.ts:resolveOutcome` from
- * `completionStrategy`) get their bundled name; overrides get `custom`
- * plus `+baseline` when a `baseline` hook is declared.
+ * Single tag per node encoding the outcome shape. Custom outcomes
+ * report `custom` (+`baseline` when the resolver declares a baseline
+ * hook, +`reader` when a reader is wired). Nodes without an outcome
+ * fall through to the framework default: `side-effect` for agent-end
+ * (the only completion strategy that has a default); `???` for
+ * artifact-emit (load-time validation rejects this — the tag is for
+ * defensive rendering only).
  */
 function outcomeTag(node: NodeDef): string {
 	if (node.outcome) {
-		return node.outcome.baseline ? "custom+baseline" : "custom";
+		const tags = ["custom"];
+		if (node.outcome.resolver.baseline) tags.push("baseline");
+		if (node.outcome.reader) tags.push("reader");
+		return tags.join("+");
 	}
-	return node.completionStrategy === "artifact-emit" ? "artifact-md" : "side-effect";
+	return node.completionStrategy === "artifact-emit" ? "???" : "side-effect";
 }
 
 /** Render the outgoing edge as a human-readable trailer (string or predicate target set). */

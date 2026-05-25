@@ -5,9 +5,9 @@
  *    maxBackwardJumps). Read by every layer; mutated only by the runner.
  *  - `RunState` — mutable bookkeeping (manifest, counters, telemetry,
  *    termination). Read by every layer; mutated by the runner + the audit
- *    layer. Always read the current artifact path via
- *    `currentArtifactPath(state)` (internal-utils.ts) — it prefers
- *    `manifest.artifact_path` and falls back to `fallbackArtifactPath`.
+ *    layer. Always read the chain's primary artifact via
+ *    `currentPrimaryArtifact(state)` (internal-utils.ts) — it prefers
+ *    `manifest.artifacts[0]` and falls back to `fallbackPrimaryArtifact`.
  *  - `RunnerCtx` — Pi command ctx augmented with idle-await guarantees;
  *    threaded from `withSession` callbacks down through stage/phase helpers.
  *
@@ -21,6 +21,7 @@
  */
 
 import type { NodeDef, Workflow } from "./api.js";
+import type { Artifact } from "./handle.js";
 import type { WorkflowCommandHost, WorkflowHost } from "./host.js";
 import type { Manifest } from "./manifest.js";
 
@@ -40,13 +41,19 @@ export interface RunState {
 
 	// ── Progress (hot paths — runner reads on every stage) ─────────────
 	/**
-	 * Bare-path mirror written only when (a) an `agent-end` stage extracted
-	 * a path without a manifest, or (b) a phase row committed an artifact.
-	 * Reads must go through `currentArtifactPath(state)` (internal-utils.ts)
-	 * — that helper prefers `state.manifest?.artifact_path` when available,
-	 * so a direct read of this field is a hint of a missed accessor.
+	 * Chain-input artifact — the rolling slot the next stage's prompt
+	 * inherits as input. Updated ONLY by artifact-emit stages whose
+	 * resolver returned at least one artifact (the first becomes the new
+	 * primary). Agent-end stages (commit, side-effect) record their own
+	 * manifest but do not touch this slot — preserves the "commit
+	 * inherits the prior chain's artifact" semantic without forcing
+	 * agent-end resolvers to re-emit the prior list.
+	 *
+	 * Reads must go through `currentPrimaryArtifact(state)`
+	 * (internal-utils.ts); a direct read here is a hint of a missed
+	 * accessor.
 	 */
-	fallbackArtifactPath: string | undefined;
+	primaryArtifact: Artifact | undefined;
 	manifest: Manifest | undefined;
 	/** Stages whose JSONL row landed on disk. */
 	stagesCompleted: number;
@@ -126,7 +133,7 @@ export interface StageSession extends SessionContext {
 	/** Only set for continue stages — branch slice offset. */
 	branchOffset?: number;
 	onFailure?: (ctx: RunnerCtx) => void;
-	onSuccess: (ctx: RunnerCtx, artifact: string | undefined) => Promise<void>;
+	onSuccess: (ctx: RunnerCtx, artifact: Artifact | undefined) => Promise<void>;
 }
 
 /**

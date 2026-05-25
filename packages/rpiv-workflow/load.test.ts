@@ -11,9 +11,18 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { action, artifact, defineWorkflow, type Workflow } from "./api.js";
+import { action, artifact as artifactRaw, defineWorkflow, type NodeDef, type Workflow } from "./api.js";
 import { __resetBuiltIns, registerBuiltIns } from "./built-ins.js";
 import { loadWorkflows, projectOverlayPaths, userOverlayPaths } from "./load/index.js";
+import { noopResolver } from "./outcomes/index.js";
+
+// artifact-emit nodes require an outcome (validated at load time). Load
+// tests assert merge / source-layer shape, so we wire a noop resolver
+// into every artifact() — same shape rule the real loader enforces,
+// minimal scaffolding per fixture.
+const STUB_ARTIFACT_OUTCOME = { resolver: noopResolver };
+const artifact = (overrides: Partial<NodeDef> = {}): NodeDef =>
+	artifactRaw({ outcome: STUB_ARTIFACT_OUTCOME, ...overrides });
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -70,7 +79,16 @@ const writeUserDropIn = (filename: string, body: string): void => {
 	writeFileSync(join(USER_PATHS.dropInDir, filename), body, "utf-8");
 };
 
-const importApi = `import { defineWorkflow, artifact, action, threshold } from "${join(__dirname, "api.ts")}";`;
+// Fixture preamble: jiti loads these as real TS — so the artifact()
+// calls inside the fixture strings go through the real validator.
+// Each fixture imports `artifact` (renamed) and re-binds it to a helper
+// that wires a noop stub outcome so artifact-emit nodes pass validation
+// without each fixture restating the resolver.
+const importApi = [
+	`import { defineWorkflow, artifact as artifactRaw, action, threshold } from "${join(__dirname, "api.ts")}";`,
+	`import { noopResolver } from "${join(__dirname, "outcomes", "index.ts")}";`,
+	`const artifact = (o = {}) => artifactRaw({ outcome: { resolver: noopResolver }, ...o });`,
+].join("\n");
 
 // ---------------------------------------------------------------------------
 // Baseline — no overlays

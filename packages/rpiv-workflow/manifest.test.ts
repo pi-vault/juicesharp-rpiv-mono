@@ -1,16 +1,16 @@
 /**
  * Tests for `finalizeManifest` — the single source of manifest metadata
- * authorship in the workflow runtime. Every outcome result flows through
- * this function on its way to disk + the next stage; the invariants this
- * file pins are: ctx wins over payload for meta fields, missing
- * artifact_path passes through as `undefined`, and every meta field is
- * stamped from ctx.
- *
- * Closes G1 from the 2026-05-24 review.
+ * authorship in the workflow runtime. Every outcome (resolver +
+ * optional reader) flows through this function on its way to disk + the
+ * next stage; the invariants this file pins are: ctx wins over payload
+ * for meta fields, the `artifacts` list passes through unchanged
+ * (including the empty-list case), and every meta field is stamped
+ * from ctx.
  */
 
 import { describe, expect, it } from "vitest";
-import { type ExtractPayload, finalizeManifest } from "./manifest.js";
+import { fs } from "./handle.js";
+import { finalizeManifest } from "./manifest.js";
 
 const baseCtx = {
 	skill: "research",
@@ -21,12 +21,14 @@ const baseCtx = {
 
 describe("finalizeManifest", () => {
 	it("stamps every meta field from ctx (skill, stageNumber, ts, runId)", () => {
-		const payload: ExtractPayload = {
-			kind: "artifact-md",
-			artifact_path: ".rpiv/artifacts/research/r.md",
-			data: { foo: 1 },
-		};
-		const m = finalizeManifest(payload, baseCtx);
+		const m = finalizeManifest(
+			{
+				kind: "artifact-md",
+				artifacts: [{ handle: fs(".rpiv/artifacts/research/r.md"), role: "primary" }],
+				data: { foo: 1 },
+			},
+			baseCtx,
+		);
 		expect(m.meta).toEqual({
 			skill: "research",
 			stageNumber: 3,
@@ -35,46 +37,37 @@ describe("finalizeManifest", () => {
 		});
 	});
 
-	it("forwards `kind`, `data`, and `artifact_path` from the payload unchanged", () => {
-		const payload: ExtractPayload<"git-commit", { sha: string }> = {
-			kind: "git-commit",
-			artifact_path: ".rpiv/artifacts/prior/x.md",
-			data: { sha: "deadbeef" },
-		};
-		const m = finalizeManifest(payload, baseCtx);
+	it("forwards `kind`, `artifacts`, and `data` from the input unchanged", () => {
+		const artifacts = [{ handle: fs(".rpiv/artifacts/prior/x.md") }];
+		const m = finalizeManifest({ kind: "git-commit", artifacts, data: { sha: "deadbeef" } }, baseCtx);
 		expect(m.kind).toBe("git-commit");
 		expect(m.data).toEqual({ sha: "deadbeef" });
-		expect(m.artifact_path).toBe(".rpiv/artifacts/prior/x.md");
+		expect(m.artifacts).toBe(artifacts);
 	});
 
-	it("passes `artifact_path: undefined` through (does not promote payload absence to a default)", () => {
-		const payload: ExtractPayload = { kind: "side-effect", data: {} };
-		const m = finalizeManifest(payload, baseCtx);
-		// `undefined` rather than absent — downstream consumers check
-		// `manifest.artifact_path === undefined` to detect a missing path.
-		expect("artifact_path" in m).toBe(true);
-		expect(m.artifact_path).toBeUndefined();
+	it("accepts an empty `artifacts` list (side-effect / passthrough stages)", () => {
+		const m = finalizeManifest({ kind: "side-effect", artifacts: [], data: {} }, baseCtx);
+		expect(m.artifacts).toEqual([]);
+		expect(m.kind).toBe("side-effect");
 	});
 
-	it("ctx.skill wins even if payload carries an unexpected `skill`-ish field", () => {
-		// Extractors must NOT be able to spoof meta.skill — the runner sets it
+	it("ctx.skill wins even if data carries an unexpected `skill`-ish field", () => {
+		// Resolvers/readers must NOT be able to spoof meta.skill — the runner sets it
 		// from the resolved node. Smuggling a `skill` key inside `data` must
 		// not affect meta.
-		const payload: ExtractPayload = {
-			kind: "artifact-md",
-			data: { skill: "evil-skill", foo: 1 },
-		};
-		const m = finalizeManifest(payload, baseCtx);
+		const m = finalizeManifest(
+			{ kind: "artifact-md", artifacts: [], data: { skill: "evil-skill", foo: 1 } },
+			baseCtx,
+		);
 		expect(m.meta.skill).toBe("research");
-		// The payload-side `skill` field is preserved inside data — it's just
-		// data, the consumer can read it but it never reaches meta.
+		// The data-side `skill` field is preserved — it's just data; the consumer
+		// can read it but it never reaches meta.
 		expect((m.data as Record<string, unknown>).skill).toBe("evil-skill");
 	});
 
 	it("preserves payload data structurally — no defensive clone, no field stripping", () => {
 		const data = { nested: { deep: [1, 2, 3] } };
-		const payload: ExtractPayload = { kind: "artifact-md", data };
-		const m = finalizeManifest(payload, baseCtx);
+		const m = finalizeManifest({ kind: "artifact-md", artifacts: [], data }, baseCtx);
 		// Same object reference — finalizeManifest does NOT clone.
 		// Downstream callers that need immutability MUST clone themselves;
 		// this keeps the hot path cheap.

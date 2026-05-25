@@ -240,6 +240,17 @@ function checkNodeEnums(w: Workflow, name: string, node: NodeDef, issues: Workfl
 			error(w.name, name, `sessionPolicy: "${node.sessionPolicy}" — must be one of ${SESSION_POLICIES.join(", ")}`),
 		);
 	}
+	if (node.completionStrategy === "artifact-emit" && !node.outcome) {
+		issues.push(
+			error(
+				w.name,
+				name,
+				`node "${name}" has completionStrategy "artifact-emit" but no \`outcome\` — ` +
+					"there is no framework default for artifact-emit nodes. Wire `outcome: rpivArtifactMdOutcome` " +
+					"(from @juicesharp/rpiv-pi) or supply your own `{ resolver, reader? }`.",
+			),
+		);
+	}
 }
 
 /**
