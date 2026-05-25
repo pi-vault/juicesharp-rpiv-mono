@@ -24,7 +24,6 @@ import {
 	ERR_INPUT_VALIDATION_FAILED,
 	ERR_MISSING_ARTIFACT,
 	ERR_SKILL_NOT_REGISTERED,
-	MAX_BACKWARD_JUMPS,
 	MSG_BACKWARD_JUMP_EXHAUSTED,
 	MSG_CHAIN_ADVANCE_FAILED,
 	MSG_INPUT_VALIDATION_FAILED,
@@ -42,6 +41,21 @@ import { appendRoutingDecision, generateRunId, writeHeader } from "./state.js";
 import { readBranch } from "./transcript.js";
 import type { RunContext, RunnerCtx, RunState } from "./types.js";
 import { validateManifestData } from "./validate-manifest.js";
+
+// ---------------------------------------------------------------------------
+// Policy constants
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-loop cap on decision-edge retries. A "backward jump" is a *decision*
+ * resolving to an already-visited node — i.e. the user's predicate chose to
+ * retry. Deterministic edges through a cycle (the loop body) are NOT
+ * counted; the budget is per retry iteration, not per hop. A decision
+ * escaping the loop (target not visited) resets the counter so each
+ * independent loop in the workflow gets its own fresh budget. With 2: the
+ * loop runs once unconditionally and may retry up to 2 more times.
+ */
+export const MAX_BACKWARD_JUMPS = 2;
 
 // ---------------------------------------------------------------------------
 // Public surface

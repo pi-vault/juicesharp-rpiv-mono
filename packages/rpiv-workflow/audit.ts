@@ -6,6 +6,11 @@
 
 import { assertNever } from "./internal-utils.js";
 import {
+	ERR_STAGE_ABORTED,
+	ERR_STAGE_NO_RESPONSE,
+	ERR_STAGE_TOOL_STALLED,
+	ERR_STAGE_TRUNCATED,
+	MSG_PARTIAL_ARTIFACTS,
 	MSG_STAGE_ABORTED,
 	MSG_STAGE_FAILED,
 	MSG_STAGE_NO_RESPONSE,
@@ -52,12 +57,12 @@ export function recordStage(
 
 /** Surface every artifact recorded so far — recap on stage failure. */
 export function notifyPartialArtifacts(ctx: RunnerCtx, cwd: string, runId: string): void {
-	const artifactPaths = readAllStages(cwd, runId)
+	const artifactList = readAllStages(cwd, runId)
 		.filter((s) => s.artifact)
 		.map((s) => `  • ${s.skill}: ${s.artifact}`)
 		.join("\n");
-	if (artifactPaths) {
-		ctx.ui.notify(`Artifacts produced before failure:\n${artifactPaths}`, "info");
+	if (artifactList) {
+		ctx.ui.notify(MSG_PARTIAL_ARTIFACTS(artifactList), "info");
 	}
 }
 
@@ -111,28 +116,28 @@ function stopFailureArgs(
 				status: "aborted",
 				notifyMsg: MSG_STAGE_ABORTED(skill),
 				notifyLevel: "warning",
-				errMsg: `${skill} aborted by user (ESC)`,
+				errMsg: ERR_STAGE_ABORTED(skill),
 			};
 		case "length":
 			return {
 				status: "failed",
 				notifyMsg: MSG_STAGE_TRUNCATED(skill),
 				notifyLevel: "error",
-				errMsg: `${skill} truncated — model hit output-length cap mid-reply`,
+				errMsg: ERR_STAGE_TRUNCATED(skill),
 			};
 		case "toolUse":
 			return {
 				status: "failed",
 				notifyMsg: MSG_STAGE_TOOL_STALLED(skill),
 				notifyLevel: "error",
-				errMsg: `${skill} tool loop did not settle before the orchestrator inspected the branch`,
+				errMsg: ERR_STAGE_TOOL_STALLED(skill),
 			};
 		case "noResponse":
 			return {
 				status: "failed",
 				notifyMsg: MSG_STAGE_NO_RESPONSE(skill),
 				notifyLevel: "error",
-				errMsg: `${skill} produced no assistant message`,
+				errMsg: ERR_STAGE_NO_RESPONSE(skill),
 			};
 		case "error":
 			return {

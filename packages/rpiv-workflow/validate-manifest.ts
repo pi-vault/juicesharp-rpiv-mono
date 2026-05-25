@@ -91,17 +91,6 @@ function resolveInstanceValue(data: unknown, instancePath: string): unknown {
 	return cur;
 }
 
-/** Asks the agent to update the frontmatter + re-write the artifact at the same path. */
-export function formatValidationFailuresForAgent(skill: string, failures: SchemaValidationFailure[]): string {
-	const errorLines = failures.map((f) => ` • ${f.path} — ${f.message}`).join("\n");
-
-	return (
-		`The artifact you produced for ${skill} doesn't satisfy the expected output schema. ` +
-		"Please update the frontmatter and re-write the artifact at the same path.\n\n" +
-		`Errors:\n${errorLines}`
-	);
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

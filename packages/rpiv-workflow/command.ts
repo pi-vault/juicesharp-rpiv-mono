@@ -4,17 +4,15 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import type { Workflow } from "./api.js";
 import { renderConfigLayer } from "./layers.js";
 import { type Issue, type LoadedWorkflows, loadWorkflows } from "./load.js";
+import {
+	CMD_DESCRIPTION,
+	MSG_INTERACTIVE_ONLY,
+	MSG_LOAD_ABORTED,
+	MSG_WORKFLOW_NOT_FOUND,
+	MSG_WORKFLOW_THREW,
+} from "./messages.js";
 import { formatWorkflowDetails, formatWorkflowList } from "./preview.js";
 import { runWorkflow } from "./runner.js";
-
-// ---------------------------------------------------------------------------
-// Message constants
-// ---------------------------------------------------------------------------
-
-const MSG_INTERACTIVE_ONLY = "/wf requires interactive mode";
-const ERR_WORKFLOW_THROW = (reason: string) => `/wf: workflow runner failed unexpectedly: ${reason}`;
-const ERR_LOAD_ABORTED = (count: number) =>
-	`/wf: ${count} ${count === 1 ? "config error" : "config errors"} — see warnings above (fix and re-run)`;
 
 // ---------------------------------------------------------------------------
 // Arg parsing
@@ -43,7 +41,7 @@ export function parseArgs(
 
 export function registerWorkflowCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("wf", {
-		description: "Run a skill workflow: /wf [workflow] [description]",
+		description: CMD_DESCRIPTION,
 		handler: (args: string, ctx: ExtensionCommandContext) => handleWorkflowCommand(pi, args, ctx),
 	});
 }
@@ -72,13 +70,13 @@ async function handleWorkflowCommand(pi: ExtensionAPI, args: string, ctx: Extens
 	// failed to import).
 	const errorCount = loaded.issues.filter((i) => i.severity === "error").length;
 	if (errorCount > 0) {
-		ctx.ui.notify(ERR_LOAD_ABORTED(errorCount), "error");
+		ctx.ui.notify(MSG_LOAD_ABORTED(errorCount), "error");
 		return;
 	}
 
 	const workflow = pickWorkflow(loaded, workflowName);
 	if (!workflow) {
-		ctx.ui.notify(`/wf: workflow "${workflowName}" not found`, "error");
+		ctx.ui.notify(MSG_WORKFLOW_NOT_FOUND(workflowName), "error");
 		return;
 	}
 
@@ -89,7 +87,7 @@ async function handleWorkflowCommand(pi: ExtensionAPI, args: string, ctx: Extens
 		await runWorkflow(ctx, { workflow, input, pi });
 	} catch (e) {
 		const reason = e instanceof Error ? e.message : String(e);
-		ctx.ui.notify(ERR_WORKFLOW_THROW(reason), "error");
+		ctx.ui.notify(MSG_WORKFLOW_THREW(reason), "error");
 	}
 }
 

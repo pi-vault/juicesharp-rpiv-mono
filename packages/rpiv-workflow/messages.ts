@@ -20,6 +20,12 @@ export const MSG_STAGE_TRUNCATED = (skill: string) =>
 export const MSG_STAGE_TOOL_STALLED = (skill: string) => `✗ ${skill} tool loop did not settle — stopping workflow`;
 export const MSG_STAGE_NO_RESPONSE = (skill: string) => `✗ ${skill} produced no response — stopping workflow`;
 
+export const ERR_STAGE_ABORTED = (skill: string) => `${skill} aborted by user (ESC)`;
+export const ERR_STAGE_TRUNCATED = (skill: string) => `${skill} truncated — model hit output-length cap mid-reply`;
+export const ERR_STAGE_TOOL_STALLED = (skill: string) =>
+	`${skill} tool loop did not settle before the orchestrator inspected the branch`;
+export const ERR_STAGE_NO_RESPONSE = (skill: string) => `${skill} produced no assistant message`;
+
 export const MSG_WORKFLOW_COMPLETE = (stages: number) => `rpiv: workflow complete (${stages} stages)`;
 export const MSG_WORKFLOW_CANCELLED = "rpiv: workflow cancelled";
 
@@ -28,6 +34,17 @@ export const MSG_VALIDATION_RETRY = (skill: string, attempt: number) =>
 export const MSG_VALIDATION_EXHAUSTED = (skill: string) => `rpiv: ${skill} output validation exhausted retries`;
 export const ERR_VALIDATION_FAILED = (skill: string, failures: string) =>
 	`${skill} output validation failed after retries: ${failures}`;
+
+/**
+ * Sent to the agent as a follow-up message when an output-schema validation
+ * fails — instructs the agent to re-write the artifact at the same path with
+ * a corrected frontmatter. `errorLines` is a pre-joined bullet list (one
+ * line per failure) so the factory stays single-arg-typed.
+ */
+export const MSG_VALIDATION_RETRY_PROMPT = (skill: string, errorLines: string) =>
+	`The artifact you produced for ${skill} doesn't satisfy the expected output schema. ` +
+	"Please update the frontmatter and re-write the artifact at the same path.\n\n" +
+	`Errors:\n${errorLines}`;
 
 export const MSG_INPUT_VALIDATION_FAILED = (currentSkill: string, prevSkill: string) =>
 	`✗ ${currentSkill} input validation failed — upstream ${prevSkill} produced invalid data`;
@@ -38,17 +55,6 @@ export const MSG_MISSING_ARTIFACT = (currentSkill: string) =>
 	`✗ ${currentSkill} has no upstream artifact to consume — stopping workflow`;
 export const ERR_MISSING_ARTIFACT = (currentSkill: string, stageNumber: number) =>
 	`Stage ${stageNumber} (${currentSkill}) has no upstream artifactPath; only stage 1 may consume the user's original input`;
-
-/**
- * Per-loop cap on decision-edge retries. A "backward jump" is a *decision*
- * resolving to an already-visited node — i.e. the user's predicate chose to
- * retry. Deterministic edges through a cycle (the loop body) are NOT
- * counted; the budget is per retry iteration, not per hop. A decision
- * escaping the loop (target not visited) resets the counter so each
- * independent loop in the workflow gets its own fresh budget. With 2: the
- * loop runs once unconditionally and may retry up to 2 more times.
- */
-export const MAX_BACKWARD_JUMPS = 2;
 
 export const MSG_BACKWARD_JUMP_EXHAUSTED = (jumps: number, max: number) =>
 	`rpiv: backward-jump limit exceeded (${jumps}/${max}) — stopping workflow to prevent infinite loop`;
@@ -96,3 +102,31 @@ export const ERR_SKILL_NOT_REGISTERED = (skill: string, stageNumber: number) =>
  */
 export const MSG_ROUTING_AUDIT_DROPPED = (fromNode: string, decision: string) =>
 	`⚠ rpiv: routing decision ${fromNode} → ${decision} not persisted to audit trail (continuing run)`;
+
+/** Recap surfaced on stage failure — pre-joined bullet list of artifact paths. */
+export const MSG_PARTIAL_ARTIFACTS = (artifactList: string) => `Artifacts produced before failure:\n${artifactList}`;
+
+// ---------------------------------------------------------------------------
+// /wf command shell — notify-only (never lands in state.error; ERR_ reserved)
+// ---------------------------------------------------------------------------
+
+export const MSG_INTERACTIVE_ONLY = "/wf requires interactive mode";
+
+export const MSG_WORKFLOW_THREW = (reason: string) => `/wf: workflow runner failed unexpectedly: ${reason}`;
+
+export const MSG_LOAD_ABORTED = (count: number) =>
+	`/wf: ${count} ${count === 1 ? "config error" : "config errors"} — see warnings above (fix and re-run)`;
+
+export const MSG_WORKFLOW_NOT_FOUND = (name: string) => `/wf: workflow "${name}" not found`;
+
+/** Pi command registry — displayed by Pi's `/?` / command list. */
+export const CMD_DESCRIPTION = "Run a skill workflow: /wf [workflow] [description]";
+
+/** No-args listing footer — generic usage hint. */
+export const CMD_USAGE_LIST = "Usage: /wf [workflow] <description>";
+
+/** No-args listing footer — preview-mode hint paired with CMD_USAGE_LIST. */
+export const CMD_USAGE_PREVIEW = "/wf <workflow>             — preview stages";
+
+/** Per-workflow details footer — narrowed to the workflow the user previewed. */
+export const CMD_USAGE_RUN = (name: string) => `Usage: /wf ${name} <description>`;

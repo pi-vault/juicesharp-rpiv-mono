@@ -33,13 +33,13 @@ import {
 	MSG_STAGE_FAILED,
 	MSG_VALIDATION_EXHAUSTED,
 	MSG_VALIDATION_RETRY,
+	MSG_VALIDATION_RETRY_PROMPT,
 } from "./messages.js";
 import { type BranchEntry, classifyStop, extractArtifactPath, readBranch, type StopSignal } from "./transcript.js";
 import type { PhaseSession, RunnerCtx, StageSession } from "./types.js";
 import {
 	DEFAULT_VALIDATION_RETRIES,
 	DEFAULT_VALIDATION_RETRY_TIMEOUT_MS,
-	formatValidationFailuresForAgent,
 	MAX_VALIDATION_RETRIES,
 	MAX_VALIDATION_RETRY_TIMEOUT_MS,
 	MIN_VALIDATION_RETRIES,
@@ -420,8 +420,9 @@ async function askAgentToFix(
 	timeoutMs: number,
 ): Promise<void> {
 	ctx.ui.notify(MSG_VALIDATION_RETRY(s.skill, attempt), "warning");
+	const errorLines = failures.map((f) => ` • ${f.path} — ${f.message}`).join("\n");
 	await withTimeout(
-		sendAndAwaitIdle(ctx, formatValidationFailuresForAgent(s.skill, failures), {
+		sendAndAwaitIdle(ctx, MSG_VALIDATION_RETRY_PROMPT(s.skill, errorLines), {
 			sessionPolicy: s.node.sessionPolicy,
 			pi: s.pi,
 		}),

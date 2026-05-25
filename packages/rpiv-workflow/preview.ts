@@ -8,9 +8,7 @@
 import type { NodeDef, Workflow } from "./api.js";
 import { type ConfigLayer, renderConfigLayer } from "./layers.js";
 import type { LoadedWorkflows } from "./load.js";
-
-const USAGE = "Usage: /wf [workflow] <description>";
-const USAGE_PREVIEW = "/wf <workflow>             — preview stages";
+import { CMD_USAGE_LIST, CMD_USAGE_PREVIEW, CMD_USAGE_RUN } from "./messages.js";
 
 // ===========================================================================
 // Public formatters
@@ -26,7 +24,14 @@ export function formatWorkflowList(loaded: LoadedWorkflows): string {
 		return `  ${w.name.padEnd(28)} ${String(stages).padStart(2)} stages  ${tags.join(" ")}`;
 	});
 
-	return ["Available workflows:", ...rows, "", formatLayerBanner(loaded.layers), USAGE, USAGE_PREVIEW].join("\n");
+	return [
+		"Available workflows:",
+		...rows,
+		"",
+		formatLayerBanner(loaded.layers),
+		CMD_USAGE_LIST,
+		CMD_USAGE_PREVIEW,
+	].join("\n");
 }
 
 /** Workflow-name-only path: full stage list + edges for one workflow. */
@@ -40,7 +45,7 @@ export function formatWorkflowDetails(loaded: LoadedWorkflows, name: string): st
 		formatStageRow(i + 1, nodeName, node, workflow),
 	);
 
-	return [heading, "", ...stageRows, "", `Usage: /wf ${name} <description>`].join("\n");
+	return [heading, "", ...stageRows, "", CMD_USAGE_RUN(name)].join("\n");
 }
 
 // ===========================================================================
