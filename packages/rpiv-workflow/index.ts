@@ -57,8 +57,8 @@ export { type RunWorkflowOptions, type RunWorkflowResult, runWorkflow } from "./
 export { readLastStage, resolveStateFile, resolveWorkflowsDir } from "./state.js";
 export { typeboxSchema } from "./typebox-adapter.js";
 export type { RunContext, RunState } from "./types.js";
-export { type ValidationIssue, validateWorkflow } from "./validate.js";
-export { type ValidationFailure, validateManifestData } from "./validation.js";
+export { type SchemaValidationFailure, validateManifestData } from "./validate-manifest.js";
+export { validateWorkflow, type WorkflowValidationIssue } from "./validate-workflow.js";
 
 export default function (pi: ExtensionAPI): void {
 	registerWorkflowCommand(pi);

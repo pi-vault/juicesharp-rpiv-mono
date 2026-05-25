@@ -80,7 +80,7 @@ export type EdgeFn = EdgePredicate & { targets?: readonly string[] };
 
 /**
  * Terminal edge sentinel. Single source of truth for the `"stop"` literal
- * embedded in `EdgeTarget`; `validate.ts` + `routing.ts` import this rather
+ * embedded in `EdgeTarget`; `validate-workflow.ts` + `routing.ts` import this rather
  * than re-declaring the string.
  */
 export const STOP = "stop" as const;
@@ -119,7 +119,7 @@ export interface NodeDef {
  * A complete workflow. `name` is what users type as `/wf <name>`; `start`
  * is the entry node; `nodes` is the lexicon; `edges` is the wiring. Every
  * key in `edges` must exist in `nodes`; every string value must exist in
- * `nodes` or be `"stop"`. Validated at load time by `validate.ts`.
+ * `nodes` or be `"stop"`. Validated at load time by `validate-workflow.ts`.
  */
 export interface Workflow {
 	name: string;
@@ -172,7 +172,7 @@ export function action(overrides: Partial<NodeDef> = {}): NodeDef {
 
 /**
  * Marker attached to EdgeFns that read from `manifest.data`.
- * `validate.ts:checkPredicateSchemas` warns when a node feeds a marked
+ * `validate-workflow.ts:checkPredicateSchemas` warns when a node feeds a marked
  * predicate but has no `outputSchema` — routing on un-validated frontmatter
  * is the I6-class defect from the bcc34bc review.
  *
@@ -220,7 +220,7 @@ function wrapEdgeFn(factory: string, targets: readonly string[], fn: EdgePredica
 
 /**
  * Promote a hand-rolled `EdgePredicate` to an `EdgeFn` by structurally
- * attaching the set of possible returns. `validate.ts` requires every
+ * attaching the set of possible returns. `validate-workflow.ts` requires every
  * EdgeFn to carry `.targets` so reachability and load-time edge-target
  * checks see every branch; this factory is the only blessed way to author
  * a multi-branch predicate.

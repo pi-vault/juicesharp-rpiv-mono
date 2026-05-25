@@ -18,7 +18,7 @@ import {
 	type Workflow,
 } from "./api.js";
 import { typeboxSchema } from "./typebox-adapter.js";
-import { validateWorkflow } from "./validate.js";
+import { validateWorkflow } from "./validate-workflow.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -121,7 +121,7 @@ describe("validateWorkflow — edge targets", () => {
 
 	it("errors on an EdgeFn without .targets metadata (no probe fallback)", () => {
 		// A hand-rolled EdgeFn that skips `definePredicate` / `threshold` carries
-		// no `.targets` annotation. validate.ts refuses to probe — the missing
+		// no `.targets` annotation. validate-workflow.ts refuses to probe — the missing
 		// metadata makes reachability + status-line totals structurally unsound.
 		const handCrafted: EdgeFn = () => "ghost";
 		const w: Workflow = {

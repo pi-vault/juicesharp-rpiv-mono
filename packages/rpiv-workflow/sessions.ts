@@ -44,10 +44,10 @@ import {
 	MAX_VALIDATION_RETRY_TIMEOUT_MS,
 	MIN_VALIDATION_RETRIES,
 	MIN_VALIDATION_RETRY_TIMEOUT_MS,
-	type ValidationFailure,
+	type SchemaValidationFailure,
 	type ValidationResult,
 	validateManifestData,
-} from "./validation.js";
+} from "./validate-manifest.js";
 
 // ===========================================================================
 // PUBLIC ENTRIES — what the orchestrator calls
@@ -382,7 +382,7 @@ async function retryUntilValid(
 
 /**
  * Translate a thrown `validateManifestData` (the async-schema runtime check at
- * validation.ts:70 is the known thrower) into the canonical fatal-extraction
+ * validate-manifest.ts:70 is the known thrower) into the canonical fatal-extraction
  * outcome. Without this, the throw escapes retryUntilValid → postStage →
  * runStageOrRecordFailure's catch, surfacing as MSG_STAGE_THREW — the wrong error
  * class for a schema-shape constraint the workflow author owns. Routing
@@ -390,7 +390,7 @@ async function retryUntilValid(
  * which attributes the row to `skill`, fires MSG_STAGE_FAILED, and exits
  * cleanly through the same path validation-exhausted uses.
  *
- * The load-time `isAsyncSchema` probe in validate.ts is a best-effort UX hint;
+ * The load-time `isAsyncSchema` probe in validate-workflow.ts is a best-effort UX hint;
  * this is the load-bearing safety net behind it.
  */
 function validateOrFatal(
@@ -416,7 +416,7 @@ async function askAgentToFix(
 	ctx: RunnerCtx,
 	s: StageSession,
 	attempt: number,
-	failures: ValidationFailure[],
+	failures: SchemaValidationFailure[],
 	timeoutMs: number,
 ): Promise<void> {
 	ctx.ui.notify(MSG_VALIDATION_RETRY(s.skill, attempt), "warning");
@@ -430,7 +430,7 @@ async function askAgentToFix(
 	);
 }
 
-function validationExhausted(failures: ValidationFailure[]): ExtractionOutcome {
+function validationExhausted(failures: SchemaValidationFailure[]): ExtractionOutcome {
 	const failureSummary = failures.map((f) => `${f.path}: ${f.message}`).join("; ");
 	return { kind: "validation-exhausted", failureSummary };
 }

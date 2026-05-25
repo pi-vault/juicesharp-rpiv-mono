@@ -47,7 +47,7 @@ import { createJiti } from "jiti";
 import type { Workflow } from "./api.js";
 import { getBuiltIns } from "./built-ins.js";
 import type { ConfigLayer } from "./layers.js";
-import { type ValidationIssue, validateWorkflow } from "./validate.js";
+import { validateWorkflow, type WorkflowValidationIssue } from "./validate-workflow.js";
 
 // ===========================================================================
 // Public types
@@ -63,7 +63,7 @@ export interface LoadIssue {
 	message: string;
 }
 
-export type Issue = LoadIssue | (ValidationIssue & { kind: "validation" });
+export type Issue = LoadIssue | (WorkflowValidationIssue & { kind: "validation" });
 
 export interface LoadedWorkflows {
 	workflows: readonly Workflow[];

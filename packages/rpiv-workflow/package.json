@@ -50,8 +50,8 @@
     "transcript.ts",
     "typebox-adapter.ts",
     "types.ts",
-    "validate.ts",
-    "validation.ts",
+    "validate-manifest.ts",
+    "validate-workflow.ts",
     "README.md",
     "LICENSE"
   ],

@@ -10,7 +10,7 @@ import type { NodeSchema } from "./api.js";
 // Types
 // ---------------------------------------------------------------------------
 
-export interface ValidationFailure {
+export interface SchemaValidationFailure {
 	/** JSON-pointer-like path (instancePath); `"."` for root. */
 	path: string;
 	/** Schema keyword that failed. */
@@ -22,7 +22,7 @@ export interface ValidationFailure {
 
 export interface ValidationResult {
 	valid: boolean;
-	failures: ValidationFailure[];
+	failures: SchemaValidationFailure[];
 }
 
 // ---------------------------------------------------------------------------
@@ -54,7 +54,7 @@ export function validateManifestData(schema: NodeSchema, data: unknown): Validat
 	if (!result.issues) {
 		return { valid: true, failures: [] };
 	}
-	const failures: ValidationFailure[] = result.issues.map((issue) => {
+	const failures: SchemaValidationFailure[] = result.issues.map((issue) => {
 		const path = issue.path ? formatStandardPath(issue.path) : ".";
 		return {
 			path,
@@ -92,7 +92,7 @@ function resolveInstanceValue(data: unknown, instancePath: string): unknown {
 }
 
 /** Asks the agent to update the frontmatter + re-write the artifact at the same path. */
-export function formatValidationFailuresForAgent(skill: string, failures: ValidationFailure[]): string {
+export function formatValidationFailuresForAgent(skill: string, failures: SchemaValidationFailure[]): string {
 	const errorLines = failures.map((f) => ` • ${f.path} — ${f.message}`).join("\n");
 
 	return (

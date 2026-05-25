@@ -35,7 +35,7 @@ import {
 import { runPhaseSession, runStageSession } from "./sessions.js";
 import { typeboxSchema } from "./typebox-adapter.js";
 import type { PhaseSession, RunnerCtx, RunState, StageSession } from "./types.js";
-import { MAX_VALIDATION_RETRIES, MAX_VALIDATION_RETRY_TIMEOUT_MS } from "./validation.js";
+import { MAX_VALIDATION_RETRIES, MAX_VALIDATION_RETRY_TIMEOUT_MS } from "./validate-manifest.js";
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
@@ -430,7 +430,7 @@ describe("sessions — validation retry loop", () => {
 		const onFailure = vi.fn();
 
 		// Hand-rolled async Standard Schema: validate() returns a Promise. The
-		// runtime guard at validation.ts:70 throws synchronously when it sees
+		// runtime guard at validate-manifest.ts:70 throws synchronously when it sees
 		// the Promise result; validateOrFatal catches and converts to fatal.
 		const asyncSchema: NodeSchema<unknown, unknown> = {
 			"~standard": {

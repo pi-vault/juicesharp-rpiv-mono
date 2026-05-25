@@ -41,7 +41,7 @@ import { runPhaseSession, runStageSession } from "./sessions.js";
 import { appendRoutingDecision, generateRunId, writeHeader } from "./state.js";
 import { readBranch } from "./transcript.js";
 import type { RunContext, RunnerCtx, RunState } from "./types.js";
-import { validateManifestData } from "./validation.js";
+import { validateManifestData } from "./validate-manifest.js";
 
 // ---------------------------------------------------------------------------
 // Public surface
@@ -148,7 +148,7 @@ export async function runWorkflow(
 /**
  * Upper bound for the status-line denominator — BFS reach from `workflow.start`.
  *
- * Relies on every `EdgeFn` carrying `.targets`. `validate.ts` enforces this at
+ * Relies on every `EdgeFn` carrying `.targets`. `validate-workflow.ts` enforces this at
  * load time, so by the time the runner sees a workflow the contract holds; if
  * a workflow with a `.targets`-less EdgeFn somehow reaches the runner anyway
  * (e.g. a test bypassed validation), we fall back to counting all declared

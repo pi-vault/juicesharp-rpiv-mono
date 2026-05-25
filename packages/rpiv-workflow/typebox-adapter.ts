@@ -1,6 +1,6 @@
 /**
  * Bridge between the TypeBox schemas the built-in workflows author with and
- * the Standard Schema v1 interface that `validation.ts` consumes.
+ * the Standard Schema v1 interface that `validate-manifest.ts` consumes.
  *
  * Why the bridge exists: `NodeDef.outputSchema` / `inputSchema` are typed as
  * `StandardSchemaV1` so users can author with Zod, Valibot, ArkType, or any
@@ -10,7 +10,7 @@
  * `Type.Object(...)` results directly.
  *
  * Validation surface kept intentionally tight: only the runtime + path
- * shape `validation.ts` needs. `expected`/`actual` diagnostic fields from
+ * shape `validate-manifest.ts` needs. `expected`/`actual` diagnostic fields from
  * the legacy TypeBox failure shape become best-effort placeholders, since
  * Standard Schema's `issues` only carries `message` + `path`.
  */

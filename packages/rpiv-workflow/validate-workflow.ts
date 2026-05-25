@@ -5,7 +5,7 @@
  * unknown edge sources/targets, unreachable nodes, missing terminals,
  * predicate functions that return targets outside the node set.
  *
- * `validateWorkflow` returns a flat array of `ValidationIssue`s — errors
+ * `validateWorkflow` returns a flat array of `WorkflowValidationIssue`s — errors
  * for problems that would crash the runner, warnings for shapes that
  * work but probably aren't what the author intended (unreachable nodes,
  * implicit terminals via missing edges). The load pipeline can choose
@@ -21,13 +21,13 @@ import {
 	MAX_VALIDATION_RETRY_TIMEOUT_MS,
 	MIN_VALIDATION_RETRIES,
 	MIN_VALIDATION_RETRY_TIMEOUT_MS,
-} from "./validation.js";
+} from "./validate-manifest.js";
 
 // ===========================================================================
 // Issue shape
 // ===========================================================================
 
-export interface ValidationIssue {
+export interface WorkflowValidationIssue {
 	workflow: string;
 	node?: string;
 	severity: "error" | "warning";
@@ -50,8 +50,8 @@ export interface ValidationIssue {
  * Validate one workflow. Aggregates all issues; never short-circuits. Caller
  * decides what's fatal — `severity === "error"` is the runner-blocking set.
  */
-export function validateWorkflow(workflow: Workflow): ValidationIssue[] {
-	const issues: ValidationIssue[] = [];
+export function validateWorkflow(workflow: Workflow): WorkflowValidationIssue[] {
+	const issues: WorkflowValidationIssue[] = [];
 
 	checkWorkflowName(workflow, issues);
 
@@ -78,14 +78,14 @@ export function validateWorkflow(workflow: Workflow): ValidationIssue[] {
 // ===========================================================================
 
 /** `name` is what users type as `/wf <name>` — empty string makes the workflow unreachable. */
-function checkWorkflowName(w: Workflow, issues: ValidationIssue[]): void {
+function checkWorkflowName(w: Workflow, issues: WorkflowValidationIssue[]): void {
 	if (typeof w.name !== "string" || w.name.length === 0) {
 		issues.push(error("(anonymous)", undefined, "workflow name must be a non-empty string"));
 	}
 }
 
 /** Every key in `edges` must be a declared node. */
-function checkEdgeKeys(w: Workflow, issues: ValidationIssue[]): void {
+function checkEdgeKeys(w: Workflow, issues: WorkflowValidationIssue[]): void {
 	for (const from of Object.keys(w.edges)) {
 		if (!w.nodes[from]) {
 			issues.push(error(w.name, from, `edges["${from}"] references a node that's not declared in nodes`));
@@ -98,7 +98,7 @@ function checkEdgeKeys(w: Workflow, issues: ValidationIssue[]): void {
  * String targets are checked directly. `EdgeFn` targets are checked via
  * `.targets` metadata when present, or by probing — see `enumerateEdgeFnTargets`.
  */
-function checkEdgeTargets(w: Workflow, issues: ValidationIssue[]): void {
+function checkEdgeTargets(w: Workflow, issues: WorkflowValidationIssue[]): void {
 	for (const [from, target] of Object.entries(w.edges)) {
 		for (const candidate of enumerateTargets(target, w.name, from, issues)) {
 			if (candidate === STOP) continue;
@@ -112,7 +112,7 @@ function checkEdgeTargets(w: Workflow, issues: ValidationIssue[]): void {
 }
 
 /** Nodes with no outgoing edge are implicit terminals — usually a missing connection. */
-function checkMissingEdges(w: Workflow, issues: ValidationIssue[]): void {
+function checkMissingEdges(w: Workflow, issues: WorkflowValidationIssue[]): void {
 	for (const name of Object.keys(w.nodes)) {
 		if (!(name in w.edges)) {
 			issues.push(
@@ -131,7 +131,7 @@ function checkMissingEdges(w: Workflow, issues: ValidationIssue[]): void {
  * a runner error (they can't fire) but they're almost always a mistake worth
  * surfacing.
  */
-function checkReachability(w: Workflow, issues: ValidationIssue[]): void {
+function checkReachability(w: Workflow, issues: WorkflowValidationIssue[]): void {
 	if (!w.nodes[w.start]) return; // already reported by start-check
 
 	const reachable = new Set<string>();
@@ -162,7 +162,7 @@ function checkReachability(w: Workflow, issues: ValidationIssue[]): void {
  * numeric `maxValidationRetries` or any string for `onValidationFailure`; this
  * pass catches them at load time.
  */
-function checkNodeSemantics(w: Workflow, issues: ValidationIssue[]): void {
+function checkNodeSemantics(w: Workflow, issues: WorkflowValidationIssue[]): void {
 	for (const [name, node] of Object.entries(w.nodes)) {
 		if (
 			node.maxValidationRetries !== undefined &&
@@ -262,7 +262,7 @@ function checkNodeSemantics(w: Workflow, issues: ValidationIssue[]): void {
  * Best-effort: a schema whose synchronous arm throws on the empty-object
  * probe is reported as non-async; if such a schema is in fact async, the
  * runtime `validateManifestData` throw is the load-bearing safety net —
- * see `validation.ts:validateManifestData` (the `result instanceof Promise`
+ * see `validate-manifest.ts:validateManifestData` (the `result instanceof Promise`
  * branch).
  */
 function isAsyncSchema(schema: { "~standard": { validate: (data: unknown) => unknown } }): boolean {
@@ -285,7 +285,7 @@ function isAsyncSchema(schema: { "~standard": { validate: (data: unknown) => unk
  * Predicates authored via `defineStatePredicate` consult only `state` or
  * `manifest.meta` and carry no marker — exempt from this lint.
  */
-function checkPredicateSchemas(w: Workflow, issues: ValidationIssue[]): void {
+function checkPredicateSchemas(w: Workflow, issues: WorkflowValidationIssue[]): void {
 	for (const [from, target] of Object.entries(w.edges)) {
 		if (typeof target === "string") continue;
 		if (!marksFrontmatter(target)) continue;
@@ -318,7 +318,12 @@ function checkPredicateSchemas(w: Workflow, issues: ValidationIssue[]): void {
  * Issues collected via the `issues` array — pass an empty array when you're
  * only interested in enumeration (reachability traversal).
  */
-function enumerateTargets(target: EdgeTarget, workflow: string, from: string, issues: ValidationIssue[]): string[] {
+function enumerateTargets(
+	target: EdgeTarget,
+	workflow: string,
+	from: string,
+	issues: WorkflowValidationIssue[],
+): string[] {
 	if (typeof target === "string") return [target];
 	if (Array.isArray(target.targets) && target.targets.length > 0) return [...target.targets];
 	issues.push(
@@ -335,10 +340,10 @@ function enumerateTargets(target: EdgeTarget, workflow: string, from: string, is
 // Issue constructors
 // ===========================================================================
 
-function error(workflow: string, node: string | undefined, message: string): ValidationIssue {
+function error(workflow: string, node: string | undefined, message: string): WorkflowValidationIssue {
 	return { workflow, node, severity: "error", message };
 }
 
-function warning(workflow: string, node: string | undefined, message: string): ValidationIssue {
+function warning(workflow: string, node: string | undefined, message: string): WorkflowValidationIssue {
 	return { workflow, node, severity: "warning", message };
 }

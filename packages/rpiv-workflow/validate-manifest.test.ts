@@ -3,8 +3,9 @@
  * walltime cap (Q14) that wraps the validation-retry loop's
  * `sendAndAwaitIdle`. `withTimeout` is a generic Promise.race helper and now
  * lives in `internal-utils.ts`; the timeout constants
- * (`DEFAULT/MIN/MAX_VALIDATION_RETRY_TIMEOUT_MS`) stay in `validation.ts`
- * since they're the validation-domain knobs that drive the helper.
+ * (`DEFAULT/MIN/MAX_VALIDATION_RETRY_TIMEOUT_MS`) stay in
+ * `validate-manifest.ts` since they're the validation-domain knobs that
+ * drive the helper.
  */
 
 import { describe, expect, it } from "vitest";
@@ -13,7 +14,7 @@ import {
 	DEFAULT_VALIDATION_RETRY_TIMEOUT_MS,
 	MAX_VALIDATION_RETRY_TIMEOUT_MS,
 	MIN_VALIDATION_RETRY_TIMEOUT_MS,
-} from "./validation.js";
+} from "./validate-manifest.js";
 
 describe("withTimeout", () => {
 	it("resolves with the inner promise's value when it settles before the timer", async () => {
