@@ -1,7 +1,23 @@
 /**
- * Shared types for the workflow modules. Lives apart from runner.ts /
- * implement-phases.ts so both can reference the same shapes without a
- * runtime import cycle (type-only refs back via this module are cycle-free).
+ * Runtime types. Three nouns flow through the workflow runtime:
+ *
+ *  - `RunContext` — per-run carry (cwd, runId, workflow, state, visited, pi,
+ *    maxBackwardJumps). Read by every layer; mutated only by the runner.
+ *  - `RunState` — mutable bookkeeping (manifest, counters, telemetry,
+ *    termination). Read by every layer; mutated by the runner + the audit
+ *    layer. Always read the current artifact path via
+ *    `currentArtifactPath(state)` (internal-utils.ts) — it prefers
+ *    `manifest.artifact_path` and falls back to `fallbackArtifactPath`.
+ *  - `RunnerCtx` — Pi command ctx augmented with idle-await guarantees;
+ *    threaded from `withSession` callbacks down through stage/phase helpers.
+ *
+ * Per-stage / per-phase sessions extend a shared `SessionContext` base
+ * (cwd, runId, state, prompt, skill). The audit layer pins its dependency
+ * on this base structurally via `AuditCtx = Pick<SessionContext, ...>`.
+ *
+ * Lives apart from runner.ts / sessions.ts so both can reference the same
+ * shapes without a runtime import cycle (type-only refs back via this
+ * module are cycle-free).
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
