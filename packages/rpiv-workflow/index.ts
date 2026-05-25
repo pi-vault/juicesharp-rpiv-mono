@@ -65,7 +65,17 @@ export type {
 	SnapshotCtx,
 } from "./manifest.js";
 export { type RunWorkflowOptions, type RunWorkflowResult, runWorkflow } from "./runner/index.js";
-export { readLastStage, resolveStateFile, resolveWorkflowsDir } from "./state.js";
+export {
+	listArtifacts,
+	listRuns,
+	type RunSummary,
+	readHeader,
+	readLastStage,
+	resolveStateFile,
+	resolveWorkflowsDir,
+	type WorkflowHeader,
+	type WorkflowStage,
+} from "./state.js";
 export { typeboxSchema } from "./typebox-adapter.js";
 export type { RunContext, RunState } from "./types.js";
 export { type SchemaValidationFailure, validateManifestData } from "./validate-manifest.js";

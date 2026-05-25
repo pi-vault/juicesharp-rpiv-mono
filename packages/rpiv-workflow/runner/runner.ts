@@ -64,6 +64,16 @@ export interface RunWorkflowOptions {
 }
 
 export interface RunWorkflowResult {
+	/**
+	 * The run's identity on disk — the `<run-id>` portion of
+	 * `<cwd>/.rpiv/workflows/<run-id>.jsonl`. Live consumers can hand
+	 * this to `readLastStage` / `listArtifacts` / future inspect-past-run
+	 * helpers without recomputing the slug.
+	 *
+	 * Undefined ONLY for pre-flight rejections (start node not declared,
+	 * continue-policy nodes without pi) where no JSONL file was created.
+	 */
+	runId?: string;
 	stagesCompleted: number;
 	success: boolean;
 	lastArtifact?: string;
@@ -157,6 +167,7 @@ export async function runWorkflow(
 		maxBackwardJumps,
 	});
 	return {
+		runId,
 		stagesCompleted: state.stagesCompleted,
 		success: state.termination.success,
 		lastArtifact: currentArtifactPath(state),

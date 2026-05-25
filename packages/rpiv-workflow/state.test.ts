@@ -1,11 +1,14 @@
-import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	appendStage,
 	generateRunId,
+	listArtifacts,
+	listRuns,
 	readAllStages,
+	readHeader,
 	readLastStage,
 	resolveStateFile,
 	resolveWorkflowsDir,
@@ -221,5 +224,110 @@ describe("fail-soft I/O", () => {
 		} finally {
 			warnSpy.mockRestore();
 		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Past-runs API — readHeader + listRuns + listArtifacts (Phase 10.C)
+// ---------------------------------------------------------------------------
+
+describe("readHeader", () => {
+	it("returns the header for a run whose JSONL file exists", () => {
+		const runId = "header-roundtrip";
+		const header: WorkflowHeader = { runId, workflow: "mid", input: "x", ts: "2026-05-25T10:00:00Z" };
+		writeHeader(tmpDir, header);
+		expect(readHeader(tmpDir, runId)).toEqual(header);
+	});
+
+	it("returns undefined when the file does not exist", () => {
+		expect(readHeader(tmpDir, "nonexistent")).toBeUndefined();
+	});
+
+	it("returns undefined when the first line is not a valid header", () => {
+		const runId = "bad-first-line";
+		// Skip writeHeader — append a stage row first so the first line lacks header fields.
+		appendStage(tmpDir, runId, { stageNumber: 1, skill: "research", status: "completed", ts: "2026" });
+		expect(readHeader(tmpDir, runId)).toBeUndefined();
+	});
+
+	it("returns undefined when the first line is malformed JSON (fail-soft)", () => {
+		const runId = "garbled";
+		mkdirSync(resolveWorkflowsDir(tmpDir), { recursive: true });
+		appendFileSync(resolveStateFile(tmpDir, runId), "NOT-JSON\n", "utf-8");
+		expect(readHeader(tmpDir, runId)).toBeUndefined();
+	});
+});
+
+describe("listRuns", () => {
+	it("enumerates every <runId>.jsonl in the workflows directory and projects RunSummary", () => {
+		const headerA: WorkflowHeader = { runId: "run-a", workflow: "mid", input: "first", ts: "2026-05-25T10:00:00Z" };
+		const headerB: WorkflowHeader = {
+			runId: "run-b",
+			workflow: "large",
+			input: "second",
+			ts: "2026-05-25T11:00:00Z",
+		};
+		writeHeader(tmpDir, headerA);
+		writeHeader(tmpDir, headerB);
+
+		const runs = listRuns(tmpDir);
+		const byId = Object.fromEntries(runs.map((r) => [r.runId, r]));
+		expect(Object.keys(byId).sort()).toEqual(["run-a", "run-b"]);
+		expect(byId["run-a"]).toEqual({ runId: "run-a", workflow: "mid", input: "first", ts: headerA.ts });
+		expect(byId["run-b"]).toEqual({ runId: "run-b", workflow: "large", input: "second", ts: headerB.ts });
+	});
+
+	it("returns an empty array when the workflows directory does not exist", () => {
+		expect(listRuns(tmpDir)).toEqual([]);
+	});
+
+	it("silently skips files whose first line is not a valid header", () => {
+		writeHeader(tmpDir, { runId: "good", workflow: "mid", input: "ok", ts: "2026" });
+		// Manually write a malformed run file alongside the good one.
+		appendFileSync(resolveStateFile(tmpDir, "bad"), "NOT-JSON\n", "utf-8");
+		const runs = listRuns(tmpDir);
+		expect(runs.map((r) => r.runId)).toEqual(["good"]);
+	});
+
+	it("ignores non-.jsonl entries in the workflows directory", () => {
+		writeHeader(tmpDir, { runId: "good", workflow: "mid", input: "ok", ts: "2026" });
+		appendFileSync(join(resolveWorkflowsDir(tmpDir), "stray.txt"), "ignore me\n", "utf-8");
+		const runs = listRuns(tmpDir);
+		expect(runs.map((r) => r.runId)).toEqual(["good"]);
+	});
+});
+
+describe("listArtifacts", () => {
+	it("projects stage rows that carry an artifact into {skill, artifact} pairs", () => {
+		const runId = "artifacts-run";
+		writeHeader(tmpDir, { runId, workflow: "mid", input: "x", ts: "2026" });
+		appendStage(tmpDir, runId, {
+			stageNumber: 1,
+			skill: "research",
+			artifact: ".rpiv/artifacts/research/r.md",
+			status: "completed",
+			ts: "2026",
+		});
+		// Stage without an artifact — should NOT appear in the list.
+		appendStage(tmpDir, runId, { stageNumber: 2, skill: "commit", status: "completed", ts: "2026" });
+		appendStage(tmpDir, runId, {
+			stageNumber: 3,
+			skill: "design",
+			artifact: ".rpiv/artifacts/design/d.md",
+			status: "completed",
+			ts: "2026",
+		});
+
+		expect(listArtifacts(tmpDir, runId)).toEqual([
+			{ skill: "research", artifact: ".rpiv/artifacts/research/r.md" },
+			{ skill: "design", artifact: ".rpiv/artifacts/design/d.md" },
+		]);
+	});
+
+	it("returns an empty array when no stage row carries an artifact", () => {
+		const runId = "no-artifacts";
+		writeHeader(tmpDir, { runId, workflow: "mid", input: "x", ts: "2026" });
+		appendStage(tmpDir, runId, { stageNumber: 1, skill: "commit", status: "completed", ts: "2026" });
+		expect(listArtifacts(tmpDir, runId)).toEqual([]);
 	});
 });
