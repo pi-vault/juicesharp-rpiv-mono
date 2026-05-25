@@ -119,13 +119,13 @@ export type EdgeTarget = string | typeof STOP | EdgeFn;
  * can't load the skill, the runner halts with a clear error pointing
  * at this node.
  */
-export interface NodeDef {
+export interface NodeDef<TIn = unknown, TOut = unknown> {
 	skill?: string;
 	completionStrategy: CompletionStrategy;
 	sessionPolicy: SessionPolicy;
 	extractor?: Extractor;
-	outputSchema?: NodeSchema;
-	inputSchema?: NodeSchema;
+	outputSchema?: NodeSchema<unknown, TOut>;
+	inputSchema?: NodeSchema<unknown, TIn>;
 	onValidationFailure?: OnValidationFailure;
 	maxValidationRetries?: number;
 	validationRetryTimeoutMs?: number;

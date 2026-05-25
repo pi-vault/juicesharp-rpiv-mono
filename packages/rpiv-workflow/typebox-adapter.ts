@@ -15,7 +15,7 @@
  * Standard Schema's `issues` only carries `message` + `path`.
  */
 
-import type { TSchema } from "typebox";
+import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import type { NodeSchema } from "./api.js";
 
@@ -24,8 +24,13 @@ import type { NodeSchema } from "./api.js";
  * returned object is structurally a Standard Schema; downstream code
  * (`validateManifestData`) consults `~standard.validate` and never sees
  * the underlying TypeBox value.
+ *
+ * Generic over the input schema `S` so the parsed type (`Static<S>`) flows
+ * through `NodeSchema<unknown, Static<S>>` and into the surrounding
+ * `NodeDef<TIn, TOut>` — predicate bodies + downstream node consumers can
+ * read `manifest.data` with the parsed type instead of `unknown`.
  */
-export function typeboxSchema(schema: TSchema): NodeSchema<unknown, unknown> {
+export function typeboxSchema<S extends TSchema>(schema: S): NodeSchema<unknown, Static<S>> {
 	return {
 		"~standard": {
 			version: 1,
