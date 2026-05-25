@@ -9,8 +9,8 @@
  *   - `ArtifactReader<B, K, D>`    — INTERPRET: given the artifacts, what
  *                                    typed data does downstream see?
  *
- * `Outcome` is the wired-up pair — `{ resolver, reader? }` — that nodes
- * declare via `NodeDef.outcome`. When `reader` is omitted the manifest
+ * `Outcome` is the wired-up pair — `{ resolver, reader? }` — that stages
+ * declare via `StageDef.outcome`. When `reader` is omitted the manifest
  * data IS the artifact list (kind = `"artifacts"`).
  *
  * Companion to `manifest.ts` (the envelope `Manifest<K, D>` that flows
@@ -122,7 +122,7 @@ export interface ArtifactReader<Baseline = unknown, Kind extends string = string
 }
 
 // ---------------------------------------------------------------------------
-// Outcome — wired-up pair on `NodeDef.outcome`
+// Outcome — wired-up pair on `StageDef.outcome`
 // ---------------------------------------------------------------------------
 
 /**

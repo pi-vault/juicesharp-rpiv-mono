@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { action, artifact, defineWorkflow, type NodeDef, threshold, type Workflow } from "./api.js";
+import { action, artifact, defineWorkflow, type StageDef, threshold, type Workflow } from "./api.js";
 import type { LoadedWorkflows } from "./load/index.js";
 import { gitCommitOutcome } from "./outcomes/index.js";
 import { formatWorkflowDetails, formatWorkflowList } from "./preview.js";
@@ -13,7 +13,7 @@ import { formatWorkflowDetails, formatWorkflowList } from "./preview.js";
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const node = (overrides: Partial<NodeDef> & { skill: string }): NodeDef => ({
+const stage = (overrides: Partial<StageDef> & { skill: string }): StageDef => ({
 	completionStrategy: "agent-end",
 	sessionPolicy: "fresh",
 	...overrides,
@@ -22,10 +22,10 @@ const node = (overrides: Partial<NodeDef> & { skill: string }): NodeDef => ({
 const midWorkflow = defineWorkflow({
 	name: "mid",
 	start: "research",
-	nodes: {
-		research: node({ skill: "research", completionStrategy: "artifact-emit" }),
-		implement: node({ skill: "implement" }),
-		commit: node({ skill: "commit", outcome: gitCommitOutcome }),
+	stages: {
+		research: stage({ skill: "research", completionStrategy: "artifact-emit" }),
+		implement: stage({ skill: "implement" }),
+		commit: stage({ skill: "commit", outcome: gitCommitOutcome }),
 	},
 	edges: { research: "implement", implement: "commit", commit: "stop" },
 });
@@ -33,7 +33,7 @@ const midWorkflow = defineWorkflow({
 const tinyWorkflow = defineWorkflow({
 	name: "tiny",
 	start: "research",
-	nodes: {
+	stages: {
 		research: artifact(),
 		commit: action(),
 	},
@@ -128,7 +128,7 @@ describe("formatWorkflowDetails", () => {
 		expect(lines.find((l) => /research/.test(l))).toContain("fresh");
 	});
 
-	it("tags custom-outcome nodes that declare a baseline + reader with a single 'custom+baseline+reader' decoration", () => {
+	it("tags custom-outcome stages that declare a baseline + reader with a single 'custom+baseline+reader' decoration", () => {
 		const out = formatWorkflowDetails(baseLoaded(), "mid");
 		const commitLine = out.split("\n").find((l) => /^\s+\d+\.\s+commit\b/.test(l)) ?? "";
 		// gitCommitOutcome carries both baseline (via resolver) and reader.
@@ -136,13 +136,13 @@ describe("formatWorkflowDetails", () => {
 		expect(commitLine).not.toContain("· custom ·"); // not double-tagged
 	});
 
-	it("tags artifact-emit nodes without an outcome with '???' (load-time validation should reject; tag is defensive)", () => {
+	it("tags artifact-emit stages without an outcome with '???' (load-time validation should reject; tag is defensive)", () => {
 		const out = formatWorkflowDetails(baseLoaded(), "mid");
 		const researchLine = out.split("\n").find((l) => /^\s+\d+\.\s+research\b/.test(l)) ?? "";
 		expect(researchLine).toContain("???");
 	});
 
-	it("tags agent-end nodes (no override) with the default 'side-effect' outcome", () => {
+	it("tags agent-end stages (no override) with the default 'side-effect' outcome", () => {
 		const out = formatWorkflowDetails(baseLoaded(), "mid");
 		const implementLine = out.split("\n").find((l) => /^\s+\d+\.\s+implement\b/.test(l)) ?? "";
 		expect(implementLine).toContain("side-effect");
@@ -158,7 +158,7 @@ describe("formatWorkflowDetails", () => {
 		const branchingWorkflow: Workflow = {
 			name: "branching",
 			start: "code-review",
-			nodes: {
+			stages: {
 				"code-review": artifact(),
 				revise: artifact(),
 				commit: action(),
@@ -191,7 +191,7 @@ describe("formatWorkflowDetails", () => {
 			name: "described",
 			description: "Short prose summary for the preview header.",
 			start: "research",
-			nodes: { research: artifact(), commit: action() },
+			stages: { research: artifact(), commit: action() },
 			edges: { research: "commit", commit: "stop" },
 		};
 		const loaded: LoadedWorkflows = {
@@ -208,12 +208,12 @@ describe("formatWorkflowDetails", () => {
 		expect(lines[headingIdx + 1]).toBe("Short prose summary for the preview header.");
 	});
 
-	it("tags stages with in-schema / out-schema when NodeDef carries inputSchema / outputSchema", () => {
+	it("tags stages with in-schema / out-schema when StageDef carries inputSchema / outputSchema", () => {
 		const fakeSchema = { "~standard": { vendor: "test", version: 1, validate: () => ({ value: {} }) } } as never;
 		const schemaWorkflow: Workflow = {
 			name: "schemas",
 			start: "a",
-			nodes: {
+			stages: {
 				a: artifact({ outputSchema: fakeSchema }),
 				b: artifact({ inputSchema: fakeSchema, outputSchema: fakeSchema }),
 				c: action(),
@@ -240,12 +240,12 @@ describe("formatWorkflowDetails", () => {
 		expect(cLine).not.toContain("out-schema");
 	});
 
-	it("annotates aliased nodes with (skill: <body>) when node.skill differs from the node id", () => {
+	it("annotates aliased stages with (skill: <body>) when stage.skill differs from the stage id", () => {
 		const aliased: Workflow = {
 			name: "aliased",
 			start: "implement-after-revise",
-			nodes: {
-				"implement-after-revise": node({ skill: "implement" }),
+			stages: {
+				"implement-after-revise": stage({ skill: "implement" }),
 				commit: action(),
 			},
 			edges: { "implement-after-revise": "commit", commit: "stop" },

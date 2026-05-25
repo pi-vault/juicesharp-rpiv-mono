@@ -11,17 +11,17 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { action, artifact as artifactRaw, defineWorkflow, type NodeDef, type Workflow } from "./api.js";
+import { action, artifact as artifactRaw, defineWorkflow, type StageDef, type Workflow } from "./api.js";
 import { __resetBuiltIns, registerBuiltIns } from "./built-ins.js";
 import { loadWorkflows, projectOverlayPaths, userOverlayPaths } from "./load/index.js";
 import { noopResolver } from "./outcomes/index.js";
 
-// artifact-emit nodes require an outcome (validated at load time). Load
+// artifact-emit stages require an outcome (validated at load time). Load
 // tests assert merge / source-layer shape, so we wire a noop resolver
 // into every artifact() — same shape rule the real loader enforces,
 // minimal scaffolding per fixture.
 const STUB_ARTIFACT_OUTCOME = { resolver: noopResolver };
-const artifact = (overrides: Partial<NodeDef> = {}): NodeDef =>
+const artifact = (overrides: Partial<StageDef> = {}): StageDef =>
 	artifactRaw({ outcome: STUB_ARTIFACT_OUTCOME, ...overrides });
 
 // ---------------------------------------------------------------------------
@@ -36,11 +36,11 @@ const PROJECT_PATHS = projectOverlayPaths(TEST_TMP);
 // Synthetic built-ins so load tests don't depend on which sibling package
 // (rpiv-pi, etc.) happens to be registering workflows. Reset per test.
 const builtInWorkflows: readonly Workflow[] = [
-	defineWorkflow({ name: "mid", start: "x", nodes: { x: artifact() }, edges: { x: "stop" } }),
+	defineWorkflow({ name: "mid", start: "x", stages: { x: artifact() }, edges: { x: "stop" } }),
 	defineWorkflow({
 		name: "small",
 		start: "implement",
-		nodes: { implement: action() },
+		stages: { implement: action() },
 		edges: { implement: "stop" },
 	}),
 ];
@@ -82,7 +82,7 @@ const writeUserDropIn = (filename: string, body: string): void => {
 // Fixture preamble: jiti loads these as real TS — so the artifact()
 // calls inside the fixture strings go through the real validator.
 // Each fixture imports `artifact` (renamed) and re-binds it to a helper
-// that wires a noop stub outcome so artifact-emit nodes pass validation
+// that wires a noop stub outcome so artifact-emit stages pass validation
 // without each fixture restating the resolver.
 const importApi = [
 	`import { defineWorkflow, artifact as artifactRaw, action, threshold } from "${join(__dirname, "api.ts")}";`,
@@ -116,7 +116,7 @@ describe("loadWorkflows — project overlay", () => {
 export default defineWorkflow({
   name: "ship",
   start: "implement",
-  nodes: { implement: action(), commit: action() },
+  stages: { implement: action(), commit: action() },
   edges: { implement: "commit", commit: "stop" },
 });
 `,
@@ -140,13 +140,13 @@ export default {
     defineWorkflow({
       name: "a",
       start: "x",
-      nodes: { x: artifact() },
+      stages: { x: artifact() },
       edges: { x: "stop" },
     }),
     defineWorkflow({
       name: "b",
       start: "y",
-      nodes: { y: artifact() },
+      stages: { y: artifact() },
       edges: { y: "stop" },
     }),
   ],
@@ -167,7 +167,7 @@ export default {
 export default defineWorkflow({
   name: "mid",
   start: "implement",
-  nodes: { implement: action() },
+  stages: { implement: action() },
   edges: { implement: "stop" },
 });
 `,
@@ -177,7 +177,7 @@ export default defineWorkflow({
 		const mid = loaded.workflows.find((w) => w.name === "mid")!;
 		expect(loaded.workflowSources.get("mid")).toBe("project");
 		expect(mid.start).toBe("implement");
-		expect(Object.keys(mid.nodes)).toEqual(["implement"]);
+		expect(Object.keys(mid.stages)).toEqual(["implement"]);
 	});
 });
 
@@ -192,7 +192,7 @@ describe("loadWorkflows — layered merge", () => {
 export default defineWorkflow({
   name: "same",
   start: "a",
-  nodes: { a: artifact() },
+  stages: { a: artifact() },
   edges: { a: "stop" },
 });
 `,
@@ -203,7 +203,7 @@ export default defineWorkflow({
 export default defineWorkflow({
   name: "same",
   start: "z",
-  nodes: { z: action() },
+  stages: { z: action() },
   edges: { z: "stop" },
 });
 `,
@@ -221,8 +221,8 @@ export default defineWorkflow({
 			`${importApi}
 export default {
   workflows: [
-    defineWorkflow({ name: "u1", start: "a", nodes: { a: artifact() }, edges: { a: "stop" } }),
-    defineWorkflow({ name: "u2", start: "b", nodes: { b: artifact() }, edges: { b: "stop" } }),
+    defineWorkflow({ name: "u1", start: "a", stages: { a: artifact() }, edges: { a: "stop" } }),
+    defineWorkflow({ name: "u2", start: "b", stages: { b: artifact() }, edges: { b: "stop" } }),
   ],
   default: "u2",
 };
@@ -237,7 +237,7 @@ export default {
 		writeUserConfig(
 			`${importApi}
 export default {
-  workflows: [defineWorkflow({ name: "u1", start: "a", nodes: { a: artifact() }, edges: { a: "stop" } })],
+  workflows: [defineWorkflow({ name: "u1", start: "a", stages: { a: artifact() }, edges: { a: "stop" } })],
   default: "u1",
 };
 `,
@@ -246,7 +246,7 @@ export default {
 			TEST_TMP,
 			`${importApi}
 export default {
-  workflows: [defineWorkflow({ name: "p1", start: "b", nodes: { b: artifact() }, edges: { b: "stop" } })],
+  workflows: [defineWorkflow({ name: "p1", start: "b", stages: { b: artifact() }, edges: { b: "stop" } })],
   default: "p1",
 };
 `,
@@ -288,7 +288,7 @@ describe("loadWorkflows — issues", () => {
 export default defineWorkflow({
   name: "bad",
   start: "a",
-  nodes: { a: artifact() },
+  stages: { a: artifact() },
   edges: { a: "ghost" },
 });
 `,
@@ -305,7 +305,7 @@ export default defineWorkflow({
 export default defineWorkflow({
   name: "bad",
   start: "a",
-  nodes: { a: artifact() },
+  stages: { a: artifact() },
   edges: { a: "ghost" },
 });
 `,
@@ -322,8 +322,8 @@ export default defineWorkflow({
 			TEST_TMP,
 			`${importApi}
 export default [
-  defineWorkflow({ name: "a", start: "x", nodes: { x: artifact() }, edges: { x: "stop" } }),
-  defineWorkflow({ name: "b", start: "y", nodes: { y: artifact() }, edges: { y: "stop" } }),
+  defineWorkflow({ name: "a", start: "x", stages: { x: artifact() }, edges: { x: "stop" } }),
+  defineWorkflow({ name: "b", start: "y", stages: { y: artifact() }, edges: { y: "stop" } }),
 ];
 `,
 		);
@@ -353,7 +353,7 @@ export default [
 			TEST_TMP,
 			`${importApi}
 export default [
-  defineWorkflow({ name: "solo", start: "x", nodes: { x: artifact() }, edges: { x: "stop" } }),
+  defineWorkflow({ name: "solo", start: "x", stages: { x: artifact() }, edges: { x: "stop" } }),
 ];
 `,
 		);
@@ -368,7 +368,7 @@ export default [
 			TEST_TMP,
 			`${importApi}
 export default {
-  workflows: [defineWorkflow({ name: "real", start: "a", nodes: { a: artifact() }, edges: { a: "stop" } })],
+  workflows: [defineWorkflow({ name: "real", start: "a", stages: { a: artifact() }, edges: { a: "stop" } })],
   default: "missing",
 };
 `,
@@ -387,7 +387,7 @@ export default {
 export default defineWorkflow({
   name: "good",
   start: "a",
-  nodes: { a: artifact() },
+  stages: { a: artifact() },
   edges: { a: "stop" },
 });
 `,
@@ -409,7 +409,7 @@ describe("loadWorkflows — drop-in directories", () => {
 			TEST_TMP,
 			"a-pack.ts",
 			`${importApi}
-export default defineWorkflow({ name: "from-pack", start: "x", nodes: { x: artifact() }, edges: { x: "stop" } });
+export default defineWorkflow({ name: "from-pack", start: "x", stages: { x: artifact() }, edges: { x: "stop" } });
 `,
 		);
 		const loaded = await loadWorkflows(TEST_TMP);
@@ -421,7 +421,7 @@ export default defineWorkflow({ name: "from-pack", start: "x", nodes: { x: artif
 		writeUserDropIn(
 			"my-pack.ts",
 			`${importApi}
-export default defineWorkflow({ name: "user-pack", start: "x", nodes: { x: artifact() }, edges: { x: "stop" } });
+export default defineWorkflow({ name: "user-pack", start: "x", stages: { x: artifact() }, edges: { x: "stop" } });
 `,
 		);
 		const loaded = await loadWorkflows(TEST_TMP);
@@ -434,14 +434,14 @@ export default defineWorkflow({ name: "user-pack", start: "x", nodes: { x: artif
 			TEST_TMP,
 			"a-first.ts",
 			`${importApi}
-export default defineWorkflow({ name: "x", start: "from-a", nodes: { "from-a": artifact() }, edges: { "from-a": "stop" } });
+export default defineWorkflow({ name: "x", start: "from-a", stages: { "from-a": artifact() }, edges: { "from-a": "stop" } });
 `,
 		);
 		writeProjectDropIn(
 			TEST_TMP,
 			"z-last.ts",
 			`${importApi}
-export default defineWorkflow({ name: "x", start: "from-z", nodes: { "from-z": artifact() }, edges: { "from-z": "stop" } });
+export default defineWorkflow({ name: "x", start: "from-z", stages: { "from-z": artifact() }, edges: { "from-z": "stop" } });
 `,
 		);
 		const loaded = await loadWorkflows(TEST_TMP);
@@ -455,13 +455,13 @@ export default defineWorkflow({ name: "x", start: "from-z", nodes: { "from-z": a
 			TEST_TMP,
 			"pack.ts",
 			`${importApi}
-export default defineWorkflow({ name: "x", start: "from-pack", nodes: { "from-pack": artifact() }, edges: { "from-pack": "stop" } });
+export default defineWorkflow({ name: "x", start: "from-pack", stages: { "from-pack": artifact() }, edges: { "from-pack": "stop" } });
 `,
 		);
 		writeProjectConfig(
 			TEST_TMP,
 			`${importApi}
-export default defineWorkflow({ name: "x", start: "from-canonical", nodes: { "from-canonical": artifact() }, edges: { "from-canonical": "stop" } });
+export default defineWorkflow({ name: "x", start: "from-canonical", stages: { "from-canonical": artifact() }, edges: { "from-canonical": "stop" } });
 `,
 		);
 		const loaded = await loadWorkflows(TEST_TMP);
@@ -475,7 +475,7 @@ export default defineWorkflow({ name: "x", start: "from-canonical", nodes: { "fr
 			"solo-array.ts",
 			`${importApi}
 export default [
-  defineWorkflow({ name: "solo", start: "x", nodes: { x: artifact() }, edges: { x: "stop" } }),
+  defineWorkflow({ name: "solo", start: "x", stages: { x: artifact() }, edges: { x: "stop" } }),
 ];
 `,
 		);
@@ -489,7 +489,7 @@ export default [
 			"with-envelope.ts",
 			`${importApi}
 export default {
-  workflows: [defineWorkflow({ name: "x", start: "a", nodes: { a: artifact() }, edges: { a: "stop" } })],
+  workflows: [defineWorkflow({ name: "x", start: "a", stages: { a: artifact() }, edges: { a: "stop" } })],
   default: "x",
 };
 `,
@@ -512,7 +512,7 @@ export default {
 			TEST_TMP,
 			"bad-pack.ts",
 			`${importApi}
-export default defineWorkflow({ name: "bad", start: "a", nodes: { a: artifact() }, edges: { a: "ghost" } });
+export default defineWorkflow({ name: "bad", start: "a", stages: { a: artifact() }, edges: { a: "ghost" } });
 `,
 		);
 		const loaded = await loadWorkflows(TEST_TMP);
@@ -564,7 +564,7 @@ describe("loadWorkflows — default-export shape rejection", () => {
 			TEST_TMP,
 			`${importApi}
 export default [
-  defineWorkflow({ name: "a", start: "x", nodes: { x: artifact() }, edges: { x: "stop" } }),
+  defineWorkflow({ name: "a", start: "x", stages: { x: artifact() }, edges: { x: "stop" } }),
   { not: "a workflow" },
 ];
 `,
@@ -581,7 +581,7 @@ export default [
 			`${importApi}
 export default {
   workflows: [
-    defineWorkflow({ name: "a", start: "x", nodes: { x: artifact() }, edges: { x: "stop" } }),
+    defineWorkflow({ name: "a", start: "x", stages: { x: artifact() }, edges: { x: "stop" } }),
     { not: "a workflow" },
   ],
   default: "a",
@@ -602,8 +602,8 @@ export default {
 		// insertion-order fallback.
 		__resetBuiltIns();
 		registerBuiltIns([
-			defineWorkflow({ name: "alpha", start: "x", nodes: { x: artifact() }, edges: { x: "stop" } }),
-			defineWorkflow({ name: "beta", start: "x", nodes: { x: artifact() }, edges: { x: "stop" } }),
+			defineWorkflow({ name: "alpha", start: "x", stages: { x: artifact() }, edges: { x: "stop" } }),
+			defineWorkflow({ name: "beta", start: "x", stages: { x: artifact() }, edges: { x: "stop" } }),
 		]);
 		const loaded = await loadWorkflows(TEST_TMP);
 		expect(loaded.default).toBe("alpha");

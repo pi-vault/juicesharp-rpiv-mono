@@ -3,11 +3,11 @@
  * import everything they need (`defineWorkflow`, `artifact`, `action`,
  * `definePredicate`, `defineStatePredicate`, `threshold`, `STOP`,
  * `marksFrontmatter`, schema adapters, plus the type vocabulary `Workflow`
- * / `NodeDef` / `EdgeFn` / `EdgeTarget` / `EdgeContext`) from
+ * / `StageDef` / `EdgeFn` / `EdgeTarget` / `EdgeContext`) from
  * `@juicesharp/rpiv-workflow`.
  *
- * A `Workflow` is a typed graph: a named entry point, a node table, and an
- * edge table that maps each node to either another node name, the sentinel
+ * A `Workflow` is a typed graph: a named entry point, a stage table, and an
+ * edge table that maps each stage to either another stage name, the sentinel
  * `STOP`, or an `EdgeFn` that picks at runtime. Edges live INSIDE each
  * workflow.
  *
@@ -23,7 +23,7 @@ import type { RunState } from "./types.js";
 export type { Outcome } from "./manifest.js";
 
 /**
- * Schema attached to a node's `outputSchema` / `inputSchema`. Structurally
+ * Schema attached to a stage's `outputSchema` / `inputSchema`. Structurally
  * a Standard Schema v1 (the converged interface implemented by Zod, Valibot,
  * ArkType, TypeBox, et al.) — re-exported under a name that doesn't leak the
  * spec version into our public surface. When the spec versions, this alias
@@ -34,14 +34,14 @@ export type { Outcome } from "./manifest.js";
  * schemas are supported at both seams — the runner awaits `~standard.validate`
  * — and are the right answer when correctness needs I/O (filesystem probes,
  * registry lookups, async-by-default libs like ArkType). A hanging async
- * schema is bounded by the node's `validationRetryTimeoutMs`. See the
+ * schema is bounded by the stage's `validationRetryTimeoutMs`. See the
  * "Validators: sync vs async" section of the package README for the full
  * rationale.
  */
-export type NodeSchema<Input = unknown, Output = Input> = StandardSchemaV1<Input, Output>;
+export type StageSchema<Input = unknown, Output = Input> = StandardSchemaV1<Input, Output>;
 
 // ===========================================================================
-// Node-shape primitives
+// Stage-shape primitives
 // ===========================================================================
 
 /**
@@ -76,19 +76,19 @@ export const ON_VALIDATION_FAILURE_VALUES = ["retry", "halt"] as const;
 export type OnValidationFailure = (typeof ON_VALIDATION_FAILURE_VALUES)[number];
 
 /**
- * Opt-in fanout — a user-supplied function that decomposes a node's work
+ * Opt-in fanout — a user-supplied function that decomposes a stage's work
  * into N units, one Pi session per unit. The runner owns iteration +
  * audit; the FanoutFn owns the convention (how units are detected, what
  * each session's prompt body says, how each is labelled).
  *
  * rpiv-workflow ships ZERO fanout conventions: no markdown regex, no
  * phase counter, no schema. A consumer wanting markdown-heading fanout
- * writes the ~10 lines themselves and reuses one constant across nodes.
+ * writes the ~10 lines themselves and reuses one constant across stages.
  *
  * Invariants enforced by the runner:
  * - Empty return ⇒ no fanout (fall through to the single-stage path).
- * - Throws ⇒ stage halts, attributed to this node.
- * - `node.sessionPolicy === "continue"` is incompatible with fanout
+ * - Throws ⇒ stage halts, attributed to this stage.
+ * - `stage.sessionPolicy === "continue"` is incompatible with fanout
  *   (validated at load + at preflight).
  *
  * Cap policy: the runner does not bound `units.length`. Authors of bespoke
@@ -101,7 +101,7 @@ export interface FanoutContext {
 	cwd: string;
 	/**
 	 * Primary artifact inherited from the upstream stage (or undefined when
-	 * the fanout node is the entry point). FanoutFns that need to read an
+	 * the fanout stage is the entry point). FanoutFns that need to read an
 	 * upstream artifact short-circuit to `[]` when undefined — the runner
 	 * treats that as "no fanout" and runs the single-stage path. The
 	 * handle's serialized form (path / URL / opaque id) is what most
@@ -113,15 +113,15 @@ export interface FanoutContext {
 
 export interface FanoutUnit {
 	/**
-	 * Body sent to the skill: the runner dispatches `/skill:<node.skill>
+	 * Body sent to the skill: the runner dispatches `/skill:<stage.skill>
 	 * <prompt>` once per unit. The unit owns artifact-path threading + any
 	 * per-unit cue — the runner adds nothing implicit.
 	 */
 	prompt: string;
 	/**
 	 * Short label woven into the status line + JSONL audit row.
-	 * The audit `skill` field becomes `<node.skill> (<label>)`; the status
-	 * line shows `rpiv: stage X/Y — <node.skill> (<label>)`. Keep it short
+	 * The audit `skill` field becomes `<stage.skill> (<label>)`; the status
+	 * line shows `rpiv: stage X/Y — <stage.skill> (<label>)`. Keep it short
 	 * and disambiguating (`"phase 2/5"`, `"task 3/8"`).
 	 */
 	label: string;
@@ -149,7 +149,7 @@ export interface EdgeContext {
 type EdgePredicate = (ctx: EdgeContext) => string;
 
 /**
- * A function that picks the next node name given current state + manifest.
+ * A function that picks the next stage name given current state + manifest.
  * Optional `targets` field lets graph introspectors enumerate possible
  * returns — `threshold` and other built-in predicate builders populate it.
  */
@@ -163,30 +163,30 @@ export type EdgeFn = EdgePredicate & { targets?: readonly string[] };
 export const STOP = "stop" as const;
 
 /**
- * What an `edges` entry resolves to: another node name (auto-edge), the
+ * What an `edges` entry resolves to: another stage name (auto-edge), the
  * terminal sentinel `STOP`, or a function chosen at run-time.
  */
 export type EdgeTarget = string | typeof STOP | EdgeFn;
 
 /**
- * A node in the workflow graph. The node's identity is the surrounding
- * `Workflow.nodes` record key. `skill` is the Pi skill body to invoke —
+ * A stage in the workflow graph. The stage's identity is the surrounding
+ * `Workflow.stages` record key. `skill` is the Pi skill body to invoke —
  * defaulted to the record key by the runner when omitted, so the
  * authoring-time call site usually doesn't restate the name. Set `skill`
- * explicitly only when the node id and the Pi skill differ (aliased
- * nodes like `implement-after-revise` invoking the `implement` skill).
+ * explicitly only when the stage id and the Pi skill differ (aliased
+ * stages like `implement-after-revise` invoking the `implement` skill).
  *
  * Pi resolves the skill at run time; there's no allowlist gate. If Pi
  * can't load the skill, the runner halts with a clear error pointing
- * at this node.
+ * at this stage.
  */
-export interface NodeDef<TIn = unknown, TOut = unknown> {
+export interface StageDef<TIn = unknown, TOut = unknown> {
 	skill?: string;
 	completionStrategy: CompletionStrategy;
 	sessionPolicy: SessionPolicy;
 	outcome?: Outcome;
-	outputSchema?: NodeSchema<unknown, TOut>;
-	inputSchema?: NodeSchema<unknown, TIn>;
+	outputSchema?: StageSchema<unknown, TOut>;
+	inputSchema?: StageSchema<unknown, TIn>;
 	onValidationFailure?: OnValidationFailure;
 	maxValidationRetries?: number;
 	validationRetryTimeoutMs?: number;
@@ -202,15 +202,15 @@ export interface NodeDef<TIn = unknown, TOut = unknown> {
 
 /**
  * A complete workflow. `name` is what users type as `/wf <name>`; `start`
- * is the entry node; `nodes` is the lexicon; `edges` is the wiring. Every
- * key in `edges` must exist in `nodes`; every string value must exist in
- * `nodes` or be `"stop"`. Validated at load time by `validate-workflow.ts`.
+ * is the entry stage; `stages` is the lexicon; `edges` is the wiring. Every
+ * key in `edges` must exist in `stages`; every string value must exist in
+ * `stages` or be `"stop"`. Validated at load time by `validate-workflow.ts`.
  */
 export interface Workflow {
 	name: string;
 	description?: string;
 	start: string;
-	nodes: Record<string, NodeDef>;
+	stages: Record<string, StageDef>;
 	edges: Record<string, EdgeTarget>;
 }
 
@@ -224,13 +224,13 @@ export function defineWorkflow(spec: Workflow): Workflow {
 }
 
 /**
- * Artifact-emitting node: invokes a Pi skill that writes
+ * Artifact-emitting stage: invokes a Pi skill that writes
  * `.rpiv/artifacts/<bucket>/<file>.md`. Defaults to fresh-session. The
- * skill body defaults to the surrounding `nodes` record key — override
- * via `{ skill: "<other>" }` only when the node id and the Pi skill
+ * skill body defaults to the surrounding `stages` record key — override
+ * via `{ skill: "<other>" }` only when the stage id and the Pi skill
  * differ (e.g. `code-review-large` aliasing the `code-review` skill).
  */
-export function artifact(overrides: Partial<NodeDef> = {}): NodeDef {
+export function artifact(overrides: Partial<StageDef> = {}): StageDef {
 	return {
 		completionStrategy: "artifact-emit",
 		sessionPolicy: "fresh",
@@ -239,11 +239,11 @@ export function artifact(overrides: Partial<NodeDef> = {}): NodeDef {
 }
 
 /**
- * Action node: invokes a Pi skill whose side effect IS the work
+ * Action stage: invokes a Pi skill whose side effect IS the work
  * (commit, implement). No artifact-emission check. Defaults to fresh-session.
  * Like `artifact`, the skill body defaults to the record key.
  */
-export function action(overrides: Partial<NodeDef> = {}): NodeDef {
+export function action(overrides: Partial<StageDef> = {}): StageDef {
 	return {
 		completionStrategy: "agent-end",
 		sessionPolicy: "fresh",

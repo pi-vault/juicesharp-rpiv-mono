@@ -18,8 +18,8 @@ export function isWorkflow(v: unknown): v is Workflow {
 	return (
 		typeof o.name === "string" &&
 		typeof o.start === "string" &&
-		typeof o.nodes === "object" &&
-		o.nodes !== null &&
+		typeof o.stages === "object" &&
+		o.stages !== null &&
 		typeof o.edges === "object" &&
 		o.edges !== null
 	);

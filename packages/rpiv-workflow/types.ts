@@ -20,7 +20,7 @@
  * module are cycle-free).
  */
 
-import type { NodeDef, Workflow } from "./api.js";
+import type { StageDef, Workflow } from "./api.js";
 import type { Artifact } from "./handle.js";
 import type { WorkflowCommandHost, WorkflowHost } from "./host.js";
 import type { Manifest } from "./manifest.js";
@@ -71,7 +71,7 @@ export interface RunState {
 		 * written by design" from "decision made — write was dropped." Empty
 		 * in the common case.
 		 */
-		droppedRoutingRows: Array<{ fromStage: number; fromNode: string; decision: string }>;
+		droppedRoutingRows: Array<{ fromStageIndex: number; fromStage: string; decision: string }>;
 	};
 
 	// ── Termination (set once at end-of-run) ───────────────────────────
@@ -87,7 +87,7 @@ export interface RunContext {
 	runId: string;
 	workflow: Workflow;
 	/**
-	 * Upper bound for stage status display — count of nodes reachable from
+	 * Upper bound for stage status display — count of stages reachable from
 	 * `workflow.start`, computed once at run start. The actual stage count
 	 * is path-dependent (a predicate edge may short-circuit), so this is
 	 * the denominator users see; the numerator is the live stage index.
@@ -95,9 +95,9 @@ export interface RunContext {
 	totalStages: number;
 	state: RunState;
 	/**
-	 * Node names already executed in this run. The backward-jump guard
+	 * Stage names already executed in this run. The backward-jump guard
 	 * increments `state.telemetry.backwardJumps` on every re-entry; revise →
-	 * implement loops legitimately revisit nodes, but unbounded loops trip
+	 * implement loops legitimately revisit stages, but unbounded loops trip
 	 * the cap.
 	 */
 	visited: Set<string>;
@@ -123,12 +123,12 @@ export interface SessionContext {
 }
 
 export interface StageSession extends SessionContext {
-	node: NodeDef;
+	stage: StageDef;
 	/** 0-based stage index within this run — for status display + JSONL stage number. */
 	stageIndex: number;
-	/** Pre-stage baseline value (undefined if the node's `outcome` has no `baseline`). */
+	/** Pre-stage baseline value (undefined if the stage's `outcome` has no `baseline`). */
 	baseline: unknown;
-	/** Required iff `node.sessionPolicy === "continue"`. */
+	/** Required iff `stage.sessionPolicy === "continue"`. */
 	host?: WorkflowHost;
 	/** Only set for continue stages — branch slice offset. */
 	branchOffset?: number;

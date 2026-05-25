@@ -5,7 +5,7 @@
  * directory owns graph traversal, per-stage prerequisites, and routing.
  *
  * Modules:
- *  - runner.ts          — runWorkflow + countReachableNodes +
+ *  - runner.ts          — runWorkflow + countReachableStages +
  *                         runStageOrRecordFailure + finalizeWorkflow.
  *  - stage-lifecycle.ts — runStage + StagePreflightError + preflight
  *                         pipeline + outcome.resolver.baseline hook.
@@ -20,7 +20,7 @@
  *   valid.
  * - Continue policy has no newSession — same ctx throughout.
  *
- * Vocabulary: "stage" = one node activation in this run; "phase" = one
+ * Vocabulary: "stage" = one stage activation in this run; "phase" = one
  * `## Phase N:` subdivision inside an implement plan artifact.
  */
 
@@ -40,7 +40,7 @@ import { runStage, StagePreflightError } from "./stage-lifecycle.js";
 
 /**
  * Per-loop cap on decision-edge retries. A "backward jump" is a *decision*
- * resolving to an already-visited node — i.e. the user's predicate chose to
+ * resolving to an already-visited stage — i.e. the user's predicate chose to
  * retry. Deterministic edges through a cycle (the loop body) are NOT
  * counted; the budget is per retry iteration, not per hop. A decision
  * escaping the loop (target not visited) resets the counter so each
@@ -56,7 +56,7 @@ export const MAX_BACKWARD_JUMPS = 2;
 export interface RunWorkflowOptions {
 	/** Workflow to execute — caller resolves by name from `LoadedWorkflows`. */
 	workflow: Workflow;
-	/** Passed to the start node as its argument. */
+	/** Passed to the start stage as its argument. */
 	input: string;
 	/** Required for "continue"-policy stages (host.sendUserMessage). */
 	host?: WorkflowHost;
@@ -71,8 +71,8 @@ export interface RunWorkflowResult {
 	 * this to `readLastStage` / `listArtifacts` / future inspect-past-run
 	 * helpers without recomputing the slug.
 	 *
-	 * Undefined ONLY for pre-flight rejections (start node not declared,
-	 * continue-policy nodes without pi) where no JSONL file was created.
+	 * Undefined ONLY for pre-flight rejections (start stage not declared,
+	 * continue-policy stages without pi) where no JSONL file was created.
 	 */
 	runId?: string;
 	stagesCompleted: number;
@@ -94,7 +94,7 @@ export interface RunWorkflowResult {
 	 * failed"). The run still succeeds — routing rows are telemetry, not
 	 * reconstruction inputs.
 	 */
-	droppedRoutingRows?: Array<{ fromStage: number; fromNode: string; decision: string }>;
+	droppedRoutingRows?: Array<{ fromStageIndex: number; fromStage: string; decision: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,11 +108,11 @@ export interface RunWorkflowResult {
  */
 export async function runWorkflow(ctx: WorkflowCommandHost, options: RunWorkflowOptions): Promise<RunWorkflowResult> {
 	const { workflow } = options;
-	if (!workflow.nodes[workflow.start]) {
+	if (!workflow.stages[workflow.start]) {
 		return {
 			stagesCompleted: 0,
 			success: false,
-			error: `Workflow "${workflow.name}" start node "${workflow.start}" is not declared`,
+			error: `Workflow "${workflow.name}" start stage "${workflow.start}" is not declared`,
 		};
 	}
 
@@ -120,17 +120,17 @@ export async function runWorkflow(ctx: WorkflowCommandHost, options: RunWorkflow
 	// sendUserMessage; if no host was passed, enforceSessionInvariants would
 	// throw at the first such stage.
 	// Reject at workflow entry so embedders get a clean envelope instead of a throw.
-	if (options.host === undefined && Object.values(workflow.nodes).some((n) => n.sessionPolicy === "continue")) {
+	if (options.host === undefined && Object.values(workflow.stages).some((s) => s.sessionPolicy === "continue")) {
 		return {
 			stagesCompleted: 0,
 			success: false,
-			error: "workflow contains continue-policy nodes which require a workflow host",
+			error: "workflow contains continue-policy stages which require a workflow host",
 		};
 	}
 
 	const cwd = ctx.cwd;
 	const runId = generateRunId();
-	const totalStages = countReachableNodes(workflow);
+	const totalStages = countReachableStages(workflow);
 
 	writeHeader(cwd, {
 		runId,
@@ -157,7 +157,7 @@ export async function runWorkflow(ctx: WorkflowCommandHost, options: RunWorkflow
 
 	const maxBackwardJumps = options.maxBackwardJumps ?? MAX_BACKWARD_JUMPS;
 
-	// runStageOrRecordFailure (not bare runStage) so a throw out of the start node —
+	// runStageOrRecordFailure (not bare runStage) so a throw out of the start stage —
 	// notably enforceSessionInvariants violations — records a JSONL failure
 	// row keyed on the failing stage rather than leaving a header-only file
 	// that every shape-filtered reader skips. Same wrapper used by
@@ -194,9 +194,9 @@ export async function runWorkflow(ctx: WorkflowCommandHost, options: RunWorkflow
  * this at load time, so by the time the runner sees a workflow the contract
  * holds. A `.targets`-less EdgeFn here means validation was bypassed (test
  * fixture or programmatic embedder) — surface loudly instead of silently
- * counting all declared nodes.
+ * counting all declared stages.
  */
-function countReachableNodes(workflow: Workflow): number {
+function countReachableStages(workflow: Workflow): number {
 	const seen = new Set<string>();
 	const frontier: string[] = [workflow.start];
 	while (frontier.length > 0) {
@@ -206,14 +206,14 @@ function countReachableNodes(workflow: Workflow): number {
 		const edge = workflow.edges[cur];
 		if (edge === undefined || edge === "stop") continue;
 		if (typeof edge === "string") {
-			if (workflow.nodes[edge] && !seen.has(edge)) frontier.push(edge);
+			if (workflow.stages[edge] && !seen.has(edge)) frontier.push(edge);
 		} else if (Array.isArray(edge.targets)) {
 			for (const t of edge.targets) {
-				if (t !== "stop" && workflow.nodes[t] && !seen.has(t)) frontier.push(t);
+				if (t !== "stop" && workflow.stages[t] && !seen.has(t)) frontier.push(t);
 			}
 		} else {
 			throw new Error(
-				`countReachableNodes: edge from "${cur}" is an EdgeFn without .targets — validateWorkflow should have rejected this workflow`,
+				`countReachableStages: edge from "${cur}" is an EdgeFn without .targets — validateWorkflow should have rejected this workflow`,
 			);
 		}
 	}
@@ -223,7 +223,7 @@ function countReachableNodes(workflow: Workflow): number {
 /**
  * Wraps `runStage` so a thrown stage records a JSONL failure row attributed
  * to the stage that actually threw — not to the prior stage in the chain.
- * Used by both `runWorkflow` (start node) and `advanceChain` (next node)
+ * Used by both `runWorkflow` (start stage) and `advanceChain` (next stage)
  * so there's exactly one place that translates "stage threw" →
  * `state.termination.error` + JSONL row. Without this, the start-stage call
  * leaves a header-only file and `advanceChain`'s own catch mis-attributes
@@ -235,7 +235,7 @@ function countReachableNodes(workflow: Workflow): number {
  * - `StagePreflightError` — a known preflight failure carrying its own
  *   attribution + messages. Recorded with the carried payload exactly.
  * - Any other `Error` — unexpected machinery failure; recorded with the
- *   generic `MSG_STAGE_THREW` shape attributed to the node id.
+ *   generic `MSG_STAGE_THREW` shape attributed to the stage id.
  */
 export async function runStageOrRecordFailure(
 	curCtx: RunnerCtx,

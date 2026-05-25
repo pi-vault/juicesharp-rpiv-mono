@@ -2,12 +2,12 @@
  * Load-time graph validation for `Workflow` objects.
  *
  * Catches the wiring mistakes a TS type system can't reach on its own:
- * unknown edge sources/targets, unreachable nodes, missing terminals,
- * predicate functions that return targets outside the node set.
+ * unknown edge sources/targets, unreachable stages, missing terminals,
+ * predicate functions that return targets outside the stage set.
  *
  * `validateWorkflow` returns a flat array of `WorkflowValidationIssue`s — errors
  * for problems that would crash the runner, warnings for shapes that
- * work but probably aren't what the author intended (unreachable nodes,
+ * work but probably aren't what the author intended (unreachable stages,
  * implicit terminals via missing edges). The load pipeline can choose
  * to halt on any error and surface warnings non-fatally.
  *
@@ -18,10 +18,10 @@ import {
 	COMPLETION_STRATEGIES,
 	type EdgeTarget,
 	marksFrontmatter,
-	type NodeDef,
 	ON_VALIDATION_FAILURE_VALUES,
 	SESSION_POLICIES,
 	STOP,
+	type StageDef,
 	type Workflow,
 } from "./api.js";
 import type { ConfigLayer } from "./layers.js";
@@ -38,7 +38,7 @@ import {
 
 export interface WorkflowValidationIssue {
 	workflow: string;
-	node?: string;
+	stage?: string;
 	severity: "error" | "warning";
 	message: string;
 	/**
@@ -64,8 +64,8 @@ export function validateWorkflow(workflow: Workflow): WorkflowValidationIssue[] 
 
 	checkWorkflowName(workflow, issues);
 
-	if (!workflow.nodes[workflow.start]) {
-		issues.push(error(workflow.name, undefined, `start node "${workflow.start}" is not declared in nodes`));
+	if (!workflow.stages[workflow.start]) {
+		issues.push(error(workflow.name, undefined, `start stage "${workflow.start}" is not declared in stages`));
 	}
 
 	checkEdgeKeys(workflow, issues);
@@ -76,7 +76,7 @@ export function validateWorkflow(workflow: Workflow): WorkflowValidationIssue[] 
 	// already reported by checkEdgeTargets.
 	const hasUnenumerableEdge = issues.some((i) => /\.targets` metadata/.test(i.message));
 	if (!hasUnenumerableEdge) checkReachability(workflow, issues);
-	checkNodeSemantics(workflow, issues);
+	checkStageSemantics(workflow, issues);
 	checkPredicateSchemas(workflow, issues);
 
 	return issues;
@@ -93,17 +93,17 @@ function checkWorkflowName(w: Workflow, issues: WorkflowValidationIssue[]): void
 	}
 }
 
-/** Every key in `edges` must be a declared node. */
+/** Every key in `edges` must be a declared stage. */
 function checkEdgeKeys(w: Workflow, issues: WorkflowValidationIssue[]): void {
 	for (const from of Object.keys(w.edges)) {
-		if (!w.nodes[from]) {
-			issues.push(error(w.name, from, `edges["${from}"] references a node that's not declared in nodes`));
+		if (!w.stages[from]) {
+			issues.push(error(w.name, from, `edges["${from}"] references a stage that's not declared in stages`));
 		}
 	}
 }
 
 /**
- * Every edge target must resolve to a declared node or the `"stop"` sentinel.
+ * Every edge target must resolve to a declared stage or the `"stop"` sentinel.
  * String targets are checked directly. `EdgeFn` targets are checked via the
  * paired `checkEdgeFnTargets` (emits the no-`.targets` error) and enumerated
  * via the pure `enumerateTargets`.
@@ -113,24 +113,24 @@ function checkEdgeTargets(w: Workflow, issues: WorkflowValidationIssue[]): void 
 		checkEdgeFnTargets(target, { workflow: w.name, from }, issues);
 		for (const candidate of enumerateTargets(target)) {
 			if (candidate === STOP) continue;
-			if (!w.nodes[candidate]) {
+			if (!w.stages[candidate]) {
 				issues.push(
-					error(w.name, from, `edges["${from}"] resolves to "${candidate}" which is not declared in nodes`),
+					error(w.name, from, `edges["${from}"] resolves to "${candidate}" which is not declared in stages`),
 				);
 			}
 		}
 	}
 }
 
-/** Nodes with no outgoing edge are implicit terminals — usually a missing connection. */
+/** Stages with no outgoing edge are implicit terminals — usually a missing connection. */
 function checkMissingEdges(w: Workflow, issues: WorkflowValidationIssue[]): void {
-	for (const name of Object.keys(w.nodes)) {
+	for (const name of Object.keys(w.stages)) {
 		if (!(name in w.edges)) {
 			issues.push(
 				warning(
 					w.name,
 					name,
-					`node "${name}" has no edge — treated as terminal; declare \`${name}: "stop"\` to be explicit`,
+					`stage "${name}" has no edge — treated as terminal; declare \`${name}: "stop"\` to be explicit`,
 				),
 			);
 		}
@@ -138,12 +138,12 @@ function checkMissingEdges(w: Workflow, issues: WorkflowValidationIssue[]): void
 }
 
 /**
- * BFS from `start`; every declared node should be reachable. Orphans aren't
+ * BFS from `start`; every declared stage should be reachable. Orphans aren't
  * a runner error (they can't fire) but they're almost always a mistake worth
  * surfacing.
  */
 function checkReachability(w: Workflow, issues: WorkflowValidationIssue[]): void {
-	if (!w.nodes[w.start]) return; // already reported by start-check
+	if (!w.stages[w.start]) return; // already reported by start-check
 
 	const reachable = new Set<string>();
 	const frontier: string[] = [w.start];
@@ -156,97 +156,97 @@ function checkReachability(w: Workflow, issues: WorkflowValidationIssue[]): void
 		if (target === undefined || target === STOP) continue;
 
 		for (const next of enumerateTargets(target)) {
-			if (next !== STOP && w.nodes[next] && !reachable.has(next)) frontier.push(next);
+			if (next !== STOP && w.stages[next] && !reachable.has(next)) frontier.push(next);
 		}
 	}
 
-	for (const name of Object.keys(w.nodes)) {
+	for (const name of Object.keys(w.stages)) {
 		if (!reachable.has(name)) {
-			issues.push(warning(w.name, name, `node "${name}" is unreachable from start "${w.start}"`));
+			issues.push(warning(w.name, name, `stage "${name}" is unreachable from start "${w.start}"`));
 		}
 	}
 }
 
 /**
- * Per-node semantic checks — bounds and enums that the TS type system narrows
+ * Per-stage semantic checks — bounds and enums that the TS type system narrows
  * at edit time but jiti erases at runtime. A user-authored config can ship any
  * numeric `maxValidationRetries` or any string for `onValidationFailure`; this
  * pass catches them at load time. Each check is a focused helper so the
  * orchestrator reads top-down and individual rules can be exercised in
  * isolation.
  */
-function checkNodeSemantics(w: Workflow, issues: WorkflowValidationIssue[]): void {
-	for (const [name, node] of Object.entries(w.nodes)) {
-		checkRetryBounds(w, name, node, issues);
-		checkTimeoutBounds(w, name, node, issues);
-		checkNodeEnums(w, name, node, issues);
-		checkFanoutContinueInvariant(w, name, node, issues);
+function checkStageSemantics(w: Workflow, issues: WorkflowValidationIssue[]): void {
+	for (const [name, stage] of Object.entries(w.stages)) {
+		checkRetryBounds(w, name, stage, issues);
+		checkTimeoutBounds(w, name, stage, issues);
+		checkStageEnums(w, name, stage, issues);
+		checkFanoutContinueInvariant(w, name, stage, issues);
 	}
 }
 
-function checkRetryBounds(w: Workflow, name: string, node: NodeDef, issues: WorkflowValidationIssue[]): void {
-	if (node.maxValidationRetries === undefined) return;
-	if (node.maxValidationRetries < MIN_VALIDATION_RETRIES || node.maxValidationRetries > MAX_VALIDATION_RETRIES) {
+function checkRetryBounds(w: Workflow, name: string, stage: StageDef, issues: WorkflowValidationIssue[]): void {
+	if (stage.maxValidationRetries === undefined) return;
+	if (stage.maxValidationRetries < MIN_VALIDATION_RETRIES || stage.maxValidationRetries > MAX_VALIDATION_RETRIES) {
 		issues.push(
 			error(
 				w.name,
 				name,
-				`maxValidationRetries: ${node.maxValidationRetries} — must be in [${MIN_VALIDATION_RETRIES}, ${MAX_VALIDATION_RETRIES}]`,
+				`maxValidationRetries: ${stage.maxValidationRetries} — must be in [${MIN_VALIDATION_RETRIES}, ${MAX_VALIDATION_RETRIES}]`,
 			),
 		);
 	}
 }
 
-function checkTimeoutBounds(w: Workflow, name: string, node: NodeDef, issues: WorkflowValidationIssue[]): void {
-	if (node.validationRetryTimeoutMs === undefined) return;
+function checkTimeoutBounds(w: Workflow, name: string, stage: StageDef, issues: WorkflowValidationIssue[]): void {
+	if (stage.validationRetryTimeoutMs === undefined) return;
 	if (
-		node.validationRetryTimeoutMs < MIN_VALIDATION_RETRY_TIMEOUT_MS ||
-		node.validationRetryTimeoutMs > MAX_VALIDATION_RETRY_TIMEOUT_MS
+		stage.validationRetryTimeoutMs < MIN_VALIDATION_RETRY_TIMEOUT_MS ||
+		stage.validationRetryTimeoutMs > MAX_VALIDATION_RETRY_TIMEOUT_MS
 	) {
 		issues.push(
 			error(
 				w.name,
 				name,
-				`validationRetryTimeoutMs: ${node.validationRetryTimeoutMs} — must be in [${MIN_VALIDATION_RETRY_TIMEOUT_MS}, ${MAX_VALIDATION_RETRY_TIMEOUT_MS}]`,
+				`validationRetryTimeoutMs: ${stage.validationRetryTimeoutMs} — must be in [${MIN_VALIDATION_RETRY_TIMEOUT_MS}, ${MAX_VALIDATION_RETRY_TIMEOUT_MS}]`,
 			),
 		);
 	}
 }
 
-function checkNodeEnums(w: Workflow, name: string, node: NodeDef, issues: WorkflowValidationIssue[]): void {
+function checkStageEnums(w: Workflow, name: string, stage: StageDef, issues: WorkflowValidationIssue[]): void {
 	if (
-		node.onValidationFailure !== undefined &&
-		!(ON_VALIDATION_FAILURE_VALUES as readonly string[]).includes(node.onValidationFailure)
+		stage.onValidationFailure !== undefined &&
+		!(ON_VALIDATION_FAILURE_VALUES as readonly string[]).includes(stage.onValidationFailure)
 	) {
 		issues.push(
 			error(
 				w.name,
 				name,
-				`onValidationFailure: "${node.onValidationFailure}" — must be one of ${ON_VALIDATION_FAILURE_VALUES.join(", ")}`,
+				`onValidationFailure: "${stage.onValidationFailure}" — must be one of ${ON_VALIDATION_FAILURE_VALUES.join(", ")}`,
 			),
 		);
 	}
-	if (!(COMPLETION_STRATEGIES as readonly string[]).includes(node.completionStrategy)) {
+	if (!(COMPLETION_STRATEGIES as readonly string[]).includes(stage.completionStrategy)) {
 		issues.push(
 			error(
 				w.name,
 				name,
-				`completionStrategy: "${node.completionStrategy}" — must be one of ${COMPLETION_STRATEGIES.join(", ")}`,
+				`completionStrategy: "${stage.completionStrategy}" — must be one of ${COMPLETION_STRATEGIES.join(", ")}`,
 			),
 		);
 	}
-	if (!(SESSION_POLICIES as readonly string[]).includes(node.sessionPolicy)) {
+	if (!(SESSION_POLICIES as readonly string[]).includes(stage.sessionPolicy)) {
 		issues.push(
-			error(w.name, name, `sessionPolicy: "${node.sessionPolicy}" — must be one of ${SESSION_POLICIES.join(", ")}`),
+			error(w.name, name, `sessionPolicy: "${stage.sessionPolicy}" — must be one of ${SESSION_POLICIES.join(", ")}`),
 		);
 	}
-	if (node.completionStrategy === "artifact-emit" && !node.outcome) {
+	if (stage.completionStrategy === "artifact-emit" && !stage.outcome) {
 		issues.push(
 			error(
 				w.name,
 				name,
-				`node "${name}" has completionStrategy "artifact-emit" but no \`outcome\` — ` +
-					"there is no framework default for artifact-emit nodes. Wire `outcome: rpivArtifactMdOutcome` " +
+				`stage "${name}" has completionStrategy "artifact-emit" but no \`outcome\` — ` +
+					"there is no framework default for artifact-emit stages. Wire `outcome: rpivArtifactMdOutcome` " +
 					"(from @juicesharp/rpiv-pi) or supply your own `{ resolver, reader? }`.",
 			),
 		);
@@ -260,23 +260,23 @@ function checkNodeEnums(w: Workflow, name: string, node: NodeDef, issues: Workfl
  * time gives user-authored configs a targeted error instead of a generic
  * chain-advance failure on first invocation.
  *
- * The invariant is keyed on the node's `fanout` field — not on a skill
- * name — keeping the package skill-agnostic: any node opting into
+ * The invariant is keyed on the stage's `fanout` field — not on a skill
+ * name — keeping the package skill-agnostic: any stage opting into
  * fanout must use `sessionPolicy: "fresh"` regardless of what skill it
  * dispatches.
  */
 function checkFanoutContinueInvariant(
 	w: Workflow,
 	name: string,
-	node: NodeDef,
+	stage: StageDef,
 	issues: WorkflowValidationIssue[],
 ): void {
-	if (node.fanout && node.sessionPolicy === "continue") {
+	if (stage.fanout && stage.sessionPolicy === "continue") {
 		issues.push(
 			error(
 				w.name,
 				name,
-				`node "${name}" cannot combine fanout with sessionPolicy "continue" — fanout requires per-unit session isolation`,
+				`stage "${name}" cannot combine fanout with sessionPolicy "continue" — fanout requires per-unit session isolation`,
 			),
 		);
 	}
@@ -285,7 +285,7 @@ function checkFanoutContinueInvariant(
 /**
  * Predicate edges that read `manifest.data[field]` (i.e. `definePredicate`,
  * `threshold`, and any future factory that auto-attaches the
- * `READS_FRONTMATTER` marker) should fire on data the source node has
+ * `READS_FRONTMATTER` marker) should fire on data the source stage has
  * validated against its `outputSchema`. If the schema is absent, the
  * validation-retry loop never runs and the predicate may read an undefined
  * field — routing decisions silently default.
@@ -297,13 +297,13 @@ function checkPredicateSchemas(w: Workflow, issues: WorkflowValidationIssue[]): 
 	for (const [from, target] of Object.entries(w.edges)) {
 		if (typeof target === "string") continue;
 		if (!marksFrontmatter(target)) continue;
-		const node = w.nodes[from];
-		if (node && !node.outputSchema) {
+		const stage = w.stages[from];
+		if (stage && !stage.outputSchema) {
 			issues.push(
 				warning(
 					w.name,
 					from,
-					`predicate edge from "${from}" reads manifest.data but the node has no outputSchema — routing may fire on un-validated frontmatter`,
+					`predicate edge from "${from}" reads manifest.data but the stage has no outputSchema — routing may fire on un-validated frontmatter`,
 				),
 			);
 		}
@@ -360,10 +360,10 @@ function checkEdgeFnTargets(
 // Issue constructors
 // ===========================================================================
 
-function error(workflow: string, node: string | undefined, message: string): WorkflowValidationIssue {
-	return { workflow, node, severity: "error", message };
+function error(workflow: string, stage: string | undefined, message: string): WorkflowValidationIssue {
+	return { workflow, stage, severity: "error", message };
 }
 
-function warning(workflow: string, node: string | undefined, message: string): WorkflowValidationIssue {
-	return { workflow, node, severity: "warning", message };
+function warning(workflow: string, stage: string | undefined, message: string): WorkflowValidationIssue {
+	return { workflow, stage, severity: "warning", message };
 }

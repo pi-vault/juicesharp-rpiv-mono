@@ -66,8 +66,8 @@ export interface RunSummary {
 
 export interface RoutingDecision {
 	type: "routing";
-	fromStage: number;
-	fromNode: string;
+	fromStageIndex: number;
+	fromStage: string;
 	decision: string;
 	ts: string;
 }

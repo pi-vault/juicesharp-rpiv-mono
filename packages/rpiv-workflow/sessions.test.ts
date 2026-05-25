@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { createMockPi, createMockSessionChain, mockAssistantMessage } from "@juicesharp/rpiv-test-utils";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { NodeDef, NodeSchema } from "./api.js";
+import type { StageDef, StageSchema } from "./api.js";
 import { fs as fsHandle } from "./handle.js";
 import { currentPrimaryArtifact } from "./internal-utils.js";
 import type { Outcome, ResolveCtx } from "./manifest.js";
@@ -61,8 +61,8 @@ const freshRunState = (overrides: Partial<RunState> = {}): RunState => ({
 	...overrides,
 });
 
-/** Minimal skill node — fresh policy, agent-end (no artifact extraction by default). */
-const node = (overrides: Partial<NodeDef> = {}): NodeDef => ({
+/** Minimal skill stage — fresh policy, agent-end (no artifact extraction by default). */
+const stage = (overrides: Partial<StageDef> = {}): StageDef => ({
 	skill: "test",
 	completionStrategy: "agent-end",
 	sessionPolicy: "fresh",
@@ -71,13 +71,13 @@ const node = (overrides: Partial<NodeDef> = {}): NodeDef => ({
 
 /**
  * Build a StageSession with sensible defaults. Caller MUST supply cwd + state
- * (shared with the JSONL audit write) and any node/onSuccess overrides.
+ * (shared with the JSONL audit write) and any stage/onSuccess overrides.
  */
 const stageSession = (overrides: Partial<StageSession> & Pick<StageSession, "cwd" | "state">): StageSession => ({
 	runId: "run-test",
 	prompt: "/skill:test arg",
 	skill: "test",
-	node: node(),
+	stage: stage(),
 	stageIndex: 0,
 	baseline: undefined,
 	onSuccess: async () => {},
@@ -157,7 +157,7 @@ describe("sessions — validation retry loop", () => {
 			stageSession({
 				cwd: tmpDir,
 				state,
-				node: node({ outputSchema: FOO_EQ_2_SCHEMA, outcome: scriptedOutcome([okPayload({ foo: 2 })]) }),
+				stage: stage({ outputSchema: FOO_EQ_2_SCHEMA, outcome: scriptedOutcome([okPayload({ foo: 2 })]) }),
 				onSuccess,
 			}),
 		);
@@ -181,7 +181,7 @@ describe("sessions — validation retry loop", () => {
 			stageSession({
 				cwd: tmpDir,
 				state,
-				node: node({
+				stage: stage({
 					outputSchema: FOO_EQ_2_SCHEMA,
 					maxValidationRetries: 2,
 					outcome: scriptedOutcome([okPayload({ foo: 1 }), okPayload({ foo: 2 })]),
@@ -213,7 +213,7 @@ describe("sessions — validation retry loop", () => {
 			stageSession({
 				cwd: tmpDir,
 				state,
-				node: node({
+				stage: stage({
 					outputSchema: FOO_EQ_2_SCHEMA,
 					maxValidationRetries: 1,
 					// Always invalid → 1 retry attempt then exhaustion.
@@ -243,7 +243,7 @@ describe("sessions — validation retry loop", () => {
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
-				node: node({
+				stage: stage({
 					outputSchema: FOO_EQ_2_SCHEMA,
 					// Far above ceiling — must clamp to MAX_VALIDATION_RETRIES.
 					maxValidationRetries: MAX_VALIDATION_RETRIES + 50,
@@ -272,7 +272,7 @@ describe("sessions — validation retry loop", () => {
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
-				node: node({
+				stage: stage({
 					outputSchema: FOO_EQ_2_SCHEMA,
 					onValidationFailure: "halt",
 					maxValidationRetries: 3,
@@ -331,7 +331,7 @@ describe("sessions — validation retry loop", () => {
 			stageSession({
 				cwd: tmpDir,
 				state,
-				node: node({
+				stage: stage({
 					outputSchema: FOO_EQ_2_SCHEMA,
 					maxValidationRetries: 1,
 					validationRetryTimeoutMs: 1_000,
@@ -360,7 +360,7 @@ describe("sessions — validation retry loop", () => {
 			stageSession({
 				cwd: tmpDir,
 				state,
-				node: node({
+				stage: stage({
 					outputSchema: FOO_EQ_2_SCHEMA,
 					maxValidationRetries: 2,
 					outcome: scriptedOutcome([okPayload({ foo: 1 }), fatalPayload("outcome blew up mid-retry")]),
@@ -393,7 +393,7 @@ describe("sessions — validation retry loop", () => {
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
-				node: node({
+				stage: stage({
 					outputSchema: FOO_EQ_2_SCHEMA,
 					maxValidationRetries: 1,
 					validationRetryTimeoutMs: MAX_VALIDATION_RETRY_TIMEOUT_MS * 100,
@@ -425,7 +425,7 @@ describe("sessions — validation retry loop", () => {
 		const onSuccess = vi.fn(async () => {});
 		const onFailure = vi.fn();
 
-		const asyncOkSchema: NodeSchema<unknown, unknown> = {
+		const asyncOkSchema: StageSchema<unknown, unknown> = {
 			"~standard": {
 				version: 1,
 				vendor: "test-async",
@@ -438,7 +438,7 @@ describe("sessions — validation retry loop", () => {
 			stageSession({
 				cwd: tmpDir,
 				state,
-				node: node({ outputSchema: asyncOkSchema, outcome: scriptedOutcome([okPayload({ foo: 2 })]) }),
+				stage: stage({ outputSchema: asyncOkSchema, outcome: scriptedOutcome([okPayload({ foo: 2 })]) }),
 				onSuccess,
 				onFailure,
 			}),
@@ -463,7 +463,7 @@ describe("sessions — validation retry loop", () => {
 		// through the canonical kind:"fatal" path so the failure carries the
 		// right error class (MSG_STAGE_FAILED via haltStageWithExtractionError),
 		// fires onFailure, and exits cleanly without escaping the session.
-		const asyncFailingSchema: NodeSchema<unknown, unknown> = {
+		const asyncFailingSchema: StageSchema<unknown, unknown> = {
 			"~standard": {
 				version: 1,
 				vendor: "test-async",
@@ -476,7 +476,7 @@ describe("sessions — validation retry loop", () => {
 			stageSession({
 				cwd: tmpDir,
 				state,
-				node: node({ outputSchema: asyncFailingSchema, outcome: scriptedOutcome([okPayload({ foo: 2 })]) }),
+				stage: stage({ outputSchema: asyncFailingSchema, outcome: scriptedOutcome([okPayload({ foo: 2 })]) }),
 				onSuccess,
 				onFailure,
 			}),
@@ -511,7 +511,7 @@ describe("sessions — validation retry loop", () => {
 		const onSuccess = vi.fn(async () => {});
 		const onFailure = vi.fn();
 
-		const hangingSchema: NodeSchema<unknown, unknown> = {
+		const hangingSchema: StageSchema<unknown, unknown> = {
 			"~standard": {
 				version: 1,
 				vendor: "test-async",
@@ -524,7 +524,7 @@ describe("sessions — validation retry loop", () => {
 			stageSession({
 				cwd: tmpDir,
 				state,
-				node: node({
+				stage: stage({
 					outputSchema: hangingSchema,
 					validationRetryTimeoutMs: 1_000,
 					outcome: scriptedOutcome([okPayload({ foo: 2 })]),
@@ -555,7 +555,7 @@ describe("sessions — outcome resolution", () => {
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	it("explicit node.outcome wins (artifact-emit has no framework default)", async () => {
+	it("explicit stage.outcome wins (artifact-emit has no framework default)", async () => {
 		const chain = createMockSessionChain({
 			cwd: tmpDir,
 			steps: [{ branch: [mockAssistantMessage("done")] }],
@@ -567,7 +567,7 @@ describe("sessions — outcome resolution", () => {
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
-				node: node({ completionStrategy: "artifact-emit", outcome: explicit }),
+				stage: stage({ completionStrategy: "artifact-emit", outcome: explicit }),
 			}),
 		);
 
@@ -589,7 +589,7 @@ describe("sessions — outcome resolution", () => {
 				stageSession({
 					cwd: tmpDir,
 					state: freshRunState(),
-					node: node({ completionStrategy: "artifact-emit" }),
+					stage: stage({ completionStrategy: "artifact-emit" }),
 				}),
 			),
 		).rejects.toThrow(/no `outcome`/);
@@ -609,7 +609,7 @@ describe("sessions — outcome resolution", () => {
 			stageSession({
 				cwd: tmpDir,
 				state,
-				node: node({ completionStrategy: "agent-end" }),
+				stage: stage({ completionStrategy: "agent-end" }),
 				onSuccess,
 			}),
 		);
@@ -689,7 +689,7 @@ describe("sessions — resolver ctx (always-unsliced branch + policy-derived off
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
-				node: node({ sessionPolicy: "continue", outcome: recordingOutcome }),
+				stage: stage({ sessionPolicy: "continue", outcome: recordingOutcome }),
 				branchOffset: priorPrefix.length,
 				host: mockPi,
 			}),
@@ -730,7 +730,7 @@ describe("sessions — resolver ctx (always-unsliced branch + policy-derived off
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
-				node: node({
+				stage: stage({
 					sessionPolicy: "continue",
 					outputSchema: FOO_EQ_2_SCHEMA,
 					outcome: failThenPassOutcome,
@@ -761,7 +761,7 @@ describe("sessions — resolver ctx (always-unsliced branch + policy-derived off
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
-				node: node({ sessionPolicy: "fresh", outcome: recordingOutcome }),
+				stage: stage({ sessionPolicy: "fresh", outcome: recordingOutcome }),
 				// Stage's captured offset is set artificially here; in production
 				// `computeBranchOffset` returns undefined for fresh stages anyway.
 				// The handler short-circuits — fresh ALWAYS emits `undefined`.
@@ -803,7 +803,7 @@ describe("sessions — spawn primitive", () => {
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
-				node: node({ sessionPolicy: "continue" }),
+				stage: stage({ sessionPolicy: "continue" }),
 				branchOffset: 0,
 				host: mockPi,
 				prompt: "/skill:test continue-prompt",
@@ -857,7 +857,7 @@ describe("sessions — spawn primitive", () => {
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
-				node: node({ sessionPolicy: "continue" }),
+				stage: stage({ sessionPolicy: "continue" }),
 				branchOffset: 0,
 				host: mockPi,
 				onFailure,
@@ -902,7 +902,7 @@ describe("sessions — success persistence", () => {
 			stageSession({
 				cwd: tmpDir,
 				state,
-				node: node({
+				stage: stage({
 					completionStrategy: "agent-end",
 					outcome: {
 						resolver: {
@@ -934,7 +934,7 @@ describe("sessions — success persistence", () => {
 			stageSession({
 				cwd: tmpDir,
 				state,
-				node: node({
+				stage: stage({
 					completionStrategy: "artifact-emit",
 					outcome: {
 						resolver: {
@@ -964,7 +964,7 @@ describe("sessions — success persistence", () => {
 			stageSession({
 				cwd: tmpDir,
 				state,
-				node: node({ completionStrategy: "agent-end" }),
+				stage: stage({ completionStrategy: "agent-end" }),
 			}),
 		);
 
@@ -1101,7 +1101,7 @@ describe("sessions — halt routing", () => {
 			stageSession({
 				cwd: tmpDir,
 				state,
-				node: node({
+				stage: stage({
 					completionStrategy: "agent-end",
 					outcome: { resolver: { resolve: () => ({ kind: "fatal", message: "outcome said no" }) } },
 				}),

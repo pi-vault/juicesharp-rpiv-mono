@@ -49,9 +49,9 @@ describe("formatError", () => {
 });
 
 describe("isWorkflow", () => {
-	it("rejects truthy non-objects on nodes/edges", () => {
-		expect(isWorkflow({ name: "x", start: "y", nodes: "foo", edges: 1 })).toBe(false);
-		expect(isWorkflow({ name: "x", start: "y", nodes: {}, edges: [] })).toBe(true);
+	it("rejects truthy non-objects on stages/edges", () => {
+		expect(isWorkflow({ name: "x", start: "y", stages: "foo", edges: 1 })).toBe(false);
+		expect(isWorkflow({ name: "x", start: "y", stages: {}, edges: [] })).toBe(true);
 	});
 
 	it("rejects null/undefined", () => {

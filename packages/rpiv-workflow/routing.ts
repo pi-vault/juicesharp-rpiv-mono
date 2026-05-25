@@ -1,9 +1,9 @@
 /**
- * Next-node lookup over a `Workflow`'s edge graph.
+ * Next-stage lookup over a `Workflow`'s edge graph.
  *
- * `nextNode` is the single chokepoint: given the current node name + the
- * runtime context, it returns a `RoutingResult` — `{ kind: "next", node }`
- * if the chain continues, `{ kind: "stop" }` for terminal nodes (no
+ * `nextStage` is the single chokepoint: given the current stage name + the
+ * runtime context, it returns a `RoutingResult` — `{ kind: "next", stage }`
+ * if the chain continues, `{ kind: "stop" }` for terminal stages (no
  * outgoing edge OR explicit `STOP`), `{ kind: "err", reason }` if the
  * routing layer detected a violation (an `EdgeFn` body threw, or an
  * `EdgeFn` returned an undeclared target).
@@ -16,21 +16,21 @@
 import { type EdgeContext, type EdgeFn, STOP, type Workflow } from "./api.js";
 
 /**
- * Three-way return from `nextNode`. Matches the convention established by
+ * Three-way return from `nextStage`. Matches the convention established by
  * `sessions.ts:ExtractionOutcome` and `load.ts:NormalizeResult` — every
  * multi-state result in the package carries an explicit `kind` discriminator.
  */
-export type RoutingResult = { kind: "next"; node: string } | { kind: "stop" } | { kind: "err"; reason: string };
+export type RoutingResult = { kind: "next"; stage: string } | { kind: "stop" } | { kind: "err"; reason: string };
 
 /**
- * Returns `{ kind: "next", node }` to advance, `{ kind: "stop" }` for
- * terminal nodes (no outgoing edge OR explicit `STOP`), or
+ * Returns `{ kind: "next", stage }` to advance, `{ kind: "stop" }` for
+ * terminal stages (no outgoing edge OR explicit `STOP`), or
  * `{ kind: "err", reason }` when an `EdgeFn` threw or returned an
  * undeclared target. Load-time `validateWorkflow` should catch the
  * undeclared-target case for predicates with `.targets` metadata; the
  * runtime check is the last line of defense.
  */
-export function nextNode(workflow: Workflow, current: string, ctx: EdgeContext): RoutingResult {
+export function nextStage(workflow: Workflow, current: string, ctx: EdgeContext): RoutingResult {
 	const target = workflow.edges[current];
 	if (target === undefined || target === STOP) return { kind: "stop" };
 	if (typeof target === "string") return resolveTarget(workflow, current, target);
@@ -42,7 +42,7 @@ export function nextNode(workflow: Workflow, current: string, ctx: EdgeContext):
 }
 
 /**
- * True iff the current node's edge is an `EdgeFn` — i.e., a routing decision
+ * True iff the current stage's edge is an `EdgeFn` — i.e., a routing decision
  * was made. The runner uses this to decide whether to write a routing-audit
  * row. String edges are deterministic and not worth auditing.
  */
@@ -71,9 +71,9 @@ function invokeEdgeFn(
 }
 
 function resolveTarget(workflow: Workflow, current: string, target: string): RoutingResult {
-	if (workflow.nodes[target]) return { kind: "next", node: target };
+	if (workflow.stages[target]) return { kind: "next", stage: target };
 	return {
 		kind: "err",
-		reason: `workflow edge from "${current}" returned "${target}" which is not a declared node in workflow "${workflow.name}"`,
+		reason: `workflow edge from "${current}" returned "${target}" which is not a declared stage in workflow "${workflow.name}"`,
 	};
 }

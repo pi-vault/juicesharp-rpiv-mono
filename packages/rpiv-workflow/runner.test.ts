@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createMockPi, createMockSessionChain, mockAssistantMessage } from "@juicesharp/rpiv-test-utils";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CompletionStrategy, EdgeTarget, FanoutFn, NodeDef, NodeSchema, Workflow } from "./api.js";
+import type { CompletionStrategy, EdgeTarget, FanoutFn, StageDef, StageSchema, Workflow } from "./api.js";
 import { definePredicate, defineStatePredicate, defineWorkflow, threshold } from "./api.js";
 import { fs as fsHandle } from "./handle.js";
 import type { Outcome } from "./manifest.js";
@@ -133,14 +133,14 @@ describe("runWorkflow", () => {
 	 * Workflow factory for tests.
 	 *
 	 * Builds a linear `Workflow` from an ordered stage list. Each stage
-	 * becomes a node + an auto-edge to the next stage; the final stage's
+	 * becomes a StageDef + an auto-edge to the next stage; the final stage's
 	 * edge is `"stop"`. Two skill names get special defaults that align
 	 * with built-in `WORKFLOW_DAG` settings so tests don't have to spell
 	 * them out:
 	 *   - `implement` → `completionStrategy: "agent-end"` (action skill)
 	 *   - `commit`    → `completionStrategy: "agent-end"` (action skill)
 	 *
-	 * Override per-node via `nodeOverrides`, or replace specific edges
+	 * Override per-stage via `stageOverrides`, or replace specific edges
 	 * (predicates, back-edges) via `edgeOverrides`.
 	 *
 	 *   wf("tiny", ["research"])
@@ -151,10 +151,10 @@ describe("runWorkflow", () => {
 	const wf = (
 		name: string,
 		stages: string[],
-		nodeOverrides: Record<string, Partial<NodeDef>> = {},
+		stageOverrides: Record<string, Partial<StageDef>> = {},
 		edgeOverrides: Record<string, EdgeTarget> = {},
 	): Workflow => {
-		const nodes: Record<string, NodeDef> = {};
+		const stageMap: Record<string, StageDef> = {};
 		const edges: Record<string, EdgeTarget> = {};
 		for (let i = 0; i < stages.length; i++) {
 			const id = stages[i]!;
@@ -163,22 +163,22 @@ describe("runWorkflow", () => {
 				id === "implement" || id === "commit" ? "agent-end" : "artifact-emit";
 			// `skill` omitted — runner defaults it from the record key, matching
 			// the same convention real authors use via `artifact()` / `action()`.
-			const base: NodeDef = {
+			const base: StageDef = {
 				completionStrategy: defaultStrategy,
 				sessionPolicy: "fresh",
 			};
-			const merged: NodeDef = { ...base, ...(nodeOverrides[id] ?? {}) };
-			// artifact-emit nodes get a test-local transcript-scan outcome (the
+			const merged: StageDef = { ...base, ...(stageOverrides[id] ?? {}) };
+			// artifact-emit stages get a test-local transcript-scan outcome (the
 			// framework no longer ships a default). Decide based on the FINAL
 			// strategy after overrides — if a test overrides to agent-end, we
 			// don't want to attach the artifact-md outcome and force a path scan.
 			if (merged.completionStrategy === "artifact-emit" && !merged.outcome) {
 				merged.outcome = transcriptArtifactMdOutcome;
 			}
-			nodes[id] = merged;
+			stageMap[id] = merged;
 			edges[id] = edgeOverrides[id] ?? next ?? "stop";
 		}
-		return defineWorkflow({ name, start: stages[0] ?? "__missing__", nodes, edges });
+		return defineWorkflow({ name, start: stages[0] ?? "__missing__", stages: stageMap, edges });
 	};
 
 	/** Read the single JSONL state file produced for a run, as parsed objects. */
@@ -201,21 +201,21 @@ describe("runWorkflow", () => {
 		writeFileSync(join(cwd, relPath), content);
 	};
 
-	it("returns an error result for a workflow whose start node is not declared", async () => {
+	it("returns an error result for a workflow whose start stage is not declared", async () => {
 		// The post-format-change equivalent of "unknown preset": the caller
 		// (command.ts) resolves names to Workflow objects; runWorkflow only
-		// sees the object. A workflow with start ∉ nodes is the proximal
+		// sees the object. A workflow with start ∉ stages is the proximal
 		// invalid-input case — it short-circuits BEFORE writeHeader so a
 		// typo doesn't pollute the audit trail.
 		const chain = createMockSessionChain({ cwd: tmpDir, steps: [] });
 		const result = await runWorkflow(chain.ctx, {
-			workflow: { name: "broken", start: "ghost", nodes: {}, edges: {} },
+			workflow: { name: "broken", start: "ghost", stages: {}, edges: {} },
 			input: "x",
 		});
 
 		expect(result.success).toBe(false);
 		expect(result.stagesCompleted).toBe(0);
-		expect(result.error).toMatch(/start node "ghost" is not declared/);
+		expect(result.error).toMatch(/start stage "ghost" is not declared/);
 		expect(chain.ctx.newSession).not.toHaveBeenCalled();
 		expect(existsSync(join(tmpDir, ".rpiv", "workflows"))).toBe(false);
 	});
@@ -857,7 +857,7 @@ describe("runWorkflow", () => {
 			});
 
 			expect(result.success).toBe(false);
-			expect(result.error).toBe("workflow contains continue-policy nodes which require a workflow host");
+			expect(result.error).toBe("workflow contains continue-policy stages which require a workflow host");
 			expect(result.stagesCompleted).toBe(0);
 
 			// Preflight short-circuits before writeHeader / any recordStage call —
@@ -1077,7 +1077,7 @@ describe("runWorkflow", () => {
 				steps: [{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/research/r.md")] }],
 			});
 
-			const hangingSchema: NodeSchema<unknown, unknown> = {
+			const hangingSchema: StageSchema<unknown, unknown> = {
 				"~standard": {
 					version: 1,
 					vendor: "test-async",
@@ -1208,8 +1208,8 @@ describe("runWorkflow", () => {
 			expect(routingRows).toHaveLength(1);
 			expect(routingRows[0]).toMatchObject({
 				type: "routing",
-				fromStage: 2, // code-review is stage 2
-				fromNode: "code-review",
+				fromStageIndex: 2, // code-review is stage 2
+				fromStage: "code-review",
 				decision: "commit",
 			});
 		});
@@ -1326,7 +1326,7 @@ describe("runWorkflow", () => {
 			expect(routingDecisions).toHaveLength(1);
 			expect(routingDecisions[0]).toMatchObject({
 				type: "routing",
-				fromNode: "code-review",
+				fromStage: "code-review",
 				decision: "commit",
 			});
 		});
@@ -1348,8 +1348,8 @@ describe("runWorkflow", () => {
 				// recordStage failure test uses.
 				const wrote = appendRoutingDecision("/dev/null/impossible", "run-1", {
 					type: "routing",
-					fromStage: 1,
-					fromNode: "code-review",
+					fromStageIndex: 1,
+					fromStage: "code-review",
 					decision: "commit",
 					ts: "2026-05-23T00:00:00Z",
 				});
@@ -1363,8 +1363,8 @@ describe("runWorkflow", () => {
 		it("appendRoutingDecision returns true on a successful write", () => {
 			const wrote = appendRoutingDecision(tmpDir, "run-1", {
 				type: "routing",
-				fromStage: 1,
-				fromNode: "code-review",
+				fromStageIndex: 1,
+				fromStage: "code-review",
 				decision: "commit",
 				ts: "2026-05-23T00:00:00Z",
 			});
@@ -1849,7 +1849,7 @@ describe("totalStages denominator (countReachableNodes)", () => {
 			workflow: {
 				name: "linear",
 				start: "a",
-				nodes: {
+				stages: {
 					a: { completionStrategy: "agent-end", sessionPolicy: "fresh" },
 					b: { completionStrategy: "agent-end", sessionPolicy: "fresh" },
 					c: { completionStrategy: "agent-end", sessionPolicy: "fresh" },
@@ -1870,7 +1870,7 @@ describe("totalStages denominator (countReachableNodes)", () => {
 			workflow: {
 				name: "branching",
 				start: "a",
-				nodes: {
+				stages: {
 					a: { completionStrategy: "agent-end", sessionPolicy: "fresh" },
 					b: { completionStrategy: "agent-end", sessionPolicy: "fresh" },
 					c: { completionStrategy: "agent-end", sessionPolicy: "fresh" },
@@ -1893,7 +1893,7 @@ describe("totalStages denominator (countReachableNodes)", () => {
 			workflow: {
 				name: "with-orphan",
 				start: "a",
-				nodes: {
+				stages: {
 					a: { completionStrategy: "agent-end", sessionPolicy: "fresh" },
 					b: { completionStrategy: "agent-end", sessionPolicy: "fresh" },
 					orphan: { skill: "orphan", completionStrategy: "agent-end", sessionPolicy: "fresh" },
@@ -1921,7 +1921,7 @@ describe("totalStages denominator (countReachableNodes)", () => {
 				workflow: {
 					name: "naked",
 					start: "a",
-					nodes: {
+					stages: {
 						a: { completionStrategy: "agent-end", sessionPolicy: "fresh" },
 						b: { completionStrategy: "agent-end", sessionPolicy: "fresh" },
 					},
@@ -1929,6 +1929,6 @@ describe("totalStages denominator (countReachableNodes)", () => {
 				},
 				input: "x",
 			}),
-		).rejects.toThrow(/countReachableNodes: edge from "a" is an EdgeFn without \.targets/);
+		).rejects.toThrow(/countReachableStages: edge from "a" is an EdgeFn without \.targets/);
 	});
 });

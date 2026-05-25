@@ -1,6 +1,6 @@
 /**
- * Built-in workflows shipped with rpiv-pi. Each workflow's `nodes`
- * insertion order IS its linear stage order — `Object.keys(nodes)` gives
+ * Built-in workflows shipped with rpiv-pi. Each workflow's `stages`
+ * insertion order IS its linear stage order — `Object.keys(stages)` gives
  * the natural read order for previews and traversal alike.
  *
  * Predicate edges use `threshold(...)` from `@juicesharp/rpiv-workflow`,
@@ -70,7 +70,7 @@ const PHASE_FANOUT: FanoutFn = ({ artifact: primary, cwd }) => {
 const smallWorkflow = defineWorkflow({
 	name: "small",
 	start: "blueprint",
-	nodes: {
+	stages: {
 		blueprint: artifact({ outcome: rpivArtifactMdOutcome }),
 		implement: action({ fanout: PHASE_FANOUT }),
 		validate: artifact({ outcome: rpivArtifactMdOutcome }),
@@ -90,7 +90,7 @@ const smallWorkflow = defineWorkflow({
 const midWorkflow = defineWorkflow({
 	name: "mid",
 	start: "research",
-	nodes: {
+	stages: {
 		research: artifact({ outcome: rpivArtifactMdOutcome }),
 		blueprint: artifact({ outcome: rpivArtifactMdOutcome }),
 		implement: action({ fanout: PHASE_FANOUT }),
@@ -120,7 +120,7 @@ const midWorkflow = defineWorkflow({
 const largeWorkflow = defineWorkflow({
 	name: "large",
 	start: "research",
-	nodes: {
+	stages: {
 		research: artifact({ outcome: rpivArtifactMdOutcome }),
 		design: artifact({ outcome: rpivArtifactMdOutcome }),
 		plan: artifact({ outcome: rpivArtifactMdOutcome }),

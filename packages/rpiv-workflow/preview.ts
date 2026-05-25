@@ -5,7 +5,7 @@
  * string that `command.ts` hands straight to `ctx.ui.notify(..., "info")`.
  */
 
-import type { NodeDef, Workflow } from "./api.js";
+import type { StageDef, Workflow } from "./api.js";
 import { type ConfigLayer, renderConfigLayer } from "./layers.js";
 import type { LoadedWorkflows } from "./load/index.js";
 import { CMD_USAGE_LIST, CMD_USAGE_PREVIEW, CMD_USAGE_RUN } from "./messages.js";
@@ -18,7 +18,7 @@ import { CMD_USAGE_LIST, CMD_USAGE_PREVIEW, CMD_USAGE_RUN } from "./messages.js"
 export function formatWorkflowList(loaded: LoadedWorkflows): string {
 	const rows = loaded.workflows.map((w) => {
 		const layer = loaded.workflowSources.get(w.name) ?? "built-in";
-		const stages = Object.keys(w.nodes).length;
+		const stages = Object.keys(w.stages).length;
 		const tags = [`[${renderConfigLayer(layer)}]`];
 		if (w.name === loaded.default) tags.push("(default)");
 		return `  ${w.name.padEnd(28)} ${String(stages).padStart(2)} stages  ${tags.join(" ")}`;
@@ -44,8 +44,8 @@ export function formatWorkflowDetails(loaded: LoadedWorkflows, name: string): st
 	const layer = loaded.workflowSources.get(name) ?? "built-in";
 	const heading = formatWorkflowHeading(name, layer, name === loaded.default);
 	const descriptionLine = workflow.description ? [workflow.description] : [];
-	const stageRows = Object.entries(workflow.nodes).map(([nodeName, node], i) =>
-		formatStageRow(i + 1, nodeName, node, workflow),
+	const stageRows = Object.entries(workflow.stages).map(([stageName, stage], i) =>
+		formatStageRow(i + 1, stageName, stage, workflow),
 	);
 
 	return [heading, ...descriptionLine, "", ...stageRows, "", CMD_USAGE_RUN(name)].join("\n");
@@ -62,37 +62,37 @@ function formatWorkflowHeading(name: string, layer: ConfigLayer, isDefault: bool
 	return `workflow: ${name}  (${tags.join(", ")})`;
 }
 
-/** Numbered row showing the node + its outgoing edge target(s). */
-function formatStageRow(idx: number, nodeName: string, node: NodeDef, workflow: Workflow): string {
+/** Numbered row showing the stage + its outgoing edge target(s). */
+function formatStageRow(idx: number, stageName: string, stage: StageDef, workflow: Workflow): string {
 	const num = `${idx}.`.padEnd(3);
-	const decorations = [node.completionStrategy.padEnd(13), node.sessionPolicy, outcomeTag(node)];
-	if (node.inputSchema) decorations.push("in-schema");
-	if (node.outputSchema) decorations.push("out-schema");
+	const decorations = [stage.completionStrategy.padEnd(13), stage.sessionPolicy, outcomeTag(stage)];
+	if (stage.inputSchema) decorations.push("in-schema");
+	if (stage.outputSchema) decorations.push("out-schema");
 
-	const displayName = node.skill && node.skill !== nodeName ? `${nodeName} (skill: ${node.skill})` : nodeName;
-	const arrow = formatEdge(workflow, nodeName);
+	const displayName = stage.skill && stage.skill !== stageName ? `${stageName} (skill: ${stage.skill})` : stageName;
+	const arrow = formatEdge(workflow, stageName);
 	const trailer = arrow ? `  → ${arrow}` : "";
 
 	return `  ${num} ${displayName.padEnd(36)} ${decorations.join(" · ")}${trailer}`;
 }
 
 /**
- * Single tag per node encoding the outcome shape. Custom outcomes
+ * Single tag per stage encoding the outcome shape. Custom outcomes
  * report `custom` (+`baseline` when the resolver declares a baseline
- * hook, +`reader` when a reader is wired). Nodes without an outcome
+ * hook, +`reader` when a reader is wired). Stages without an outcome
  * fall through to the framework default: `side-effect` for agent-end
  * (the only completion strategy that has a default); `???` for
  * artifact-emit (load-time validation rejects this — the tag is for
  * defensive rendering only).
  */
-function outcomeTag(node: NodeDef): string {
-	if (node.outcome) {
+function outcomeTag(stage: StageDef): string {
+	if (stage.outcome) {
 		const tags = ["custom"];
-		if (node.outcome.resolver.baseline) tags.push("baseline");
-		if (node.outcome.reader) tags.push("reader");
+		if (stage.outcome.resolver.baseline) tags.push("baseline");
+		if (stage.outcome.reader) tags.push("reader");
 		return tags.join("+");
 	}
-	return node.completionStrategy === "artifact-emit" ? "???" : "side-effect";
+	return stage.completionStrategy === "artifact-emit" ? "???" : "side-effect";
 }
 
 /** Render the outgoing edge as a human-readable trailer (string or predicate target set). */

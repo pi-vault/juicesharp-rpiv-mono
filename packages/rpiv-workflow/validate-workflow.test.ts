@@ -14,7 +14,7 @@ import {
 	defineStatePredicate,
 	defineWorkflow,
 	type EdgeFn,
-	type NodeDef,
+	type StageDef,
 	threshold,
 	type Workflow,
 } from "./api.js";
@@ -27,7 +27,7 @@ import { validateWorkflow } from "./validate-workflow.js";
 // every `artifact()` so the outcome-presence check passes and the test
 // fixture exercises the rule it actually cares about.
 const STUB_ARTIFACT_OUTCOME = { resolver: noopResolver };
-const artifact = (overrides: Partial<NodeDef> = {}): NodeDef =>
+const artifact = (overrides: Partial<StageDef> = {}): StageDef =>
 	artifactRaw({ outcome: STUB_ARTIFACT_OUTCOME, ...overrides });
 
 // ---------------------------------------------------------------------------
@@ -46,7 +46,7 @@ describe("validateWorkflow — happy path", () => {
 		const w = defineWorkflow({
 			name: "tiny",
 			start: "a",
-			nodes: { a: artifact(), b: action() },
+			stages: { a: artifact(), b: action() },
 			edges: { a: "b", b: "stop" },
 		});
 		expect(errors(w)).toEqual([]);
@@ -57,20 +57,20 @@ describe("validateWorkflow — happy path", () => {
 });
 
 // ---------------------------------------------------------------------------
-// start node checks
+// start stage checks
 // ---------------------------------------------------------------------------
 
 describe("validateWorkflow — start", () => {
-	it("errors when start is not in nodes", () => {
+	it("errors when start is not in stages", () => {
 		const w: Workflow = {
 			name: "bad-start",
 			start: "ghost",
-			nodes: { a: artifact() },
+			stages: { a: artifact() },
 			edges: { a: "stop" },
 		};
 		const e = errors(w);
 		expect(e).toHaveLength(1);
-		expect(e[0]!.message).toMatch(/start node "ghost" is not declared/);
+		expect(e[0]!.message).toMatch(/start stage "ghost" is not declared/);
 	});
 });
 
@@ -79,15 +79,15 @@ describe("validateWorkflow — start", () => {
 // ---------------------------------------------------------------------------
 
 describe("validateWorkflow — edge keys", () => {
-	it("errors when an edges key isn't a declared node", () => {
+	it("errors when an edges key isn't a declared stage", () => {
 		const w: Workflow = {
 			name: "stray-edge",
 			start: "a",
-			nodes: { a: artifact() },
+			stages: { a: artifact() },
 			edges: { a: "stop", phantom: "a" },
 		};
 		const e = errors(w);
-		expect(e.some((i) => /edges\["phantom"\] references a node that's not declared/.test(i.message))).toBe(true);
+		expect(e.some((i) => /edges\["phantom"\] references a stage that's not declared/.test(i.message))).toBe(true);
 	});
 });
 
@@ -96,22 +96,24 @@ describe("validateWorkflow — edge keys", () => {
 // ---------------------------------------------------------------------------
 
 describe("validateWorkflow — edge targets", () => {
-	it("errors when a string target isn't a declared node", () => {
+	it("errors when a string target isn't a declared stage", () => {
 		const w: Workflow = {
 			name: "bad-target",
 			start: "a",
-			nodes: { a: artifact(), b: artifact() },
+			stages: { a: artifact(), b: artifact() },
 			edges: { a: "missing", b: "stop" },
 		};
 		const e = errors(w);
-		expect(e.some((i) => i.node === "a" && /resolves to "missing" which is not declared/.test(i.message))).toBe(true);
+		expect(e.some((i) => i.stage === "a" && /resolves to "missing" which is not declared/.test(i.message))).toBe(
+			true,
+		);
 	});
 
 	it('accepts "stop" as a terminal target', () => {
 		const w: Workflow = {
 			name: "leaf",
 			start: "a",
-			nodes: { a: artifact() },
+			stages: { a: artifact() },
 			edges: { a: "stop" },
 		};
 		expect(errors(w)).toEqual([]);
@@ -121,8 +123,8 @@ describe("validateWorkflow — edge targets", () => {
 		const w: Workflow = {
 			name: "predicate",
 			start: "a",
-			nodes: { a: artifact(), good: artifact() },
-			// threshold writes .targets = ["good", "bad"] — "bad" isn't a declared node.
+			stages: { a: artifact(), good: artifact() },
+			// threshold writes .targets = ["good", "bad"] — "bad" isn't a declared stage.
 			edges: { a: threshold("count", 0, "good", "bad"), good: "stop" },
 		};
 		const e = errors(w);
@@ -137,7 +139,7 @@ describe("validateWorkflow — edge targets", () => {
 		const w: Workflow = {
 			name: "naked",
 			start: "a",
-			nodes: { a: artifact() },
+			stages: { a: artifact() },
 			edges: { a: handCrafted },
 		};
 		const e = errors(w);
@@ -150,22 +152,22 @@ describe("validateWorkflow — edge targets", () => {
 // ---------------------------------------------------------------------------
 
 describe("validateWorkflow — implicit terminals", () => {
-	it('warns on nodes with no edge entry (suggest `: "stop"`)', () => {
+	it('warns on stages with no edge entry (suggest `: "stop"`)', () => {
 		const w: Workflow = {
 			name: "implicit",
 			start: "a",
-			nodes: { a: artifact(), b: artifact() },
+			stages: { a: artifact(), b: artifact() },
 			edges: { a: "b" }, // b has no edge — implicit terminal
 		};
 		const w2 = warnings(w);
-		expect(w2.some((i) => i.node === "b" && /has no edge — treated as terminal/.test(i.message))).toBe(true);
+		expect(w2.some((i) => i.stage === "b" && /has no edge — treated as terminal/.test(i.message))).toBe(true);
 	});
 
 	it('does not warn when terminal is declared with "stop"', () => {
 		const w: Workflow = {
 			name: "explicit",
 			start: "a",
-			nodes: { a: artifact(), b: artifact() },
+			stages: { a: artifact(), b: artifact() },
 			edges: { a: "b", b: "stop" },
 		};
 		expect(warnings(w)).toEqual([]);
@@ -177,22 +179,22 @@ describe("validateWorkflow — implicit terminals", () => {
 // ---------------------------------------------------------------------------
 
 describe("validateWorkflow — reachability", () => {
-	it("warns on orphan nodes unreachable from start", () => {
+	it("warns on orphan stages unreachable from start", () => {
 		const w: Workflow = {
 			name: "orphan",
 			start: "a",
-			nodes: { a: artifact(), b: artifact(), orphan: artifact() },
+			stages: { a: artifact(), b: artifact(), orphan: artifact() },
 			edges: { a: "b", b: "stop", orphan: "stop" },
 		};
 		const w2 = warnings(w);
-		expect(w2.some((i) => i.node === "orphan" && /unreachable from start "a"/.test(i.message))).toBe(true);
+		expect(w2.some((i) => i.stage === "orphan" && /unreachable from start "a"/.test(i.message))).toBe(true);
 	});
 
 	it("treats EdgeFn branches as reachable via .targets metadata", () => {
 		const w: Workflow = {
 			name: "branching",
 			start: "a",
-			nodes: { a: artifact(), x: artifact(), y: artifact() },
+			stages: { a: artifact(), x: artifact(), y: artifact() },
 			// Both x and y are reachable through the threshold.
 			edges: { a: threshold("count", 0, "x", "y"), x: "stop", y: "stop" },
 		};
@@ -204,7 +206,7 @@ describe("validateWorkflow — reachability", () => {
 		const w: Workflow = {
 			name: "loop",
 			start: "implement",
-			nodes: {
+			stages: {
 				implement: action(),
 				validate: artifact(),
 				revise: artifact(),
@@ -227,32 +229,32 @@ describe("validateWorkflow — reachability", () => {
 // Semantic checks — restored from the old validateDag (SB2)
 // ---------------------------------------------------------------------------
 
-describe("validateWorkflow — semantic node constraints", () => {
-	const baseWithNode = (overrides: Partial<import("./api.js").NodeDef>): Workflow => ({
+describe("validateWorkflow — semantic stage constraints", () => {
+	const baseWithStage = (overrides: Partial<import("./api.js").StageDef>): Workflow => ({
 		name: "semantic",
 		start: "a",
-		nodes: { a: { ...artifact(), ...overrides } },
+		stages: { a: { ...artifact(), ...overrides } },
 		edges: { a: "stop" },
 	});
 
 	it("errors on maxValidationRetries below the floor", () => {
-		const issues = validateWorkflow(baseWithNode({ maxValidationRetries: 0 }));
+		const issues = validateWorkflow(baseWithStage({ maxValidationRetries: 0 }));
 		expect(issues.some((i) => i.severity === "error" && /maxValidationRetries: 0/.test(i.message))).toBe(true);
 	});
 
 	it("errors on maxValidationRetries above the ceiling", () => {
-		const issues = validateWorkflow(baseWithNode({ maxValidationRetries: 100 }));
+		const issues = validateWorkflow(baseWithStage({ maxValidationRetries: 100 }));
 		expect(issues.some((i) => i.severity === "error" && /maxValidationRetries: 100/.test(i.message))).toBe(true);
 	});
 
 	it("errors on validationRetryTimeoutMs out of range", () => {
-		const issues = validateWorkflow(baseWithNode({ validationRetryTimeoutMs: 0 }));
+		const issues = validateWorkflow(baseWithStage({ validationRetryTimeoutMs: 0 }));
 		expect(issues.some((i) => i.severity === "error" && /validationRetryTimeoutMs: 0/.test(i.message))).toBe(true);
 	});
 
 	it("errors on unknown onValidationFailure value", () => {
 		const issues = validateWorkflow(
-			baseWithNode({ onValidationFailure: "burn-it-down" as unknown as "retry" | "halt" }),
+			baseWithStage({ onValidationFailure: "burn-it-down" as unknown as "retry" | "halt" }),
 		);
 		expect(issues.some((i) => i.severity === "error" && /onValidationFailure: "burn-it-down"/.test(i.message))).toBe(
 			true,
@@ -261,30 +263,30 @@ describe("validateWorkflow — semantic node constraints", () => {
 
 	it("accepts the documented onValidationFailure values", () => {
 		expect(
-			validateWorkflow(baseWithNode({ onValidationFailure: "retry" })).filter((i) => i.severity === "error"),
+			validateWorkflow(baseWithStage({ onValidationFailure: "retry" })).filter((i) => i.severity === "error"),
 		).toEqual([]);
 		expect(
-			validateWorkflow(baseWithNode({ onValidationFailure: "halt" })).filter((i) => i.severity === "error"),
+			validateWorkflow(baseWithStage({ onValidationFailure: "halt" })).filter((i) => i.severity === "error"),
 		).toEqual([]);
 	});
 
 	it("errors on unknown completionStrategy", () => {
-		const issues = validateWorkflow(baseWithNode({ completionStrategy: "burn-it" as unknown as "artifact-emit" }));
+		const issues = validateWorkflow(baseWithStage({ completionStrategy: "burn-it" as unknown as "artifact-emit" }));
 		expect(issues.some((i) => i.severity === "error" && /completionStrategy: "burn-it"/.test(i.message))).toBe(true);
 	});
 
 	it("errors on unknown sessionPolicy", () => {
-		const issues = validateWorkflow(baseWithNode({ sessionPolicy: "lingering" as unknown as "fresh" }));
+		const issues = validateWorkflow(baseWithStage({ sessionPolicy: "lingering" as unknown as "fresh" }));
 		expect(issues.some((i) => i.severity === "error" && /sessionPolicy: "lingering"/.test(i.message))).toBe(true);
 	});
 });
 
 describe("validateWorkflow — predicate-edge schema check", () => {
-	it("warns when a predicate edge reads from a node without outputSchema", () => {
+	it("warns when a predicate edge reads from a stage without outputSchema", () => {
 		const w: Workflow = {
 			name: "naked",
 			start: "code-review",
-			nodes: { "code-review": artifact(), revise: artifact(), commit: action() },
+			stages: { "code-review": artifact(), revise: artifact(), commit: action() },
 			edges: {
 				"code-review": threshold("severeIssueCount", 0, "revise", "commit"),
 				revise: "commit",
@@ -293,7 +295,7 @@ describe("validateWorkflow — predicate-edge schema check", () => {
 		};
 		const issues = validateWorkflow(w);
 		expect(
-			issues.some((i) => i.severity === "warning" && i.node === "code-review" && /outputSchema/.test(i.message)),
+			issues.some((i) => i.severity === "warning" && i.stage === "code-review" && /outputSchema/.test(i.message)),
 		).toBe(true);
 	});
 
@@ -304,7 +306,7 @@ describe("validateWorkflow — predicate-edge schema check", () => {
 		const w: Workflow = {
 			name: "state-derived",
 			start: "code-review",
-			nodes: { "code-review": artifact(), a: artifact(), b: artifact() },
+			stages: { "code-review": artifact(), a: artifact(), b: artifact() },
 			edges: {
 				"code-review": defineStatePredicate(["a", "b"], ({ state }) =>
 					state.telemetry.backwardJumps > 0 ? "a" : "b",
@@ -319,12 +321,12 @@ describe("validateWorkflow — predicate-edge schema check", () => {
 
 	it("DOES warn when a hand-rolled definePredicate reads manifest.data with no upstream outputSchema", () => {
 		// definePredicate now auto-marks READS_FRONTMATTER, so any hand-rolled
-		// predicate that reads manifest.data on a node without outputSchema
+		// predicate that reads manifest.data on a stage without outputSchema
 		// trips the lint — closes the I3 gap where the marker was opt-in.
 		const w: Workflow = {
 			name: "frontmatter-read",
 			start: "code-review",
-			nodes: { "code-review": artifact(), a: artifact(), b: artifact() },
+			stages: { "code-review": artifact(), a: artifact(), b: artifact() },
 			edges: {
 				"code-review": definePredicate(["a", "b"], ({ manifest }) =>
 					(manifest?.data as Record<string, unknown> | undefined)?.status === "ok" ? "a" : "b",
@@ -335,7 +337,7 @@ describe("validateWorkflow — predicate-edge schema check", () => {
 		};
 		const issues = validateWorkflow(w);
 		expect(
-			issues.some((i) => i.severity === "warning" && i.node === "code-review" && /outputSchema/.test(i.message)),
+			issues.some((i) => i.severity === "warning" && i.stage === "code-review" && /outputSchema/.test(i.message)),
 		).toBe(true);
 	});
 
@@ -343,7 +345,7 @@ describe("validateWorkflow — predicate-edge schema check", () => {
 		const w: Workflow = {
 			name: "clothed",
 			start: "code-review",
-			nodes: {
+			stages: {
 				"code-review": artifact({
 					outputSchema: typeboxSchema(Type.Object({ severeIssueCount: Type.Integer({ minimum: 0 }) })),
 				}),
@@ -366,7 +368,7 @@ describe("validateWorkflow — workflow name", () => {
 		const w: Workflow = {
 			name: "",
 			start: "a",
-			nodes: { a: artifact() },
+			stages: { a: artifact() },
 			edges: { a: "stop" },
 		};
 		const issues = validateWorkflow(w);
@@ -381,18 +383,18 @@ describe("validateWorkflow — workflow name", () => {
 // ---------------------------------------------------------------------------
 
 describe("validateWorkflow — issue shape", () => {
-	it("attaches workflow name + node to every issue", () => {
+	it("attaches workflow name + stage to every issue", () => {
 		const w: Workflow = {
 			name: "bad",
 			start: "ghost",
-			nodes: { a: artifact() },
+			stages: { a: artifact() },
 			edges: { a: "missing" },
 		};
 		const issues = validateWorkflow(w);
 		for (const i of issues) {
 			expect(i.workflow).toBe("bad");
 		}
-		// At least one issue carries a specific node attribution.
-		expect(issues.some((i) => i.node === "a")).toBe(true);
+		// At least one issue carries a specific stage attribution.
+		expect(issues.some((i) => i.stage === "a")).toBe(true);
 	});
 });

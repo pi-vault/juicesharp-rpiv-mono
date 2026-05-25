@@ -131,7 +131,7 @@ function formatIssue(issue: Issue): string {
 		const where = issue.path ? ` (${issue.path})` : "";
 		return `[${renderConfigLayer(issue.layer)} config${where}] ${issue.message}`;
 	}
-	const nodeTag = issue.node ? ` — node "${issue.node}"` : "";
+	const stageTag = issue.stage ? ` — stage "${issue.stage}"` : "";
 	const pathTag = issue.path ? ` (${issue.path})` : "";
-	return `[${renderConfigLayer(issue.layer)} config${pathTag}] workflow "${issue.workflow}"${nodeTag}: ${issue.message}`;
+	return `[${renderConfigLayer(issue.layer)} config${pathTag}] workflow "${issue.workflow}"${stageTag}: ${issue.message}`;
 }

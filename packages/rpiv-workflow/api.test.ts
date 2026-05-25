@@ -30,7 +30,7 @@ describe("defineWorkflow", () => {
 		const spec: Workflow = {
 			name: "tiny",
 			start: "research",
-			nodes: {
+			stages: {
 				research: artifact(),
 				commit: action(),
 			},
@@ -44,7 +44,7 @@ describe("defineWorkflow", () => {
 			name: "demo",
 			description: "for testing",
 			start: "a",
-			nodes: { a: artifact() },
+			stages: { a: artifact() },
 			edges: { a: "stop" },
 		});
 		expect(w.description).toBe("for testing");
@@ -52,7 +52,7 @@ describe("defineWorkflow", () => {
 });
 
 // ---------------------------------------------------------------------------
-// artifact — artifact-emitting nodes (artifact-emit + fresh)
+// artifact — artifact-emitting stages (artifact-emit + fresh)
 // ---------------------------------------------------------------------------
 
 describe("artifact", () => {
@@ -76,7 +76,7 @@ describe("artifact", () => {
 		expect(b.maxValidationRetries).toBeUndefined();
 	});
 
-	it("override.skill wins when the node id and Pi skill differ", () => {
+	it("override.skill wins when the stage id and Pi skill differ", () => {
 		const n = artifact({ skill: "code-review" });
 		expect(n.skill).toBe("code-review");
 	});
@@ -89,7 +89,7 @@ describe("artifact", () => {
 });
 
 // ---------------------------------------------------------------------------
-// action — side-effect nodes (agent-end + fresh)
+// action — side-effect stages (agent-end + fresh)
 // ---------------------------------------------------------------------------
 
 describe("action", () => {
@@ -102,7 +102,7 @@ describe("action", () => {
 		expect(n.skill).toBeUndefined();
 	});
 
-	it("attaches an Outcome when supplied (commit-style nodes)", () => {
+	it("attaches an Outcome when supplied (commit-style stages)", () => {
 		const outcome: Outcome = {
 			resolver: {
 				baseline: () => "pre-state",
@@ -233,7 +233,7 @@ describe("composition smoke", () => {
 		const w = defineWorkflow({
 			name: "review-or-ship",
 			start: "research",
-			nodes: {
+			stages: {
 				research: artifact(),
 				"code-review": artifact({
 					outputSchema: typeboxSchema(Type.Object({ severeIssueCount: Type.Integer({ minimum: 0 }) })),
@@ -251,7 +251,7 @@ describe("composition smoke", () => {
 
 		expect(w.name).toBe("review-or-ship");
 		expect(w.start).toBe("research");
-		expect(Object.keys(w.nodes)).toEqual(["research", "code-review", "revise", "commit"]);
+		expect(Object.keys(w.stages)).toEqual(["research", "code-review", "revise", "commit"]);
 		expect(typeof w.edges["code-review"]).toBe("function");
 		expect(w.edges.research).toBe("code-review");
 		expect(w.edges.commit).toBe("stop");

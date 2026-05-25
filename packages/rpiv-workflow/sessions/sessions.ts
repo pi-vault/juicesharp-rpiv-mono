@@ -44,7 +44,7 @@ import { FRESH_HANDLER, handlerFor } from "./spawn.js";
 
 /** Execute one DAG stage in its own session. */
 export async function runStageSession(ctx: RunnerCtx, s: StageSession): Promise<void> {
-	const handler = handlerFor(s.node.sessionPolicy);
+	const handler = handlerFor(s.stage.sessionPolicy);
 	const { cancelled } = await handler.spawn(ctx, s.prompt, (sessionCtx) => postStage(sessionCtx, s), s.host);
 	if (cancelled) recordCancellation(ctx, auditFor(s));
 }
@@ -61,7 +61,7 @@ export async function runFanoutSession(ctx: RunnerCtx, s: FanoutSession): Promis
 
 /** Stage post-processing: classify outcome → produce & validate manifest → persist → chain. */
 async function postStage(ctx: RunnerCtx, s: StageSession): Promise<void> {
-	const handler = handlerFor(s.node.sessionPolicy);
+	const handler = handlerFor(s.stage.sessionPolicy);
 	const offset = handler.branchOffset(s.branchOffset);
 	const outcome = readSessionOutcome(ctx, offset);
 	if (outcome.stop !== "stop") return haltStage(ctx, s, outcome.stop);
@@ -155,7 +155,7 @@ function tryRecordStage(s: SessionContext, label: string, manifest: Manifest | u
  * framework gate.
  */
 function maybeAdvancePrimary(s: StageSession, manifest: Manifest): void {
-	if (s.node.completionStrategy !== "artifact-emit") return;
+	if (s.stage.completionStrategy !== "artifact-emit") return;
 	const next = manifest.artifacts[0];
 	if (next) s.state.primaryArtifact = next;
 }

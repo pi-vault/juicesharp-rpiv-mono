@@ -1,9 +1,9 @@
 /**
- * Routing layer after a stage completes successfully: pick the next node,
+ * Routing layer after a stage completes successfully: pick the next stage,
  * audit predicate-mediated decisions, enforce the backward-jump guard,
  * then recurse via `runStageOrRecordFailure`.
  *
- * `nextNode` returns a tagged union (post-Phase 5.B); `advanceChain`
+ * `nextStage` returns a tagged union (post-Phase 5.B); `advanceChain`
  * switches on `kind` instead of catching. `runStageOrRecordFailure` owns
  * the catch for downstream-stage throws.
  */
@@ -15,7 +15,7 @@ import {
 	MSG_CHAIN_ADVANCE_FAILED,
 	MSG_ROUTING_AUDIT_DROPPED,
 } from "../messages.js";
-import { edgeIsDecision, nextNode } from "../routing.js";
+import { edgeIsDecision, nextStage } from "../routing.js";
 import { appendRoutingDecision } from "../state/index.js";
 import type { RunContext, RunnerCtx } from "../types.js";
 import { finalizeWorkflow, runStageOrRecordFailure } from "./runner.js";
@@ -31,13 +31,13 @@ export async function advanceChain(
 	idx: number,
 	run: RunContext,
 ): Promise<void> {
-	// Mark the just-completed node as visited BEFORE consulting the next edge.
+	// Mark the just-completed stage as visited BEFORE consulting the next edge.
 	// A thrown EdgeFn would otherwise leave currentName un-marked, opening a
 	// (narrow) window where a recovery path could under-count revisits.
 	run.visited.add(currentName);
 
 	const wasDecision = edgeIsDecision(run.workflow, currentName);
-	const result = nextNode(run.workflow, currentName, { manifest: run.state.manifest, state: run.state });
+	const result = nextStage(run.workflow, currentName, { manifest: run.state.manifest, state: run.state });
 
 	if (result.kind === "err") {
 		haltOnRoutingError(curCtx, run, currentName, result.reason);
@@ -48,7 +48,7 @@ export async function advanceChain(
 		return;
 	}
 
-	const nextName = result.node;
+	const nextName = result.stage;
 	if (wasDecision) {
 		auditRoutingDecision(curCtx, run, idx, currentName, nextName);
 		if (!checkBackwardJumpGuard(curCtx, run, nextName)) return;
@@ -79,16 +79,16 @@ function auditRoutingDecision(
 	currentName: string,
 	nextName: string,
 ): void {
-	const fromStage = idx + 1;
+	const fromStageIndex = idx + 1;
 	const wrote = appendRoutingDecision(run.cwd, run.runId, {
 		type: "routing",
-		fromStage,
-		fromNode: currentName,
+		fromStageIndex,
+		fromStage: currentName,
 		decision: nextName,
 		ts: nowIso(),
 	});
 	if (!wrote) {
-		run.state.telemetry.droppedRoutingRows.push({ fromStage, fromNode: currentName, decision: nextName });
+		run.state.telemetry.droppedRoutingRows.push({ fromStageIndex, fromStage: currentName, decision: nextName });
 		curCtx.ui.notify(MSG_ROUTING_AUDIT_DROPPED(currentName, nextName), "warning");
 	}
 }
@@ -99,14 +99,14 @@ function auditRoutingDecision(
  * been recorded).
  *
  * A "backward jump" is a *decision-edge* resolving to an already-visited
- * node — i.e. a deliberate retry choice. Deterministic forward edges that
- * pass through a cycle (the body of a multi-node loop) are NOT counted,
+ * stage — i.e. a deliberate retry choice. Deterministic forward edges that
+ * pass through a cycle (the body of a multi-stage loop) are NOT counted,
  * because they're consequences of the retry decision rather than
  * independent retry events. Without this distinction the cap would trip
- * mid-loop on any cycle longer than 2 nodes, burning the entire budget
+ * mid-loop on any cycle longer than 2 stages, burning the entire budget
  * on a single retry iteration's deterministic hops.
  *
- * Reset-on-escape: a decision resolving to a NOT-visited node escapes the
+ * Reset-on-escape: a decision resolving to a NOT-visited stage escapes the
  * current cycle (we've moved to fresh territory), so the counter resets.
  * Each independent loop gets its own retry budget instead of a single
  * global pool that drains across unrelated loops.
@@ -138,7 +138,7 @@ function checkBackwardJumpGuard(curCtx: RunnerCtx, run: RunContext, nextName: st
 /**
  * Halt the chain on a routing-layer error result (e.g. the EdgeFn returned
  * an undeclared target, or threw and was wrapped). Attribution targets
- * `currentName` (the edge belongs to the just-completed node).
+ * `currentName` (the edge belongs to the just-completed stage).
  */
 function haltOnRoutingError(curCtx: RunnerCtx, run: RunContext, currentName: string, reason: string): void {
 	recordTerminalFailure(

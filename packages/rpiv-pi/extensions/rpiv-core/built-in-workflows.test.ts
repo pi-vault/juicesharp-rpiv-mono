@@ -14,8 +14,8 @@
  * - I3 — recordStage swallows append failures and reuses stageNumbers on
  *        the next successful write; stagesCompleted drifts above the
  *        actual on-disk row count.
- * - I9 — Phase fanout labels JSONL rows by node id (wrong for aliased
- *        implement nodes); should label by node.skill instead.
+ * - I9 — Phase fanout labels JSONL rows by stage id (wrong for aliased
+ *        implement stages); should label by stage.skill instead.
  * - Q7 — runner reuses originalInput whenever artifactPath is unset, not
  *        just at the first stage; later stages silently receive the user's
  *        original brief instead of the upstream stage's output.
@@ -65,12 +65,12 @@ describe("[I1] validate → code-review routing in built-in workflows", () => {
 		expect(large.edges.validate).toBe("code-review-large");
 	});
 
-	it("every node in every built-in workflow is reachable from start", () => {
+	it("every stage in every built-in workflow is reachable from start", () => {
 		for (const wf of builtInWorkflows) {
 			const issues = validateWorkflow(wf);
 			expect(
 				issues.filter((i) => /unreachable/.test(i.message)),
-				`workflow "${wf.name}" has unreachable nodes`,
+				`workflow "${wf.name}" has unreachable stages`,
 			).toEqual([]);
 		}
 	});
@@ -123,15 +123,15 @@ describe("[I2] readers must not silently drop the first row when no header is on
 // ---------------------------------------------------------------------------
 
 describe("[I6] code-review predicate must not silently route to commit on missing field", () => {
-	it("built-in code-review node carries an outputSchema", () => {
+	it("built-in code-review stage carries an outputSchema", () => {
 		const mid = findWorkflow("mid");
-		const codeReview = mid.nodes["code-review"];
+		const codeReview = mid.stages["code-review"];
 		expect(codeReview?.outputSchema).toBeDefined();
 	});
 
 	it("the declared schema rejects an empty data object", async () => {
 		const mid = findWorkflow("mid");
-		const schema = mid.nodes["code-review"]?.outputSchema;
+		const schema = mid.stages["code-review"]?.outputSchema;
 		if (!schema) throw new Error("code-review outputSchema missing — fix I6 first");
 		const { validateManifestData } = await import("@juicesharp/rpiv-workflow");
 		const result = await validateManifestData(schema, {});
@@ -173,7 +173,7 @@ describe("[I7] truncated reply (stopReason=length) must not record as completed"
 		defineWorkflow({
 			name: "tiny",
 			start: "implement",
-			nodes: { implement: action() },
+			stages: { implement: action() },
 			edges: { implement: "stop" },
 		});
 
@@ -305,7 +305,7 @@ describe("[Q7] non-first stage with no artifactPath halts instead of reusing ori
 		const workflow = defineWorkflow({
 			name: "tiny",
 			start: "commit",
-			nodes: {
+			stages: {
 				commit: action(),
 				"annotate-guidance": action(),
 			},
@@ -329,10 +329,10 @@ describe("[Q7] non-first stage with no artifactPath halts instead of reusing ori
 });
 
 // ---------------------------------------------------------------------------
-// I9 — Phase fanout must label JSONL rows by node.skill, not by the node name.
+// I9 — Phase fanout must label JSONL rows by stage.skill, not by the stage name.
 // ---------------------------------------------------------------------------
 
-describe("[I9] phase fanout labels by skill name, not by aliased node name", () => {
+describe("[I9] phase fanout labels by skill name, not by aliased stage name", () => {
 	let tmpDir: string;
 
 	beforeEach(() => {
@@ -374,7 +374,7 @@ describe("[I9] phase fanout labels by skill name, not by aliased node name", () 
 		const workflow = defineWorkflow({
 			name: "tiny",
 			start: "research",
-			nodes: {
+			stages: {
 				research: artifact({ outcome: rpivArtifactMdOutcome }),
 				"implement-after-revise": action({ skill: "implement", fanout: phaseFanout }),
 			},

@@ -12,13 +12,13 @@ vi.mock("./runner/index.js", () => ({
 const tinyWorkflow = defineWorkflow({
 	name: "tiny",
 	start: "research",
-	nodes: { research: artifact(), commit: action() },
+	stages: { research: artifact(), commit: action() },
 	edges: { research: "commit", commit: "stop" },
 });
 const midWorkflow = defineWorkflow({
 	name: "mid",
 	start: "research",
-	nodes: {
+	stages: {
 		research: artifact(),
 		implement: action(),
 		commit: action(),
@@ -28,7 +28,7 @@ const midWorkflow = defineWorkflow({
 const reviewWorkflow = defineWorkflow({
 	name: "review",
 	start: "code-review",
-	nodes: { "code-review": artifact(), commit: action() },
+	stages: { "code-review": artifact(), commit: action() },
 	edges: { "code-review": "commit", commit: "stop" },
 });
 
@@ -188,7 +188,7 @@ describe("/wf — issue surfacing", () => {
 				{
 					kind: "validation",
 					workflow: "tiny",
-					node: "research",
+					stage: "research",
 					severity: "warning",
 					message: "orphan check",
 					layer: "built-in",

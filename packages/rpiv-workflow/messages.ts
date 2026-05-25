@@ -83,8 +83,8 @@ export const MSG_AUDIT_WRITE_FAILED = (skill: string) =>
 export const ERR_AUDIT_WRITE_FAILED = (skill: string) =>
 	`${skill} completed but the JSONL audit row could not be appended; halting to keep in-memory state aligned with disk`;
 
-export const MSG_CHAIN_ADVANCE_FAILED = (fromNode: string, reason: string) =>
-	`✗ chain advance after ${fromNode} failed: ${reason} — stopping workflow`;
+export const MSG_CHAIN_ADVANCE_FAILED = (fromStage: string, reason: string) =>
+	`✗ chain advance after ${fromStage} failed: ${reason} — stopping workflow`;
 
 /**
  * Stage threw before it could record its own audit row — covers
@@ -116,8 +116,8 @@ export const ERR_SKILL_NOT_REGISTERED = (skill: string, stageNumber: number) =>
  * audit trail for this run has a gap — otherwise an absent row reads as
  * "no decision was made" rather than "decision made, write dropped."
  */
-export const MSG_ROUTING_AUDIT_DROPPED = (fromNode: string, decision: string) =>
-	`⚠ rpiv: routing decision ${fromNode} → ${decision} not persisted to audit trail (continuing run)`;
+export const MSG_ROUTING_AUDIT_DROPPED = (fromStage: string, decision: string) =>
+	`⚠ rpiv: routing decision ${fromStage} → ${decision} not persisted to audit trail (continuing run)`;
 
 /** Recap surfaced on stage failure — pre-joined bullet list of artifact paths. */
 export const MSG_PARTIAL_ARTIFACTS = (artifactList: string) => `Artifacts produced before failure:\n${artifactList}`;

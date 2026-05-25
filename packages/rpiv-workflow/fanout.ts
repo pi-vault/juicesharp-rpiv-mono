@@ -1,5 +1,5 @@
 /**
- * Fanout iteration. When a node opts in via `NodeDef.fanout`, the runner
+ * Fanout iteration. When a stage opts in via `StageDef.fanout`, the runner
  * calls the user's `FanoutFn` to get a list of units and iterates one Pi
  * session per unit. This module owns the iteration loop; `runner.ts`
  * injects its primitives via `FanoutDeps` so the module never imports

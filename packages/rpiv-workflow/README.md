@@ -24,7 +24,7 @@ pi install @juicesharp/rpiv-workflow
 ```
 /wf                        # preview every loaded workflow
 /wf <name>                 # preview one workflow's stage graph
-/wf <name> <input>         # run a workflow with <input> piped to the start node
+/wf <name> <input>         # run a workflow with <input> piped to the start stage
 ```
 
 ## Configure
@@ -49,7 +49,7 @@ Two file roles per layer:
   export default defineWorkflow({
     name: "ship",
     start: "implement",
-    nodes: { implement: action(), commit: action() },
+    stages: { implement: action(), commit: action() },
     edges: { implement: "commit", commit: "stop" },
   });
 
@@ -67,7 +67,7 @@ Two file roles per layer:
 
 ## Authoring DSL
 
-A workflow is a typed graph: named entry point, a `nodes` record, and an `edges` table that maps each node to another node name, the sentinel `"stop"`, or a predicate function that chooses at runtime.
+A workflow is a typed graph: named entry point, a `stages` record, and an `edges` table that maps each stage to another stage name, the sentinel `"stop"`, or a predicate function that chooses at runtime.
 
 Two factories for the two stage shapes:
 
@@ -82,7 +82,7 @@ Conditional routing uses `threshold(field, n, ifAbove, ifBelow)`:
 edges: { "code-review": threshold("blockers_count", 0, "revise", "commit") }
 ```
 
-Hand-rolled predicates use `definePredicate(targets, fn)` (reads `manifest.data`, requires the source node to declare an `outputSchema`) or `defineStatePredicate(targets, fn)` (consults only `state` / `manifest.meta`).
+Hand-rolled predicates use `definePredicate(targets, fn)` (reads `manifest.data`, requires the source stage to declare an `outputSchema`) or `defineStatePredicate(targets, fn)` (consults only `state` / `manifest.meta`).
 
 ## Programmatic registration
 
@@ -140,7 +140,7 @@ Returns `{ runId, stagesCompleted, success }`. Past-run inspection uses `listRun
 
 ## Outcomes — resolvers and readers
 
-Each `artifact-emit` node wires an `Outcome` that tells the runtime two things:
+Each `artifact-emit` stage wires an `Outcome` that tells the runtime two things:
 
 ```ts
 interface Outcome<Baseline, Kind, Data> {
@@ -151,7 +151,7 @@ interface Outcome<Baseline, Kind, Data> {
 
 `resolver.resolve(ctx)` returns the artifacts the stage emitted. `reader.read(ctx)` (optional) turns them into the typed `manifest.data` downstream stages narrow on. With no reader, `manifest.data` is the artifact list itself (`kind = "artifacts"`).
 
-There is no framework default for `artifact-emit` — load-time validation rejects a node without an outcome. The `.rpiv/artifacts/<bucket>/<file>.md` layout is an rpiv convention, not a framework truth; pair with [`@juicesharp/rpiv-pi`](../rpiv-pi) for `rpivArtifactMdOutcome`, or wire your own.
+There is no framework default for `artifact-emit` — load-time validation rejects a stage without an outcome. The `.rpiv/artifacts/<bucket>/<file>.md` layout is an rpiv convention, not a framework truth; pair with [`@juicesharp/rpiv-pi`](../rpiv-pi) for `rpivArtifactMdOutcome`, or wire your own.
 
 ### Authoring a resolver
 
@@ -230,7 +230,7 @@ Handle constructors: `fs(path)`, `url(href)`, `opaque(id)`, `inline(bytes, mime?
 
 Format-specific readers (markdown frontmatter, YAML, TOML, …) live in the convention layer that owns them — rpiv-pi ships its own `frontmatterReader`.
 
-### Wiring an outcome onto a node
+### Wiring an outcome onto a stage
 
 ```ts
 import {
@@ -246,7 +246,7 @@ const writeFileResolver = toolCallResolver({
 export default defineWorkflow({
   name: "scaffold",
   start: "generate",
-  nodes: {
+  stages: {
     generate: artifact({
       outcome: { resolver: writeFileResolver, reader: jsonBodyReader },
     }),
@@ -259,14 +259,14 @@ export default defineWorkflow({
 
 `inputSchema` and `outputSchema` are [Standard Schema v1](https://standardschema.dev) values — Zod, Valibot, ArkType, TypeBox (via `typeboxSchema`), or hand-rolled `{ "~standard": { validate } }` objects. The runner awaits the schema's `~standard.validate` at both seams, so it works with sync and async schemas alike.
 
-**Default to sync.** Pure shape contracts (`Type.Object({ … })`, `z.object({ … })`) resolve in one microtask, give the agent precise retry diagnostics, and have no failure mode beyond "this isn't the shape you said." For 95% of nodes this is the right answer.
+**Default to sync.** Pure shape contracts (`Type.Object({ … })`, `z.object({ … })`) resolve in one microtask, give the agent precise retry diagnostics, and have no failure mode beyond "this isn't the shape you said." For 95% of stages this is the right answer.
 
 **Reach for async when correctness needs I/O.** Examples that don't fit the sync model:
 - "the path in the manifest must actually exist on disk" — `fs.access` is async.
 - "the spec the agent emitted must validate against a live endpoint" — `fetch` is async.
 - you're already on an async-by-default schema lib (ArkType's deeply-async paths).
 
-The contract is identical — author an async `~standard.validate` and the runner awaits it. A schema whose Promise never settles is bounded by the node's `validationRetryTimeoutMs` (default 5 min); a rejected Promise surfaces as a clean stage halt, attributed to the node, with the same error class as a shape-failure halt. No opt-in flag, no parallel code path.
+The contract is identical — author an async `~standard.validate` and the runner awaits it. A schema whose Promise never settles is bounded by the stage's `validationRetryTimeoutMs` (default 5 min); a rejected Promise surfaces as a clean stage halt, attributed to the stage, with the same error class as a shape-failure halt. No opt-in flag, no parallel code path.
 
 > Keep validation separate from the resolver + reader. The resolver's job is "what did the agent produce?" (enumerate); the reader's job is "parse it into typed data" (shape). The validator's job is "is the result correct?" (check + verify). With async validators available you don't have to push I/O verification into a custom resolver/reader — keep them pure and put correctness checks on `outputSchema`.
 

@@ -15,7 +15,7 @@
  *                                        kind = "artifacts").
  */
 
-import type { NodeDef, NodeSchema } from "../api.js";
+import type { StageDef, StageSchema } from "../api.js";
 import { nowIso } from "../audit.js";
 import type { Artifact } from "../handle.js";
 import { assertNever, withTimeout } from "../internal-utils.js";
@@ -50,22 +50,22 @@ export async function produceAndValidateManifest(
 	branch: BranchEntry[],
 	branchOffset: number | undefined,
 ): Promise<ManifestProduction> {
-	const outcome = resolveOutcome(s.node, s.skill);
+	const outcome = resolveOutcome(s.stage, s.skill);
 	const resolveCtx = buildResolveCtx(s, branch, branchOffset);
 	const finalize = (parts: { kind: string; artifacts: readonly Artifact[]; data: unknown }) => wrapManifest(s, parts);
 
 	const first = await runOutcome(outcome, resolveCtx, finalize);
 	if (first.kind === "fatal") return first;
-	const initialManifest = enforceCompletionContract(s.node, s.skill, first.manifest);
+	const initialManifest = enforceCompletionContract(s.stage, s.skill, first.manifest);
 	if (initialManifest.kind === "fatal") return initialManifest;
 
-	if (!shouldValidateOutput(s.node, initialManifest.manifest)) return initialManifest;
+	if (!shouldValidateOutput(s.stage, initialManifest.manifest)) return initialManifest;
 
 	return retryUntilValid(ctx, s, { outcome, resolveCtx, finalize }, initialManifest.manifest);
 }
 
 /**
- * Explicit `node.outcome` wins. Defaults:
+ * Explicit `stage.outcome` wins. Defaults:
  *  - `agent-end`     → `sideEffectOutcome` (universal — emits empty artifacts).
  *  - `artifact-emit` → throws. There is no framework-wide default; the
  *    `.rpiv/artifacts/<bucket>/<file>.md` layout is an rpiv-pi convention
@@ -73,20 +73,20 @@ export async function produceAndValidateManifest(
  *    load time; the runtime throw is defense-in-depth for programmatic
  *    embedders that bypassed validation.
  */
-function resolveOutcome(node: NodeDef, skill: string): Outcome {
-	if (node.outcome) return node.outcome;
-	switch (node.completionStrategy) {
+function resolveOutcome(stage: StageDef, skill: string): Outcome {
+	if (stage.outcome) return stage.outcome;
+	switch (stage.completionStrategy) {
 		case "agent-end":
 			return sideEffectOutcome;
 		case "artifact-emit":
 			throw new Error(
-				`runStage: node "${skill}" has completionStrategy "artifact-emit" but no \`outcome\` — ` +
-					"there is no framework default for artifact-emit nodes (the `.rpiv/artifacts/` layout is " +
+				`runStage: stage "${skill}" has completionStrategy "artifact-emit" but no \`outcome\` — ` +
+					"there is no framework default for artifact-emit stages (the `.rpiv/artifacts/` layout is " +
 					"an rpiv-pi convention). Either wire `outcome: rpivArtifactMdOutcome` (from @juicesharp/rpiv-pi) " +
 					"or supply your own `{ resolver, reader? }`.",
 			);
 		default:
-			return assertNever(node.completionStrategy);
+			return assertNever(stage.completionStrategy);
 	}
 }
 
@@ -126,7 +126,7 @@ type RunOutcomeResult = { kind: "ok"; manifest: Manifest } | { kind: "fatal"; me
 
 /**
  * The resolver → reader pipeline. When `reader` is omitted, the
- * manifest emits `kind: "artifacts"` with `data = artifacts` — a node
+ * manifest emits `kind: "artifacts"` with `data = artifacts` — a stage
  * that only needs to enumerate doesn't have to write a reader.
  */
 async function runOutcome(
@@ -164,11 +164,11 @@ async function runOutcome(
  * but a normal pass-through for agent-end.
  */
 function enforceCompletionContract(
-	node: NodeDef,
+	stage: StageDef,
 	skill: string,
 	manifest: Manifest,
 ): { kind: "ok"; manifest: Manifest } | { kind: "fatal"; message: string } {
-	if (node.completionStrategy === "artifact-emit" && manifest.artifacts.length === 0) {
+	if (stage.completionStrategy === "artifact-emit" && manifest.artifacts.length === 0) {
 		return {
 			kind: "fatal",
 			message: `${skill} finished without producing any artifact (resolver returned an empty list)`,
@@ -177,8 +177,8 @@ function enforceCompletionContract(
 	return { kind: "ok", manifest };
 }
 
-function shouldValidateOutput(node: NodeDef, manifest: Manifest): boolean {
-	return !!(node.outputSchema && manifest.data !== undefined);
+function shouldValidateOutput(stage: StageDef, manifest: Manifest): boolean {
+	return !!(stage.outputSchema && manifest.data !== undefined);
 }
 
 interface RetryDeps {
@@ -193,14 +193,17 @@ async function retryUntilValid(
 	deps: RetryDeps,
 	initial: Manifest,
 ): Promise<ManifestProduction> {
-	const schema = s.node.outputSchema!;
+	const schema = s.stage.outputSchema!;
 	const maxRetries = Math.max(
 		MIN_VALIDATION_RETRIES,
-		Math.min(s.node.maxValidationRetries ?? DEFAULT_VALIDATION_RETRIES, MAX_VALIDATION_RETRIES),
+		Math.min(s.stage.maxValidationRetries ?? DEFAULT_VALIDATION_RETRIES, MAX_VALIDATION_RETRIES),
 	);
 	const timeoutMs = Math.max(
 		MIN_VALIDATION_RETRY_TIMEOUT_MS,
-		Math.min(s.node.validationRetryTimeoutMs ?? DEFAULT_VALIDATION_RETRY_TIMEOUT_MS, MAX_VALIDATION_RETRY_TIMEOUT_MS),
+		Math.min(
+			s.stage.validationRetryTimeoutMs ?? DEFAULT_VALIDATION_RETRY_TIMEOUT_MS,
+			MAX_VALIDATION_RETRY_TIMEOUT_MS,
+		),
 	);
 
 	let manifest = initial;
@@ -209,7 +212,7 @@ async function retryUntilValid(
 	let result = initialValidation.result;
 	let attempts = 0;
 
-	while (!result.valid && attempts < maxRetries && s.node.onValidationFailure !== "halt") {
+	while (!result.valid && attempts < maxRetries && s.stage.onValidationFailure !== "halt") {
 		attempts++;
 		try {
 			await askAgentToFix(ctx, s, attempts, result.failures, timeoutMs);
@@ -222,7 +225,7 @@ async function retryUntilValid(
 		const retryCtx: ResolveCtx = { ...deps.resolveCtx, branch: retryBranch };
 		const reRun = await runOutcome(deps.outcome, retryCtx, deps.finalize);
 		if (reRun.kind === "fatal") return reRun;
-		const contract = enforceCompletionContract(s.node, s.skill, reRun.manifest);
+		const contract = enforceCompletionContract(s.stage, s.skill, reRun.manifest);
 		if (contract.kind === "fatal") return contract;
 
 		manifest = contract.manifest;
@@ -243,7 +246,7 @@ async function retryUntilValid(
  * retry.
  */
 async function validateOrFatal(
-	schema: NodeSchema,
+	schema: StageSchema,
 	data: unknown,
 	skill: string,
 	timeoutMs: number,
@@ -271,7 +274,7 @@ async function askAgentToFix(
 	ctx.ui.notify(MSG_VALIDATION_RETRY(s.skill, attempt), "warning");
 	const errorLines = failures.map((f) => ` • ${f.path} — ${f.message}`).join("\n");
 	await withTimeout(
-		handlerFor(s.node.sessionPolicy).send(ctx, MSG_VALIDATION_RETRY_PROMPT(s.skill, errorLines), s.host),
+		handlerFor(s.stage.sessionPolicy).send(ctx, MSG_VALIDATION_RETRY_PROMPT(s.skill, errorLines), s.host),
 		timeoutMs,
 		`${s.skill}: validation retry attempt ${attempt} exceeded ${timeoutMs}ms — agent did not settle`,
 	);

@@ -1,5 +1,5 @@
 /**
- * Per-stage lifecycle: resolve the stage node, run the preflight pipeline,
+ * Per-stage lifecycle: resolve the stage def, run the preflight pipeline,
  * prepare the prompt + status + branchOffset, capture the outcome's
  * baseline, and hand off to `runStageSession`.
  *
@@ -9,7 +9,7 @@
  * catches `StagePreflightError` and records the JSONL row.
  */
 
-import type { NodeDef } from "../api.js";
+import type { StageDef } from "../api.js";
 import { notifyPartialArtifacts } from "../audit.js";
 import { runFanout } from "../fanout.js";
 import { handleToString } from "../handle.js";
@@ -39,7 +39,7 @@ import {
 import { advanceChain } from "./chain-advance.js";
 
 export interface ResolvedStage {
-	node: NodeDef;
+	def: StageDef;
 	name: string;
 	/** 1-based; for status line + audit row. */
 	stageNumber: number;
@@ -99,7 +99,7 @@ function buildPrompt(skill: string, inputForStage: string): string {
 /**
  * Slot ordering (load-bearing):
  *
- *   1. tryFanout                 — shortcut: the node's FanoutFn returned
+ *   1. tryFanout                 — shortcut: the stage's FanoutFn returned
  *                                  units, runner ran them; subsequent
  *                                  slots skipped for this stage.
  *   2. PRE_PROMPT_CHECKS         — preflights that don't need prompt prep.
@@ -118,7 +118,7 @@ function buildPrompt(skill: string, inputForStage: string): string {
  * `runStageOrRecordFailure` catches and records the JSONL row.
  */
 export async function runStage(curCtx: RunnerCtx, currentName: string, idx: number, run: RunContext): Promise<void> {
-	const stage = resolveStageNode(currentName, idx, run);
+	const stage = resolveStage(currentName, idx, run);
 
 	if (await tryFanout(curCtx, stage, idx, run)) return;
 	for (const check of PRE_PROMPT_CHECKS) await check.run(stage, run);
@@ -127,11 +127,11 @@ export async function runStage(curCtx: RunnerCtx, currentName: string, idx: numb
 	const inputForStage = isStart ? run.state.originalInput : handleToString(currentPrimaryArtifact(run.state)!.handle);
 	const prompt = buildPrompt(stage.skill, inputForStage);
 	curCtx.ui.setStatus(STATUS_KEY, STATUS_STAGE(stage.stageNumber, run.totalStages, stage.skill));
-	const branchOffset = computeBranchOffset(curCtx, stage.node);
+	const branchOffset = computeBranchOffset(curCtx, stage.def);
 
 	for (const check of POST_PROMPT_CHECKS) await check.run(stage, run);
 
-	const baseline = await captureStageBaseline(stage.node, idx, run);
+	const baseline = await captureStageBaseline(stage.def, idx, run);
 
 	await runStageSession(curCtx, {
 		cwd: run.cwd,
@@ -139,7 +139,7 @@ export async function runStage(curCtx: RunnerCtx, currentName: string, idx: numb
 		state: run.state,
 		prompt,
 		skill: stage.skill,
-		node: stage.node,
+		stage: stage.def,
 		stageIndex: idx,
 		baseline,
 		host: run.host,
@@ -149,19 +149,19 @@ export async function runStage(curCtx: RunnerCtx, currentName: string, idx: numb
 	});
 }
 
-function resolveStageNode(currentName: string, idx: number, run: RunContext): ResolvedStage {
-	const node = run.workflow.nodes[currentName];
-	if (!node) {
+function resolveStage(currentName: string, idx: number, run: RunContext): ResolvedStage {
+	const def = run.workflow.stages[currentName];
+	if (!def) {
 		// validateWorkflow should catch this; defensive for tests bypassing validation.
-		throw new Error(`runStage: node "${currentName}" referenced by edges but missing from workflow.nodes`);
+		throw new Error(`runStage: stage "${currentName}" referenced by edges but missing from workflow.stages`);
 	}
-	// `skill` defaults to the record key — the common case where node id and
+	// `skill` defaults to the record key — the common case where stage id and
 	// Pi skill match doesn't restate the name at the call site.
-	return { node, name: currentName, stageNumber: idx + 1, skill: node.skill ?? currentName };
+	return { def, name: currentName, stageNumber: idx + 1, skill: def.skill ?? currentName };
 }
 
 /**
- * A node that opts into fanout via `NodeDef.fanout` expands into one Pi
+ * A stage that opts into fanout via `StageDef.fanout` expands into one Pi
  * session per unit returned by the user's `FanoutFn`. The runner is
  * convention-agnostic: it never inspects the artifact, never counts
  * headings, never names a skill — every per-unit decision lives in the
@@ -169,9 +169,9 @@ function resolveStageNode(currentName: string, idx: number, run: RunContext): Re
  * returned) — caller then returns without running the single-stage path.
  */
 async function tryFanout(curCtx: RunnerCtx, stage: ResolvedStage, idx: number, run: RunContext): Promise<boolean> {
-	if (!stage.node.fanout) return false;
+	if (!stage.def.fanout) return false;
 	const primary = currentPrimaryArtifact(run.state);
-	const units = await stage.node.fanout({
+	const units = await stage.def.fanout({
 		cwd: run.cwd,
 		artifact: primary,
 		state: run.state,
@@ -240,33 +240,33 @@ function ensureUpstreamArtifact(stage: ResolvedStage, run: RunContext): void {
 }
 
 function enforceSessionInvariants(stage: ResolvedStage, run: RunContext): void {
-	if (stage.node.fanout && stage.node.sessionPolicy === "continue") {
+	if (stage.def.fanout && stage.def.sessionPolicy === "continue") {
 		const reason =
-			`runStage: node "${stage.name}" cannot combine fanout with sessionPolicy "continue" — ` +
+			`runStage: stage "${stage.name}" cannot combine fanout with sessionPolicy "continue" — ` +
 			"fanout requires per-unit session isolation";
 		throw new StagePreflightError("invariant", stage.name, MSG_STAGE_THREW(stage.name, reason), reason, false);
 	}
-	if (stage.node.sessionPolicy === "continue" && !run.host) {
-		const reason = `runStage: node "${stage.name}" uses sessionPolicy "continue" but no workflow host was provided to runWorkflow`;
+	if (stage.def.sessionPolicy === "continue" && !run.host) {
+		const reason = `runStage: stage "${stage.name}" uses sessionPolicy "continue" but no workflow host was provided to runWorkflow`;
 		throw new StagePreflightError("invariant", stage.name, MSG_STAGE_THREW(stage.name, reason), reason, false);
 	}
 }
 
 /** Entries before this index belong to prior stages; only meaningful for continue. */
-function computeBranchOffset(curCtx: RunnerCtx, node: NodeDef): number | undefined {
-	if (node.sessionPolicy !== "continue") return undefined;
+function computeBranchOffset(curCtx: RunnerCtx, def: StageDef): number | undefined {
+	if (def.sessionPolicy !== "continue") return undefined;
 	return readBranch(curCtx).length;
 }
 
 async function ensureInputValid(stage: ResolvedStage, run: RunContext): Promise<void> {
-	if (!stage.node.inputSchema || run.state.manifest?.data === undefined) return;
-	const timeoutMs = clampValidationTimeoutMs(stage.node.validationRetryTimeoutMs);
+	if (!stage.def.inputSchema || run.state.manifest?.data === undefined) return;
+	const timeoutMs = clampValidationTimeoutMs(stage.def.validationRetryTimeoutMs);
 	const prevSkill = run.state.manifest.meta.skill || "unknown";
 
 	let result: ValidationResult;
 	try {
 		result = await withTimeout(
-			Promise.resolve(validateManifestData(stage.node.inputSchema, run.state.manifest.data)),
+			Promise.resolve(validateManifestData(stage.def.inputSchema, run.state.manifest.data)),
 			timeoutMs,
 			ERR_SCHEMA_TIMEOUT("inputSchema", timeoutMs),
 		);
@@ -301,7 +301,7 @@ async function ensureInputValid(stage: ResolvedStage, run: RunContext): Promise<
  * Mirror of the clamp in extraction.ts:retryUntilValid. Same defense-in-depth
  * posture: validateWorkflow rejects out-of-range values at load, but
  * programmatic callers that embed runWorkflow can bypass it; clamping here
- * means a misconfigured node degrades to the spec-default behavior instead
+ * means a misconfigured stage degrades to the spec-default behavior instead
  * of firing a 100 ms timeout before a real I/O probe gets a chance to settle.
  */
 function clampValidationTimeoutMs(raw: number | undefined): number {
@@ -311,8 +311,8 @@ function clampValidationTimeoutMs(raw: number | undefined): number {
 	);
 }
 
-async function captureStageBaseline(node: NodeDef, idx: number, run: RunContext): Promise<unknown> {
-	const baseline = node.outcome?.resolver.baseline;
+async function captureStageBaseline(def: StageDef, idx: number, run: RunContext): Promise<unknown> {
+	const baseline = def.outcome?.resolver.baseline;
 	if (!baseline) return undefined;
 	try {
 		return await baseline({
