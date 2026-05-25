@@ -14,7 +14,7 @@ export const STATUS_STAGE = (stage: number, total: number, skill: string) => `rp
  * `label` is whatever the user's `FanoutFn` returned for this unit
  * (`"phase 2/5"`, `"task 3/8"`, ...). The runner adds no implicit wording.
  */
-export const STATUS_PHASE = (stage: number, total: number, skill: string, label: string) =>
+export const STATUS_FANOUT_UNIT = (stage: number, total: number, skill: string, label: string) =>
 	`rpiv: stage ${stage}/${total} — ${skill} (${label})`;
 
 export const MSG_STAGE_COMPLETE = (skill: string) => `✓ ${skill} completed`;

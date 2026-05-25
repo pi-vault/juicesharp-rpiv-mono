@@ -102,8 +102,8 @@ export interface RunContext {
 }
 
 /**
- * Per-stage / per-phase common base. Extended by `StageSession` and
- * `PhaseSession`; consumed in pick form by `AuditCtx` (audit.ts) so the audit
+ * Per-stage / per-unit common base. Extended by `StageSession` and
+ * `FanoutSession`; consumed in pick form by `AuditCtx` (audit.ts) so the audit
  * layer pins its dependency on the four-field shape structurally instead of
  * duplicating the field list.
  */
@@ -137,7 +137,7 @@ export interface StageSession extends SessionContext {
  * status line (`STATUS_PHASE`) and the JSONL row (`phaseRowLabel`) so the
  * runner adds no implicit wording.
  */
-export interface PhaseSession extends SessionContext {
+export interface FanoutSession extends SessionContext {
 	/** 1-based position within the run's fanout array — for halt diagnostics. */
 	unitIndex: number;
 	/** From `FanoutUnit.label` — already disambiguating, e.g. `"phase 2/5"`. */

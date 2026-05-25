@@ -1,8 +1,8 @@
 /**
  * Tests for sessions.ts — the per-stage / per-phase session orchestrator.
  *
- * Drives the two public entries (`runStageSession`, `runPhaseSession`) against
- * synthetic StageSession / PhaseSession objects so internals (retryUntilValid,
+ * Drives the two public entries (`runStageSession`, `runFanoutSession`) against
+ * synthetic StageSession / FanoutSession objects so internals (retryUntilValid,
  * resolveExtractor, readSessionOutcome, spawnSession, recordStageSuccess, halt
  * helpers) are exercised at a finer grain than runner.test.ts can reach via
  * runWorkflow.
@@ -33,9 +33,9 @@ import {
 	MSG_VALIDATION_EXHAUSTED,
 	MSG_VALIDATION_RETRY,
 } from "./messages.js";
-import { runPhaseSession, runStageSession } from "./sessions/index.js";
+import { runFanoutSession, runStageSession } from "./sessions/index.js";
 import { typeboxSchema } from "./typebox-adapter.js";
-import type { PhaseSession, RunnerCtx, RunState, StageSession } from "./types.js";
+import type { FanoutSession, RunnerCtx, RunState, StageSession } from "./types.js";
 import { MAX_VALIDATION_RETRIES, MAX_VALIDATION_RETRY_TIMEOUT_MS } from "./validate-manifest.js";
 
 // ---------------------------------------------------------------------------
@@ -898,7 +898,7 @@ describe("sessions — success persistence", () => {
 		const state = freshRunState();
 		const onSuccess = vi.fn(async () => {});
 
-		const phase: PhaseSession = {
+		const phase: FanoutSession = {
 			cwd: tmpDir,
 			runId: "run-test",
 			state,
@@ -910,7 +910,7 @@ describe("sessions — success persistence", () => {
 			onSuccess,
 		};
 
-		await runPhaseSession(chain.ctx as RunnerCtx, phase);
+		await runFanoutSession(chain.ctx as RunnerCtx, phase);
 
 		expect(onSuccess).toHaveBeenCalledTimes(1);
 		const rows = readStageRows(tmpDir);
@@ -927,7 +927,7 @@ describe("sessions — success persistence", () => {
 		const state = freshRunState();
 		const onSuccess = vi.fn(async () => {});
 
-		const phase: PhaseSession = {
+		const phase: FanoutSession = {
 			cwd: tmpDir,
 			runId: "run-test",
 			state,
@@ -939,7 +939,7 @@ describe("sessions — success persistence", () => {
 			onSuccess,
 		};
 
-		await runPhaseSession(chain.ctx as RunnerCtx, phase);
+		await runFanoutSession(chain.ctx as RunnerCtx, phase);
 
 		expect(onSuccess).not.toHaveBeenCalled();
 		const rows = readStageRows(tmpDir);

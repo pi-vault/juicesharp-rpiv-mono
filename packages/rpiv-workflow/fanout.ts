@@ -2,8 +2,8 @@
  * Fanout iteration. When a node opts in via `NodeDef.fanout`, the runner
  * calls the user's `FanoutFn` to get a list of units and iterates one Pi
  * session per unit. This module owns the iteration loop; `runner.ts`
- * injects its primitives via `PhaseFanoutDeps` so the module never
- * imports back (cycle-free).
+ * injects its primitives via `FanoutDeps` so the module never imports
+ * back (cycle-free).
  *
  * No markdown regex, no per-convention counter, no cap — rpiv-workflow
  * stays convention-agnostic. Consumers (rpiv-pi etc.) own the FanoutFn
@@ -11,11 +11,11 @@
  */
 
 import type { FanoutUnit } from "./api.js";
-import { MSG_STAGE_COMPLETE, STATUS_KEY, STATUS_PHASE } from "./messages.js";
-import type { PhaseSession, RunContext, RunnerCtx } from "./types.js";
+import { MSG_STAGE_COMPLETE, STATUS_FANOUT_UNIT, STATUS_KEY } from "./messages.js";
+import type { FanoutSession, RunContext, RunnerCtx } from "./types.js";
 
-export interface PhaseFanoutDeps {
-	runPhaseSession: (ctx: RunnerCtx, session: PhaseSession) => Promise<void>;
+export interface FanoutDeps {
+	runFanoutSession: (ctx: RunnerCtx, session: FanoutSession) => Promise<void>;
 	/**
 	 * Resume the chain after the fanout node's units finish. Receives the
 	 * fanout node's name so the routing layer can look up the outgoing
@@ -39,7 +39,7 @@ export interface PhaseFanoutDeps {
  * walks it in order. `p` is the 1-based index into `units` for the next
  * session to run — the continuation-style self-call increments it.
  */
-export async function runImplementPhases(
+export async function runFanout(
 	curCtx: RunnerCtx,
 	stageIdx: number,
 	currentName: string,
@@ -47,7 +47,7 @@ export async function runImplementPhases(
 	p: number,
 	units: readonly FanoutUnit[],
 	run: RunContext,
-	deps: PhaseFanoutDeps,
+	deps: FanoutDeps,
 ): Promise<void> {
 	const { cwd, runId, totalStages, state } = run;
 
@@ -58,9 +58,9 @@ export async function runImplementPhases(
 	}
 
 	const unit = units[p - 1]!;
-	curCtx.ui.setStatus(STATUS_KEY, STATUS_PHASE(stageIdx + 1, totalStages, skill, unit.label));
+	curCtx.ui.setStatus(STATUS_KEY, STATUS_FANOUT_UNIT(stageIdx + 1, totalStages, skill, unit.label));
 
-	await deps.runPhaseSession(curCtx, {
+	await deps.runFanoutSession(curCtx, {
 		cwd,
 		runId,
 		state,
@@ -69,6 +69,6 @@ export async function runImplementPhases(
 		unitIndex: p,
 		label: unit.label,
 		stageIndex: stageIdx,
-		onSuccess: (freshCtx) => runImplementPhases(freshCtx, stageIdx, currentName, skill, p + 1, units, run, deps),
+		onSuccess: (freshCtx) => runFanout(freshCtx, stageIdx, currentName, skill, p + 1, units, run, deps),
 	});
 }

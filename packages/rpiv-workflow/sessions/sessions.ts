@@ -1,6 +1,6 @@
 /**
- * Session execution — one Pi session per workflow stage / phase.
- * `runStageSession` and `runPhaseSession` are the two public entries.
+ * Session execution — one Pi session per workflow stage / fanout unit.
+ * `runStageSession` and `runFanoutSession` are the two public entries.
  *
  * The fresh-vs-continue policy split is owned by `SessionPolicyHandler`
  * (see `spawn.ts`): `FRESH_HANDLER` and `CONTINUE_HANDLER` implement
@@ -18,8 +18,8 @@
 
 import {
 	type AuditCtx,
+	fanoutRowLabel,
 	nowIso,
-	phaseRowLabel,
 	recordCancellation,
 	recordStage,
 	recordStopFailure,
@@ -35,7 +35,7 @@ import {
 	MSG_VALIDATION_EXHAUSTED,
 } from "../messages.js";
 import { type BranchEntry, classifyStop, extractArtifactPath, readBranch, type StopSignal } from "../transcript.js";
-import type { PhaseSession, RunnerCtx, SessionContext, StageSession } from "../types.js";
+import type { FanoutSession, RunnerCtx, SessionContext, StageSession } from "../types.js";
 import { extractAndValidateManifest } from "./extraction.js";
 import { FRESH_HANDLER, handlerFor } from "./spawn.js";
 
@@ -50,9 +50,9 @@ export async function runStageSession(ctx: RunnerCtx, s: StageSession): Promise<
 	if (cancelled) recordCancellation(ctx, auditFor(s));
 }
 
-/** Execute one phase iteration of an implement stage. Always fresh. */
-export async function runPhaseSession(ctx: RunnerCtx, s: PhaseSession): Promise<void> {
-	const { cancelled } = await FRESH_HANDLER.spawn(ctx, s.prompt, (sessionCtx) => postPhase(sessionCtx, s));
+/** Execute one fanout-unit iteration. Always fresh. */
+export async function runFanoutSession(ctx: RunnerCtx, s: FanoutSession): Promise<void> {
+	const { cancelled } = await FRESH_HANDLER.spawn(ctx, s.prompt, (sessionCtx) => postFanout(sessionCtx, s));
 	if (cancelled) recordCancellation(ctx, auditFor(s));
 }
 
@@ -75,12 +75,12 @@ async function postStage(ctx: RunnerCtx, s: StageSession): Promise<void> {
 	await s.onSuccess(ctx, outcome.artifact);
 }
 
-/** Phase post-processing: classify outcome → persist bare row → chain. */
-async function postPhase(ctx: RunnerCtx, s: PhaseSession): Promise<void> {
+/** Fanout-unit post-processing: classify outcome → persist bare row → chain. */
+async function postFanout(ctx: RunnerCtx, s: FanoutSession): Promise<void> {
 	const outcome = readSessionOutcome(ctx, undefined);
-	if (outcome.stop !== "stop") return haltPhase(ctx, s, outcome.stop);
+	if (outcome.stop !== "stop") return haltFanout(ctx, s, outcome.stop);
 
-	if (!recordPhaseSuccess(s, outcome.artifact)) return;
+	if (!recordFanoutSuccess(s, outcome.artifact)) return;
 	await s.onSuccess(ctx);
 }
 
@@ -115,7 +115,7 @@ function haltStageWithValidationFailure(ctx: RunnerCtx, s: StageSession, failure
 	);
 }
 
-function haltPhase(ctx: RunnerCtx, s: PhaseSession, stop: Exclude<StopSignal, "stop">): void {
+function haltFanout(ctx: RunnerCtx, s: FanoutSession, stop: Exclude<StopSignal, "stop">): void {
 	recordStopFailure(ctx, auditFor(s), stop, `${s.skill} unit ${s.unitIndex} (${s.label}) failed`);
 }
 
@@ -172,8 +172,8 @@ function recordStageSuccess(
 	return false;
 }
 
-function recordPhaseSuccess(s: PhaseSession, artifact: string | undefined): boolean {
-	const label = phaseRowLabel(s);
+function recordFanoutSuccess(s: FanoutSession, artifact: string | undefined): boolean {
+	const label = fanoutRowLabel(s);
 	if (tryRecordStage(s, label, { artifact })) {
 		if (artifact) s.state.fallbackArtifactPath = artifact;
 		return true;
@@ -212,7 +212,7 @@ function readSessionOutcome(ctx: RunnerCtx, branchOffset: number | undefined): S
 // Helpers
 // ===========================================================================
 
-const auditFor = (s: StageSession | PhaseSession): AuditCtx => ({
+const auditFor = (s: StageSession | FanoutSession): AuditCtx => ({
 	cwd: s.cwd,
 	runId: s.runId,
 	state: s.state,

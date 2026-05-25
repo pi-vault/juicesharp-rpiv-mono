@@ -11,7 +11,7 @@
 
 import type { NodeDef } from "../api.js";
 import { notifyPartialArtifacts } from "../audit.js";
-import { runImplementPhases } from "../implement-phases.js";
+import { runFanout } from "../fanout.js";
 import { currentArtifactPath } from "../internal-utils.js";
 import {
 	ERR_INPUT_VALIDATION_FAILED,
@@ -24,7 +24,7 @@ import {
 	STATUS_KEY,
 	STATUS_STAGE,
 } from "../messages.js";
-import { runPhaseSession, runStageSession } from "../sessions/index.js";
+import { runFanoutSession, runStageSession } from "../sessions/index.js";
 import { readBranch } from "../transcript.js";
 import type { RunContext, RunnerCtx } from "../types.js";
 import { validateManifestData } from "../validate-manifest.js";
@@ -84,8 +84,9 @@ function buildPrompt(skill: string, inputForStage: string): string {
 /**
  * Slot ordering (load-bearing):
  *
- *   1. tryPhaseFanout            — shortcut: implement-skill expansion handled
- *                                  the stage; subsequent slots skipped.
+ *   1. tryFanout                 — shortcut: the node's FanoutFn returned
+ *                                  units, runner ran them; subsequent
+ *                                  slots skipped for this stage.
  *   2. PRE_PROMPT_CHECKS         — preflights that don't need prompt prep.
  *      a. ensureUpstreamArtifact — halt: missing inherited artifact.
  *      b. enforceSessionInvariants — invariant: authoring-time-knowable
@@ -104,7 +105,7 @@ function buildPrompt(skill: string, inputForStage: string): string {
 export async function runStage(curCtx: RunnerCtx, currentName: string, idx: number, run: RunContext): Promise<void> {
 	const stage = resolveStageNode(currentName, idx, run);
 
-	if (await tryPhaseFanout(curCtx, stage, idx, run)) return;
+	if (await tryFanout(curCtx, stage, idx, run)) return;
 	for (const check of PRE_PROMPT_CHECKS) check.run(stage, run);
 
 	const isStart = currentName === run.workflow.start;
@@ -152,7 +153,7 @@ function resolveStageNode(currentName: string, idx: number, run: RunContext): Re
  * FanoutFn. Returns true iff fanout fired (i.e. at least one unit was
  * returned) — caller then returns without running the single-stage path.
  */
-async function tryPhaseFanout(curCtx: RunnerCtx, stage: ResolvedStage, idx: number, run: RunContext): Promise<boolean> {
+async function tryFanout(curCtx: RunnerCtx, stage: ResolvedStage, idx: number, run: RunContext): Promise<boolean> {
 	if (!stage.node.fanout) return false;
 	const units = await stage.node.fanout({
 		cwd: run.cwd,
@@ -160,8 +161,8 @@ async function tryPhaseFanout(curCtx: RunnerCtx, stage: ResolvedStage, idx: numb
 		state: run.state,
 	});
 	if (units.length === 0) return false;
-	await runImplementPhases(curCtx, idx, stage.name, stage.skill, 1, units, run, {
-		runPhaseSession,
+	await runFanout(curCtx, idx, stage.name, stage.skill, 1, units, run, {
+		runFanoutSession,
 		advanceAfter: (freshCtx, name, completedIdx, ctx) => advanceChain(freshCtx, name, completedIdx, ctx),
 	});
 	return true;

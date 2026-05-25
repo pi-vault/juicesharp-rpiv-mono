@@ -4,4 +4,4 @@
  * barrel re-exports only the symbols the rest of the package consumes.
  */
 
-export { runPhaseSession, runStageSession } from "./sessions.js";
+export { runFanoutSession, runStageSession } from "./sessions.js";

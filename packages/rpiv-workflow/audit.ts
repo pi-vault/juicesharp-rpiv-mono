@@ -21,7 +21,7 @@ import {
 } from "./messages.js";
 import { appendStage, listArtifacts, type WorkflowStage } from "./state/index.js";
 import type { StopSignal } from "./transcript.js";
-import type { PhaseSession, RunnerCtx, RunState, SessionContext } from "./types.js";
+import type { FanoutSession, RunnerCtx, RunState, SessionContext } from "./types.js";
 
 /** Single source of ISO-8601 timestamps for audit rows + manifest meta. */
 export const nowIso = (): string => new Date().toISOString();
@@ -29,7 +29,7 @@ export const nowIso = (): string => new Date().toISOString();
 /**
  * Minimal bookkeeping ctx. Structurally derived from `SessionContext` so any
  * future field added to the four-field base lands here too — no duplicate
- * maintenance. Both `StageSession` and `PhaseSession` collapse to this.
+ * maintenance. Both `StageSession` and `FanoutSession` collapse to this.
  */
 export type AuditCtx = Pick<SessionContext, "cwd" | "runId" | "state" | "skill">;
 
@@ -40,7 +40,7 @@ export type AuditCtx = Pick<SessionContext, "cwd" | "runId" | "state" | "skill">
  * Owned by the audit layer because the JSONL row shape is its concern; the
  * runner stays neutral about the wording.
  */
-export const phaseRowLabel = (s: PhaseSession): string => `${s.skill} (${s.label})`;
+export const fanoutRowLabel = (s: FanoutSession): string => `${s.skill} (${s.label})`;
 
 /**
  * Allocates the next `stageNumber`, attempts the append, and returns the
