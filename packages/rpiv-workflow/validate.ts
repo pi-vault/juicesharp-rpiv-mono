@@ -14,7 +14,7 @@
  * No I/O, no throws — purely a graph walk + predicate probe.
  */
 
-import { type EdgeTarget, READS_FRONTMATTER, type Workflow } from "./api.js";
+import { type EdgeTarget, marksFrontmatter, STOP, type Workflow } from "./api.js";
 import type { ConfigLayer } from "./layers.js";
 import {
 	MAX_VALIDATION_RETRIES,
@@ -41,8 +41,6 @@ export interface ValidationIssue {
 	/** Source path (rpiv.config.ts) when the layer is user or project. */
 	path?: string;
 }
-
-const STOP = "stop";
 
 // ===========================================================================
 // Public — validateWorkflow
@@ -260,6 +258,12 @@ function checkNodeSemantics(w: Workflow, issues: ValidationIssue[]): void {
  * sync/async shape. Any schema that throws on the probe is treated as
  * "not async" (the throw bubbles to the runner anyway and surfaces under
  * the same fatal-extraction path).
+ *
+ * Best-effort: a schema whose synchronous arm throws on the empty-object
+ * probe is reported as non-async; if such a schema is in fact async, the
+ * runtime `validateManifestData` throw is the load-bearing safety net —
+ * see `validation.ts:validateManifestData` (the `result instanceof Promise`
+ * branch).
  */
 function isAsyncSchema(schema: { "~standard": { validate: (data: unknown) => unknown } }): boolean {
 	try {
@@ -284,7 +288,7 @@ function isAsyncSchema(schema: { "~standard": { validate: (data: unknown) => unk
 function checkPredicateSchemas(w: Workflow, issues: ValidationIssue[]): void {
 	for (const [from, target] of Object.entries(w.edges)) {
 		if (typeof target === "string") continue;
-		if (!(target as unknown as Record<symbol, unknown>)[READS_FRONTMATTER]) continue;
+		if (!marksFrontmatter(target)) continue;
 		const node = w.nodes[from];
 		if (node && !node.outputSchema) {
 			issues.push(

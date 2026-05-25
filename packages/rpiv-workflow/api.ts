@@ -1,19 +1,19 @@
 /**
- * Public authoring surface for rpiv workflows.
+ * Public authoring surface for rpiv workflows. Canonical entry point — users
+ * import everything they need (`defineWorkflow`, `artifact`, `action`,
+ * `definePredicate`, `defineStatePredicate`, `threshold`, `STOP`,
+ * `marksFrontmatter`, schema adapters, plus the type vocabulary `Workflow`
+ * / `NodeDef` / `EdgeFn` / `EdgeTarget` / `EdgeContext`) from
+ * `@juicesharp/rpiv-workflow`.
  *
  * A `Workflow` is a typed graph: a named entry point, a node table, and an
  * edge table that maps each node to either another node name, the sentinel
- * `"stop"`, or an `EdgeFn` that picks at runtime. Edges live INSIDE each
+ * `STOP`, or an `EdgeFn` that picks at runtime. Edges live INSIDE each
  * workflow — there is no parallel preset/edge split.
  *
  * Factories are pure passthroughs that apply sane defaults. Same idiom as
  * `defineConfig` in Vite/Astro/Tailwind: zero runtime cost, exists solely
  * for type inference + uniform shape at the call site.
- *
- * Phase 1 of the TS-native workflow migration — see
- * `thoughts/shared/designs/2026-05-23-ts-native-workflows.md`. This file
- * adds the new surface alongside the existing DAG. Later phases collapse
- * the old paths onto it.
  */
 
 import type { StandardSchemaV1 } from "@standard-schema/spec";
@@ -72,10 +72,17 @@ export interface EdgeContext {
 export type EdgeFn = EdgePredicate & { targets?: readonly string[] };
 
 /**
- * What an `edges` entry resolves to: another node name (auto-edge), the
- * terminal sentinel `"stop"`, or a function chosen at run-time.
+ * Terminal edge sentinel. Single source of truth for the `"stop"` literal
+ * embedded in `EdgeTarget`; `validate.ts` + `routing.ts` import this rather
+ * than re-declaring the string.
  */
-export type EdgeTarget = string | EdgeFn;
+export const STOP = "stop" as const;
+
+/**
+ * What an `edges` entry resolves to: another node name (auto-edge), the
+ * terminal sentinel `STOP`, or a function chosen at run-time.
+ */
+export type EdgeTarget = string | typeof STOP | EdgeFn;
 
 /**
  * A node in the workflow graph. The node's identity is the surrounding
@@ -173,6 +180,20 @@ export function action(overrides: Partial<NodeDef> = {}): NodeDef {
 export const READS_FRONTMATTER: unique symbol = Symbol.for("rpiv.workflow.readsFrontmatter");
 
 /**
+ * True iff `fn` was wrapped by `definePredicate` (which sets the
+ * `READS_FRONTMATTER` marker). The validator uses this to decide whether an
+ * `EdgeFn`'s source node must declare an `outputSchema` — frontmatter-reading
+ * predicates need a validated manifest shape; state-only predicates don't.
+ *
+ * Centralises the double-cast required to symbol-key into a function object
+ * so consumers don't sprinkle `as unknown as Record<symbol, …>` at every
+ * read site.
+ */
+export function marksFrontmatter(fn: EdgeFn): boolean {
+	return Boolean((fn as unknown as Record<symbol, boolean>)[READS_FRONTMATTER]);
+}
+
+/**
  * Promote a hand-rolled `EdgePredicate` to an `EdgeFn` by structurally
  * attaching the set of possible returns. `validate.ts` requires every
  * EdgeFn to carry `.targets` so reachability and load-time edge-target
@@ -214,9 +235,24 @@ export function defineStatePredicate(targets: readonly string[], fn: EdgePredica
 }
 
 /**
- * `ifAbove` when `Number(manifest.data[field] ?? 0) > threshold`, else `ifBelow`.
- * Built on `definePredicate` so the contract is enforced structurally; the
- * `READS_FRONTMATTER` marker is inherited from `definePredicate`.
+ * Routes to `ifAbove` when `Number(manifest.data[field]) > n`; otherwise to
+ * `ifBelow`. Built on `definePredicate` so the contract is enforced
+ * structurally; the `READS_FRONTMATTER` marker is inherited from
+ * `definePredicate`.
+ *
+ * Missing-field policy: `Number(undefined)` is `NaN`, and `NaN > anything` is
+ * `false`. So a missing or non-numeric field always routes to `ifBelow` —
+ * regardless of the threshold's sign. Negative thresholds therefore also
+ * route missing fields to `ifBelow` (NaN compares false against any value).
+ * This symmetry frees workflow authors from remembering per-factory coercion
+ * rules; if a different missing-field default is needed, declare it
+ * explicitly via `definePredicate`:
+ *
+ * ```ts
+ * definePredicate(["a","b"], ({ manifest }) =>
+ *   Number((manifest?.data as Record<string, unknown>)?.foo ?? -1) > 0 ? "a" : "b"
+ * )
+ * ```
  */
 export function threshold(field: string, n: number, ifAbove: string, ifBelow: string): EdgeFn {
 	return definePredicate([ifAbove, ifBelow], predicateThreshold(field, n, ifAbove, ifBelow));

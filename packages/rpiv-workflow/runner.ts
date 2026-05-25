@@ -40,7 +40,7 @@ import { edgeIsDecision, nextNode } from "./routing.js";
 import { runPhaseSession, runStageSession } from "./sessions.js";
 import { appendRoutingDecision, generateRunId, writeHeader } from "./state.js";
 import { readBranch } from "./transcript.js";
-import type { ChainCtx, RunContext, RunState } from "./types.js";
+import type { RunContext, RunnerCtx, RunState } from "./types.js";
 import { validateManifestData } from "./validation.js";
 
 // ---------------------------------------------------------------------------
@@ -112,7 +112,7 @@ export async function runWorkflow(
 		artifactPath: undefined,
 		manifest: undefined,
 		stagesCompleted: 0,
-		lastStageNumber: 0,
+		lastAllocatedStageNumber: 0,
 		success: false,
 		error: undefined,
 		backwardJumps: 0,
@@ -121,12 +121,12 @@ export async function runWorkflow(
 
 	const maxBackwardJumps = options.maxBackwardJumps ?? MAX_BACKWARD_JUMPS;
 
-	// runStageProtected (not bare runStage) so a throw out of the start node —
+	// runStageOrRecordFailure (not bare runStage) so a throw out of the start node —
 	// notably enforceSessionInvariants violations — records a JSONL failure
 	// row keyed on the failing stage rather than leaving a header-only file
 	// that every shape-filtered reader skips. Same wrapper used by
 	// advanceChain for downstream stages.
-	await runStageProtected(ctx, workflow.start, 0, {
+	await runStageOrRecordFailure(ctx, workflow.start, 0, {
 		cwd,
 		runId,
 		workflow,
@@ -211,7 +211,7 @@ function buildPrompt(skill: string, inputForStage: string): string {
  * `enforceSessionInvariants`); expected failures are recorded inside via
  * `recordStage` + `state.error` and return normally.
  */
-async function runStageProtected(curCtx: ChainCtx, name: string, idx: number, run: RunContext): Promise<void> {
+async function runStageOrRecordFailure(curCtx: RunnerCtx, name: string, idx: number, run: RunContext): Promise<void> {
 	try {
 		await runStage(curCtx, name, idx, run);
 	} catch (e) {
@@ -224,7 +224,7 @@ async function runStageProtected(curCtx: ChainCtx, name: string, idx: number, ru
 	}
 }
 
-async function runStage(curCtx: ChainCtx, currentName: string, idx: number, run: RunContext): Promise<void> {
+async function runStage(curCtx: RunnerCtx, currentName: string, idx: number, run: RunContext): Promise<void> {
 	const stage = resolveStageNode(currentName, idx, run);
 
 	if (await tryPhaseFanout(curCtx, stage, idx, run)) return;
@@ -243,7 +243,7 @@ async function runStage(curCtx: ChainCtx, currentName: string, idx: number, run:
 	curCtx.ui.setStatus(STATUS_KEY, STATUS_STAGE(stage.stageNumber, run.totalStages, stage.skill));
 	const branchOffset = computeBranchOffset(curCtx, stage.node);
 
-	if (!runStageInputValidation(curCtx, stage, run)) return;
+	if (!ensureInputValid(curCtx, stage, run)) return;
 
 	const snapshot = await captureStageSnapshot(stage.node, idx, run);
 
@@ -276,7 +276,7 @@ interface ResolvedStage {
 	skill: string;
 }
 
-function finalizeWorkflow(curCtx: ChainCtx, run: RunContext): void {
+function finalizeWorkflow(curCtx: RunnerCtx, run: RunContext): void {
 	curCtx.ui.setStatus(STATUS_KEY, undefined);
 	curCtx.ui.notify(MSG_WORKFLOW_COMPLETE(run.state.stagesCompleted), "info");
 	run.state.success = true;
@@ -301,7 +301,7 @@ function resolveStageNode(currentName: string, idx: number, run: RunContext): Re
  * routing. Returns true iff fanout fired — caller then returns without
  * running the single-stage path.
  */
-async function tryPhaseFanout(curCtx: ChainCtx, stage: ResolvedStage, idx: number, run: RunContext): Promise<boolean> {
+async function tryPhaseFanout(curCtx: RunnerCtx, stage: ResolvedStage, idx: number, run: RunContext): Promise<boolean> {
 	if (!(stage.skill === "implement" && run.state.artifactPath)) return false;
 	const phaseCount = countPhases(run.state.artifactPath, run.cwd);
 	if (phaseCount === 0) return false;
@@ -329,7 +329,7 @@ async function tryPhaseFanout(curCtx: ChainCtx, stage: ResolvedStage, idx: numbe
  * out of pi opt out of this defense too — same fail-soft posture the rest
  * of the pi-optional surface uses.
  */
-function ensureSkillRegistered(curCtx: ChainCtx, stage: ResolvedStage, run: RunContext): boolean {
+function ensureSkillRegistered(curCtx: RunnerCtx, stage: ResolvedStage, run: RunContext): boolean {
 	if (!run.pi) return true;
 
 	const registered = new Set<string>();
@@ -355,7 +355,12 @@ function ensureSkillRegistered(curCtx: ChainCtx, stage: ResolvedStage, run: RunC
  * an upstream artifactPath. Falling back to originalInput past the start
  * would silently hand a downstream skill the raw feature description.
  */
-function ensureUpstreamArtifact(curCtx: ChainCtx, stage: ResolvedStage, currentName: string, run: RunContext): boolean {
+function ensureUpstreamArtifact(
+	curCtx: RunnerCtx,
+	stage: ResolvedStage,
+	currentName: string,
+	run: RunContext,
+): boolean {
 	if (currentName === run.workflow.start || run.state.artifactPath) return true;
 	recordStage(run.cwd, run.runId, { skill: stage.skill, status: "failed", ts: nowIso() }, run.state);
 	curCtx.ui.setStatus(STATUS_KEY, undefined);
@@ -380,12 +385,12 @@ function enforceSessionInvariants(stage: ResolvedStage, currentName: string, run
 }
 
 /** Entries before this index belong to prior stages; only meaningful for continue. */
-function computeBranchOffset(curCtx: ChainCtx, node: NodeDef): number | undefined {
+function computeBranchOffset(curCtx: RunnerCtx, node: NodeDef): number | undefined {
 	if (node.sessionPolicy !== "continue") return undefined;
 	return readBranch(curCtx).length;
 }
 
-function runStageInputValidation(curCtx: ChainCtx, stage: ResolvedStage, run: RunContext): boolean {
+function ensureInputValid(curCtx: RunnerCtx, stage: ResolvedStage, run: RunContext): boolean {
 	if (!stage.node.inputSchema || run.state.manifest?.data === undefined) return true;
 	const result = validateManifestData(stage.node.inputSchema, run.state.manifest.data);
 	if (result.valid) return true;
@@ -441,7 +446,7 @@ async function captureStageSnapshot(node: NodeDef, idx: number, run: RunContext)
  * re-enter), not `currentName` (which already completed successfully).
  * Same lesson as Q12+IB.
  */
-async function advanceChain(curCtx: ChainCtx, currentName: string, idx: number, run: RunContext): Promise<void> {
+async function advanceChain(curCtx: RunnerCtx, currentName: string, idx: number, run: RunContext): Promise<void> {
 	const { cwd, runId, workflow, state } = run;
 	// Mark the just-completed node as visited BEFORE consulting the next edge.
 	// A thrown EdgeFn would otherwise leave currentName un-marked, opening a
@@ -501,14 +506,14 @@ async function advanceChain(curCtx: ChainCtx, currentName: string, idx: number, 
 			}
 		}
 
-		// runStageProtected owns the catch for throws out of the *next* stage,
+		// runStageOrRecordFailure owns the catch for throws out of the *next* stage,
 		// so the JSONL row records `nextName` (the stage that actually threw)
 		// rather than `currentName` (which would mis-attribute the failure to
 		// the prior stage that already completed successfully).
-		await runStageProtected(curCtx, nextName, idx + 1, run);
+		await runStageOrRecordFailure(curCtx, nextName, idx + 1, run);
 	} catch (e) {
 		// Narrowed scope: only EdgeFn / routing-layer throws land here now —
-		// next-stage throws are absorbed by runStageProtected above. For this
+		// next-stage throws are absorbed by runStageOrRecordFailure above. For this
 		// remaining surface `currentName` IS the correct attribution: the
 		// thrown predicate / edge function belongs to the just-completed
 		// node's outgoing edge.

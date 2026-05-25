@@ -17,6 +17,7 @@ import {
 	recordTerminalFailure,
 } from "./audit.js";
 import { artifactMdExtractor, sideEffectExtractor } from "./extractors/index.js";
+import { assertNever, withTimeout } from "./internal-utils.js";
 import {
 	type Extractor,
 	type ExtractorCtx,
@@ -33,15 +34,8 @@ import {
 	MSG_VALIDATION_EXHAUSTED,
 	MSG_VALIDATION_RETRY,
 } from "./messages.js";
-import {
-	assertNever,
-	type BranchEntry,
-	classifyStop,
-	extractArtifactPath,
-	readBranch,
-	type StopSignal,
-} from "./transcript.js";
-import type { ChainCtx, PhaseSession, StageSession } from "./types.js";
+import { type BranchEntry, classifyStop, extractArtifactPath, readBranch, type StopSignal } from "./transcript.js";
+import type { PhaseSession, RunnerCtx, StageSession } from "./types.js";
 import {
 	DEFAULT_VALIDATION_RETRIES,
 	DEFAULT_VALIDATION_RETRY_TIMEOUT_MS,
@@ -53,7 +47,6 @@ import {
 	type ValidationFailure,
 	type ValidationResult,
 	validateManifestData,
-	withTimeout,
 } from "./validation.js";
 
 // ===========================================================================
@@ -61,7 +54,7 @@ import {
 // ===========================================================================
 
 /** Execute one DAG stage in its own session. */
-export async function runStageSession(ctx: ChainCtx, s: StageSession): Promise<void> {
+export async function runStageSession(ctx: RunnerCtx, s: StageSession): Promise<void> {
 	await spawnSession(
 		ctx,
 		s.prompt,
@@ -72,7 +65,7 @@ export async function runStageSession(ctx: ChainCtx, s: StageSession): Promise<v
 }
 
 /** Execute one phase iteration of an implement stage. Always fresh. */
-export async function runPhaseSession(ctx: ChainCtx, s: PhaseSession): Promise<void> {
+export async function runPhaseSession(ctx: RunnerCtx, s: PhaseSession): Promise<void> {
 	await spawnSession(
 		ctx,
 		s.prompt,
@@ -87,7 +80,7 @@ export async function runPhaseSession(ctx: ChainCtx, s: PhaseSession): Promise<v
 // ===========================================================================
 
 /** Stage post-processing: classify outcome → extract & validate → persist → chain. */
-async function postStage(ctx: ChainCtx, s: StageSession): Promise<void> {
+async function postStage(ctx: RunnerCtx, s: StageSession): Promise<void> {
 	const outcome = readStageOutcome(ctx, s);
 	if (outcome.stop !== "stop") return haltStage(ctx, s, outcome.stop);
 
@@ -100,7 +93,7 @@ async function postStage(ctx: ChainCtx, s: StageSession): Promise<void> {
 }
 
 /** Phase post-processing: classify outcome → persist bare row → chain. */
-async function postPhase(ctx: ChainCtx, s: PhaseSession): Promise<void> {
+async function postPhase(ctx: RunnerCtx, s: PhaseSession): Promise<void> {
 	const outcome = readPhaseOutcome(ctx);
 	if (outcome.stop !== "stop") return haltPhase(ctx, s, outcome.stop);
 
@@ -119,7 +112,7 @@ type ExtractionOutcome =
 
 /** Retry loop re-extracts against the latest branch after each fix request — hence `freshBranch`. */
 async function extractAndValidateManifest(
-	ctx: ChainCtx,
+	ctx: RunnerCtx,
 	s: StageSession,
 	branch: BranchEntry[],
 	freshBranch: () => BranchEntry[],
@@ -139,11 +132,11 @@ async function extractAndValidateManifest(
 // HALT HELPERS — turn a halt reason into the right audit-layer call
 // ===========================================================================
 
-function haltStage(ctx: ChainCtx, s: StageSession, stop: Exclude<StopSignal, "stop">): void {
+function haltStage(ctx: RunnerCtx, s: StageSession, stop: Exclude<StopSignal, "stop">): void {
 	recordStopFailure(ctx, auditFor(s), stop, `${s.skill} failed`, s.onFailure);
 }
 
-function haltStageWithExtractionError(ctx: ChainCtx, s: StageSession, message: string): void {
+function haltStageWithExtractionError(ctx: RunnerCtx, s: StageSession, message: string): void {
 	recordTerminalFailure(
 		ctx,
 		auditFor(s),
@@ -152,7 +145,7 @@ function haltStageWithExtractionError(ctx: ChainCtx, s: StageSession, message: s
 	);
 }
 
-function haltStageWithValidationFailure(ctx: ChainCtx, s: StageSession, failureSummary: string): void {
+function haltStageWithValidationFailure(ctx: RunnerCtx, s: StageSession, failureSummary: string): void {
 	recordTerminalFailure(
 		ctx,
 		auditFor(s),
@@ -166,7 +159,7 @@ function haltStageWithValidationFailure(ctx: ChainCtx, s: StageSession, failureS
 	);
 }
 
-function haltPhase(ctx: ChainCtx, s: PhaseSession, stop: Exclude<StopSignal, "stop">): void {
+function haltPhase(ctx: RunnerCtx, s: PhaseSession, stop: Exclude<StopSignal, "stop">): void {
 	recordStopFailure(ctx, auditFor(s), stop, `${s.skill} phase ${s.phaseIndex} failed`);
 }
 
@@ -182,7 +175,7 @@ function haltPhase(ctx: ChainCtx, s: PhaseSession, stop: Exclude<StopSignal, "st
  * past it) and sets `state.error` to halt the run.
  */
 function recordStageSuccess(
-	ctx: ChainCtx,
+	ctx: RunnerCtx,
 	s: StageSession,
 	artifact: string | undefined,
 	manifest: Manifest | undefined,
@@ -233,17 +226,17 @@ interface SessionOutcome {
 	stop: StopSignal;
 }
 
-function readStageOutcome(ctx: ChainCtx, s: StageSession): SessionOutcome {
+function readStageOutcome(ctx: RunnerCtx, s: StageSession): SessionOutcome {
 	return readSessionOutcome(ctx, { sessionPolicy: s.node.sessionPolicy, branchOffset: s.branchOffset });
 }
 
-function readPhaseOutcome(ctx: ChainCtx): SessionOutcome {
+function readPhaseOutcome(ctx: RunnerCtx): SessionOutcome {
 	return readSessionOutcome(ctx, { sessionPolicy: "fresh" });
 }
 
 /** Continue policies must slice the prior-stage prefix via `branchOffset`. */
 function readSessionOutcome(
-	ctx: ChainCtx,
+	ctx: RunnerCtx,
 	opts: { sessionPolicy?: SessionPolicy; branchOffset?: number },
 ): SessionOutcome {
 	const fullBranch = readBranch(ctx);
@@ -290,7 +283,7 @@ function buildExtractorCtx(s: StageSession, branch: BranchEntry[]): ExtractorCtx
 function wrapManifest(s: StageSession, payload: ExtractorPayload): Manifest {
 	return finalizeManifest(payload, {
 		skill: s.skill,
-		stageNumber: s.state.lastStageNumber + 1,
+		stageNumber: s.state.lastAllocatedStageNumber + 1,
 		ts: nowIso(),
 		runId: s.runId,
 	});
@@ -318,7 +311,7 @@ interface RetryDeps {
 }
 
 async function retryUntilValid(
-	ctx: ChainCtx,
+	ctx: RunnerCtx,
 	s: StageSession,
 	deps: RetryDeps,
 	initial: Manifest,
@@ -391,7 +384,7 @@ async function retryUntilValid(
  * Translate a thrown `validateManifestData` (the async-schema runtime check at
  * validation.ts:70 is the known thrower) into the canonical fatal-extraction
  * outcome. Without this, the throw escapes retryUntilValid → postStage →
- * runStageProtected's catch, surfacing as MSG_STAGE_THREW — the wrong error
+ * runStageOrRecordFailure's catch, surfacing as MSG_STAGE_THREW — the wrong error
  * class for a schema-shape constraint the workflow author owns. Routing
  * through `kind: "fatal"` puts the failure through `haltStageWithExtractionError`,
  * which attributes the row to `skill`, fires MSG_STAGE_FAILED, and exits
@@ -420,7 +413,7 @@ function validateOrFatal(
  * it inert.
  */
 async function askAgentToFix(
-	ctx: ChainCtx,
+	ctx: RunnerCtx,
 	s: StageSession,
 	attempt: number,
 	failures: ValidationFailure[],
@@ -458,10 +451,10 @@ function spawnPolicyFor(s: StageSession): SessionSpawn {
  * `onCancelled` fires only when a fresh session is cancelled pre-withSession.
  */
 async function spawnSession(
-	ctx: ChainCtx,
+	ctx: RunnerCtx,
 	prompt: string,
 	spawn: SessionSpawn,
-	body: (sessionCtx: ChainCtx) => Promise<void>,
+	body: (sessionCtx: RunnerCtx) => Promise<void>,
 	onCancelled?: () => void,
 ): Promise<void> {
 	if (spawn.kind === "continue") {
@@ -485,7 +478,7 @@ async function spawnSession(
  * continue path uses pi.sendUserMessage + ctx.waitForIdle().
  */
 async function sendAndAwaitIdle(
-	ctx: ChainCtx,
+	ctx: RunnerCtx,
 	msg: string,
 	opts: { sessionPolicy?: SessionPolicy; pi?: ExtensionAPI },
 ): Promise<void> {
@@ -518,7 +511,7 @@ const auditFor = (s: StageSession | PhaseSession): AuditCtx => ({
 });
 
 /** Thunk that re-reads the current branch — used by the retry loop after each agent reply. */
-const freshBranchOf = (ctx: ChainCtx) => () => readBranch(ctx);
+const freshBranchOf = (ctx: RunnerCtx) => () => readBranch(ctx);
 
 /** Per-phase JSONL row label, e.g. "implement (phase 2/4)". */
 const phaseRowLabel = (s: PhaseSession) => `${s.skill} (phase ${s.phaseIndex}/${s.phaseCount})`;

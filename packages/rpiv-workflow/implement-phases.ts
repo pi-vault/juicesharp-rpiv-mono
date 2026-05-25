@@ -6,18 +6,18 @@
  */
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { resolveUnderCwd } from "./internal-utils.js";
 import { MSG_STAGE_COMPLETE, STATUS_KEY, STATUS_PHASE } from "./messages.js";
-import type { ChainCtx, PhaseSession, RunContext } from "./types.js";
+import type { PhaseSession, RunContext, RunnerCtx } from "./types.js";
 
 export interface PhaseFanoutDeps {
-	runPhaseSession: (ctx: ChainCtx, session: PhaseSession) => Promise<void>;
+	runPhaseSession: (ctx: RunnerCtx, session: PhaseSession) => Promise<void>;
 	/**
 	 * Resume the chain after the implement node's phases finish. Receives
 	 * the implement node's name so the routing layer can look up the
 	 * outgoing edge from it.
 	 */
-	advanceAfter: (curCtx: ChainCtx, completedName: string, completedIdx: number, run: RunContext) => Promise<void>;
+	advanceAfter: (curCtx: RunnerCtx, completedName: string, completedIdx: number, run: RunContext) => Promise<void>;
 }
 
 const PHASE_HEADING_REGEX = /^## Phase (\d+):/gm;
@@ -40,7 +40,7 @@ export const MAX_PHASES = 32;
  * actionable error rather than recursing 100+ times.
  */
 export function countPhases(planPath: string, cwd: string): number {
-	const absolutePath = planPath.startsWith("/") ? planPath : join(cwd, planPath);
+	const absolutePath = resolveUnderCwd(cwd, planPath);
 	const content = readFileSync(absolutePath, "utf-8");
 	const matches = content.match(PHASE_HEADING_REGEX);
 	const count = matches ? matches.length : 0;
@@ -64,7 +64,7 @@ export function countPhases(planPath: string, cwd: string): number {
  * look up the outgoing edge from it.
  */
 export async function runImplementPhases(
-	curCtx: ChainCtx,
+	curCtx: RunnerCtx,
 	stageIdx: number,
 	currentName: string,
 	skill: string,

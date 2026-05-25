@@ -4,6 +4,7 @@
  * neither imports back. Depends only on state + messages.
  */
 
+import { assertNever } from "./internal-utils.js";
 import {
 	MSG_STAGE_ABORTED,
 	MSG_STAGE_FAILED,
@@ -14,8 +15,8 @@ import {
 	STATUS_KEY,
 } from "./messages.js";
 import { appendStage, readAllStages, type WorkflowStage } from "./state.js";
-import { assertNever, type StopSignal } from "./transcript.js";
-import type { ChainCtx, RunState } from "./types.js";
+import type { StopSignal } from "./transcript.js";
+import type { RunnerCtx, RunState } from "./types.js";
 
 /** Single source of ISO-8601 timestamps for audit rows + manifest meta. */
 export const nowIso = (): string => new Date().toISOString();
@@ -30,12 +31,12 @@ export interface AuditCtx {
 
 /**
  * Allocates the next `stageNumber`, attempts the append, and returns the
- * assigned number on success (or undefined on I/O failure). `lastStageNumber`
+ * assigned number on success (or undefined on I/O failure). `lastAllocatedStageNumber`
  * advances monotonically — once per call — so a transient failure doesn't
  * cause the next stage to reuse the lost row's number. Higher-level counters
  * (e.g. `stagesCompleted`) gate on the returned value being defined.
  *
- * `wrapManifest`'s `state.lastStageNumber + 1` peek aligns with this allocation
+ * `wrapManifest`'s `state.lastAllocatedStageNumber + 1` peek aligns with this allocation
  * because the manifest is built BEFORE recordStage is called.
  */
 export function recordStage(
@@ -44,13 +45,13 @@ export function recordStage(
 	stage: Omit<WorkflowStage, "stageNumber">,
 	state: RunState,
 ): number | undefined {
-	state.lastStageNumber += 1;
-	const stageNumber = state.lastStageNumber;
+	state.lastAllocatedStageNumber += 1;
+	const stageNumber = state.lastAllocatedStageNumber;
 	return appendStage(cwd, runId, { stageNumber, ...stage }) ? stageNumber : undefined;
 }
 
 /** Surface every artifact recorded so far — recap on stage failure. */
-export function notifyPartialArtifacts(ctx: ChainCtx, cwd: string, runId: string): void {
+export function notifyPartialArtifacts(ctx: RunnerCtx, cwd: string, runId: string): void {
 	const artifactPaths = readAllStages(cwd, runId)
 		.filter((s) => s.artifact)
 		.map((s) => `  • ${s.skill}: ${s.artifact}`)
@@ -61,7 +62,7 @@ export function notifyPartialArtifacts(ctx: ChainCtx, cwd: string, runId: string
 }
 
 export function recordTerminalFailure(
-	ctx: ChainCtx,
+	ctx: RunnerCtx,
 	audit: AuditCtx,
 	args: {
 		status: "failed" | "aborted";
@@ -69,7 +70,7 @@ export function recordTerminalFailure(
 		notifyLevel: "warning" | "error";
 		errMsg: string;
 	},
-	onFailure?: (ctx: ChainCtx) => void,
+	onFailure?: (ctx: RunnerCtx) => void,
 ): void {
 	recordStage(audit.cwd, audit.runId, { skill: audit.skill, status: args.status, ts: nowIso() }, audit.state);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -85,11 +86,11 @@ export function recordTerminalFailure(
  * and state.error.
  */
 export function recordStopFailure(
-	ctx: ChainCtx,
+	ctx: RunnerCtx,
 	audit: AuditCtx,
 	stop: Exclude<StopSignal, "stop">,
 	errorMessage: string,
-	onFailure?: (ctx: ChainCtx) => void,
+	onFailure?: (ctx: RunnerCtx) => void,
 ): void {
 	recordTerminalFailure(ctx, audit, stopFailureArgs(audit.skill, stop, errorMessage), onFailure);
 }
@@ -145,7 +146,7 @@ function stopFailureArgs(
 	}
 }
 
-export function recordCancellation(ctx: ChainCtx, audit: AuditCtx): void {
+export function recordCancellation(ctx: RunnerCtx, audit: AuditCtx): void {
 	recordStage(audit.cwd, audit.runId, { skill: audit.skill, status: "skipped", ts: nowIso() }, audit.state);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 	ctx.ui.notify(MSG_WORKFLOW_CANCELLED, "info");

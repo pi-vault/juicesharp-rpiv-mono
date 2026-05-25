@@ -13,7 +13,7 @@ import type { Manifest } from "./manifest.js";
  * guarantees on every event ctx but doesn't surface on the public base type —
  * call sites use plain method syntax instead of an `as` cast each time.
  */
-export type ChainCtx = ExtensionCommandContext & {
+export type RunnerCtx = ExtensionCommandContext & {
 	isIdle(): boolean;
 	waitForIdle(): Promise<void>;
 };
@@ -34,7 +34,7 @@ export interface RunState {
 	/** Stages whose JSONL row landed on disk. */
 	stagesCompleted: number;
 	/** Most recently allocated stageNumber. Advances on every recordStage call. */
-	lastStageNumber: number;
+	lastAllocatedStageNumber: number;
 	success: boolean;
 	error: string | undefined;
 	backwardJumps: number;
@@ -92,8 +92,8 @@ export interface StageSession extends SessionContext {
 	pi?: ExtensionAPI;
 	/** Only set for continue stages — branch slice offset. */
 	branchOffset?: number;
-	onFailure?: (ctx: ChainCtx) => void;
-	onSuccess: (ctx: ChainCtx, artifact: string | undefined) => Promise<void>;
+	onFailure?: (ctx: RunnerCtx) => void;
+	onSuccess: (ctx: RunnerCtx, artifact: string | undefined) => Promise<void>;
 }
 
 /** One `## Phase N:` iteration of an implement stage. */
@@ -103,5 +103,5 @@ export interface PhaseSession extends SessionContext {
 	phaseCount: number;
 	/** Parent stage's 0-based index. */
 	stageIndex: number;
-	onSuccess: (ctx: ChainCtx) => Promise<void>;
+	onSuccess: (ctx: RunnerCtx) => Promise<void>;
 }

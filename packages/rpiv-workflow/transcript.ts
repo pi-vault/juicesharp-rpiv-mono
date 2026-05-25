@@ -22,11 +22,6 @@ export function classifyStop(branch: BranchEntry[], offsetStart?: number): StopS
 	return lastAssistantStopReason(branch, offsetStart) ?? "stop";
 }
 
-/** Exhaustiveness guard for discriminated-union switches. */
-export function assertNever(value: never): never {
-	throw new Error(`assertNever: unreachable value ${String(value)}`);
-}
-
 export type BranchEntry = {
 	type: string;
 	message?: {
@@ -41,6 +36,11 @@ export type BranchEntry = {
  * union with private discriminators; the cast is unavoidable but must live in
  * one place — calling `getBranch()` directly elsewhere bypasses the module's
  * type discipline.
+ *
+ * Tracked: when `@earendil-works/pi-coding-agent` exposes a public
+ * `Branch.Entry` (or equivalent) type, switch to it and delete the local
+ * `BranchEntry` narrowing above. Until then this cast is the single
+ * documented coupling point to Pi's internal branch shape.
  */
 export function readBranch(ctx: { sessionManager: { getBranch(): unknown } }): BranchEntry[] {
 	return ctx.sessionManager.getBranch() as unknown as BranchEntry[];

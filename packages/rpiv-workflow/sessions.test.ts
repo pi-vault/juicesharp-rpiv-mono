@@ -9,7 +9,7 @@
  *
  * Wiring strategy: every test allocates a temp cwd (audit writes JSONL there)
  * and feeds runStageSession either a `createMockSessionChain` ctx (fresh path,
- * scripted branch) or a hand-rolled ChainCtx (continue path, outer branch).
+ * scripted branch) or a hand-rolled RunnerCtx (continue path, outer branch).
  * Stage nodes carry custom `extractor` functions that close over an attempt
  * counter — this is how we drive retry-loop scenarios without mutating the
  * mock branch between attempts.
@@ -34,7 +34,7 @@ import {
 } from "./messages.js";
 import { runPhaseSession, runStageSession } from "./sessions.js";
 import { typeboxSchema } from "./standard-schema.js";
-import type { ChainCtx, PhaseSession, RunState, StageSession } from "./types.js";
+import type { PhaseSession, RunnerCtx, RunState, StageSession } from "./types.js";
 import { MAX_VALIDATION_RETRIES, MAX_VALIDATION_RETRY_TIMEOUT_MS } from "./validation.js";
 
 // ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ const freshRunState = (overrides: Partial<RunState> = {}): RunState => ({
 	artifactPath: undefined,
 	manifest: undefined,
 	stagesCompleted: 0,
-	lastStageNumber: 0,
+	lastAllocatedStageNumber: 0,
 	success: true,
 	error: undefined,
 	backwardJumps: 0,
@@ -128,7 +128,7 @@ describe("sessions — validation retry loop", () => {
 		const onSuccess = vi.fn(async () => {});
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,
@@ -152,7 +152,7 @@ describe("sessions — validation retry loop", () => {
 		const onSuccess = vi.fn(async () => {});
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,
@@ -184,7 +184,7 @@ describe("sessions — validation retry loop", () => {
 		const onFailure = vi.fn();
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,
@@ -215,7 +215,7 @@ describe("sessions — validation retry loop", () => {
 		const extractor: Extractor = { extract };
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
@@ -245,7 +245,7 @@ describe("sessions — validation retry loop", () => {
 		const onFailure = vi.fn();
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
@@ -304,7 +304,7 @@ describe("sessions — validation retry loop", () => {
 		);
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,
@@ -333,7 +333,7 @@ describe("sessions — validation retry loop", () => {
 		const onFailure = vi.fn();
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,
@@ -362,7 +362,7 @@ describe("sessions — validation retry loop", () => {
 		const onFailure = vi.fn();
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,
@@ -391,7 +391,7 @@ describe("sessions — validation retry loop", () => {
 		});
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
@@ -413,7 +413,7 @@ describe("sessions — validation retry loop", () => {
 	// Q15+IC — an async-returning schema that slipped past the load-time
 	// `isAsyncSchema` probe (or a programmatic runWorkflow that bypassed
 	// loadWorkflows entirely) used to throw from validateManifestData,
-	// escape retryUntilValid → postStage, and land in runStageProtected's
+	// escape retryUntilValid → postStage, and land in runStageOrRecordFailure's
 	// outer catch as MSG_STAGE_THREW — the wrong error class for a schema
 	// constraint the workflow author owns. validateOrFatal funnels the
 	// throw through the canonical kind:"fatal" path so the failure carries
@@ -441,7 +441,7 @@ describe("sessions — validation retry loop", () => {
 		};
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,
@@ -495,7 +495,7 @@ describe("sessions — extractor resolution", () => {
 		const explicit: Extractor = { extract: explicitExtract };
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
@@ -518,7 +518,7 @@ describe("sessions — extractor resolution", () => {
 		const onFailure = vi.fn();
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,
@@ -540,7 +540,7 @@ describe("sessions — extractor resolution", () => {
 		const onSuccess = vi.fn(async () => {});
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,
@@ -593,7 +593,7 @@ describe("sessions — outcome slicing", () => {
 		});
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
@@ -642,7 +642,7 @@ describe("sessions — outcome slicing", () => {
 		});
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
@@ -680,7 +680,7 @@ describe("sessions — outcome slicing", () => {
 		const chain = createMockSessionChain({ cwd: tmpDir, steps: [{ branch }] });
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
@@ -719,7 +719,7 @@ describe("sessions — spawn primitive", () => {
 		});
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
@@ -744,7 +744,7 @@ describe("sessions — spawn primitive", () => {
 		const onSuccess = vi.fn(async () => {});
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,
@@ -773,7 +773,7 @@ describe("sessions — spawn primitive", () => {
 		const onFailure = vi.fn();
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state: freshRunState(),
@@ -816,7 +816,7 @@ describe("sessions — success persistence", () => {
 		// manifest's path is the authoritative source.
 		const manifestPath = ".rpiv/artifacts/research/from-manifest.md";
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,
@@ -839,7 +839,7 @@ describe("sessions — success persistence", () => {
 		const state = freshRunState();
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,
@@ -859,7 +859,7 @@ describe("sessions — success persistence", () => {
 		const state = freshRunState();
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,
@@ -868,7 +868,7 @@ describe("sessions — success persistence", () => {
 		);
 
 		expect(state.stagesCompleted).toBe(1);
-		expect(state.lastStageNumber).toBe(1);
+		expect(state.lastAllocatedStageNumber).toBe(1);
 	});
 
 	it("phase session: row label is `<skill> (phase N/total)`, never notifies completion", async () => {
@@ -891,7 +891,7 @@ describe("sessions — success persistence", () => {
 			onSuccess,
 		};
 
-		await runPhaseSession(chain.ctx as ChainCtx, phase);
+		await runPhaseSession(chain.ctx as RunnerCtx, phase);
 
 		expect(onSuccess).toHaveBeenCalledTimes(1);
 		const rows = readStageRows(tmpDir);
@@ -920,7 +920,7 @@ describe("sessions — success persistence", () => {
 			onSuccess,
 		};
 
-		await runPhaseSession(chain.ctx as ChainCtx, phase);
+		await runPhaseSession(chain.ctx as RunnerCtx, phase);
 
 		expect(onSuccess).not.toHaveBeenCalled();
 		const rows = readStageRows(tmpDir);
@@ -950,7 +950,7 @@ describe("sessions — halt routing", () => {
 		const onFailure = vi.fn();
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,
@@ -972,7 +972,7 @@ describe("sessions — halt routing", () => {
 		const onFailure = vi.fn();
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,
@@ -996,7 +996,7 @@ describe("sessions — halt routing", () => {
 		const onFailure = vi.fn();
 
 		await runStageSession(
-			chain.ctx as ChainCtx,
+			chain.ctx as RunnerCtx,
 			stageSession({
 				cwd: tmpDir,
 				state,

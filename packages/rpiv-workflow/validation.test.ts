@@ -1,18 +1,18 @@
 /**
- * Tests for the validation module — schema-check adapter + `withTimeout`.
- *
- * `withTimeout` is the Q14 walltime cap that wraps the validation-retry
- * loop's `sendAndAwaitIdle`; it lives in validation.ts so the constants
- * (`DEFAULT/MIN/MAX_VALIDATION_RETRY_TIMEOUT_MS`) and the helper are
- * co-located.
+ * Tests for the validation module — schema-check adapter + the `withTimeout`
+ * walltime cap (Q14) that wraps the validation-retry loop's
+ * `sendAndAwaitIdle`. `withTimeout` is a generic Promise.race helper and now
+ * lives in `internal-utils.ts`; the timeout constants
+ * (`DEFAULT/MIN/MAX_VALIDATION_RETRY_TIMEOUT_MS`) stay in `validation.ts`
+ * since they're the validation-domain knobs that drive the helper.
  */
 
 import { describe, expect, it } from "vitest";
+import { withTimeout } from "./internal-utils.js";
 import {
 	DEFAULT_VALIDATION_RETRY_TIMEOUT_MS,
 	MAX_VALIDATION_RETRY_TIMEOUT_MS,
 	MIN_VALIDATION_RETRY_TIMEOUT_MS,
-	withTimeout,
 } from "./validation.js";
 
 describe("withTimeout", () => {

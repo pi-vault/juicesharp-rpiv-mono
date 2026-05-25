@@ -819,7 +819,7 @@ describe("runWorkflow", () => {
 
 		// Invariant throws used to escape runWorkflow uncaught, leaving a
 		// header-only JSONL file invisible to every shape-filtered reader.
-		// runStageProtected now translates them into a recorded failure row
+		// runStageOrRecordFailure now translates them into a recorded failure row
 		// + a populated error envelope, so the result describes the failure
 		// rather than the caller having to catch a stack trace.
 		it("records a failure row when implement node has sessionPolicy continue (no throw escapes)", async () => {
@@ -871,7 +871,7 @@ describe("runWorkflow", () => {
 		// Q12+IB — when a mid-chain stage throws (here: stage 2 hits the
 		// continue-without-pi invariant), the recorded failure must be
 		// attributed to the *failing* stage, not to the prior stage whose
-		// success triggered advanceChain. Before runStageProtected, the
+		// success triggered advanceChain. Before runStageOrRecordFailure, the
 		// advanceChain catch recorded `skill: currentName` (the prior, already-
 		// completed stage), producing two rows for stage 1 (completed +
 		// failed) and zero rows for stage 2.

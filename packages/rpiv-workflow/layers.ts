@@ -8,6 +8,8 @@
  * eliminates the silent-drift risk of two parallel string-literal unions.
  */
 
+import { assertNever } from "./internal-utils.js";
+
 export type ConfigLayer = "built-in" | "user" | "project";
 
 /**
@@ -25,9 +27,7 @@ export function renderConfigLayer(layer: ConfigLayer): string {
 			return "user";
 		case "project":
 			return "project";
-		default: {
-			const _exhaustive: never = layer;
-			return _exhaustive;
-		}
+		default:
+			return assertNever(layer);
 	}
 }

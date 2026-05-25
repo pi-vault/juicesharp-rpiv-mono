@@ -17,7 +17,7 @@ const makeState = (manifestData?: Record<string, unknown>): RunState => ({
 		? { kind: "artifact-md", data: manifestData, meta: { skill: "source", stageNumber: 1, ts: "", runId: "" } }
 		: undefined,
 	stagesCompleted: 0,
-	lastStageNumber: 0,
+	lastAllocatedStageNumber: 0,
 	success: false,
 	error: undefined,
 	backwardJumps: 0,

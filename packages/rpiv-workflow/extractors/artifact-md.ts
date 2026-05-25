@@ -9,6 +9,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { resolveUnderCwd } from "../internal-utils.js";
 import type { Extractor } from "../manifest.js";
 import { extractArtifactPath } from "../transcript.js";
 
@@ -37,7 +38,7 @@ export const artifactMdExtractor: Extractor = {
 			return { payload: undefined, fatal: ERR_NO_ARTIFACT_PATH(ctx.skill) };
 		}
 
-		const absolutePath = artifactPath.startsWith("/") ? artifactPath : `${ctx.cwd}/${artifactPath}`;
+		const absolutePath = resolveUnderCwd(ctx.cwd, artifactPath);
 
 		if (!existsSync(absolutePath)) {
 			return { payload: undefined, fatal: ERR_FILE_MISSING(artifactPath) };

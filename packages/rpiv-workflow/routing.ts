@@ -11,9 +11,7 @@
  * workflow or re-raise.
  */
 
-import type { EdgeContext, EdgeFn, Workflow } from "./api.js";
-
-const STOP = "stop";
+import { type EdgeContext, type EdgeFn, STOP, type Workflow } from "./api.js";
 
 /**
  * Returns the next node name, or `null` if `current` is a terminal (no

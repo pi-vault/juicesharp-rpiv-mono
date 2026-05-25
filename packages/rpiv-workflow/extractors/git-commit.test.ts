@@ -42,7 +42,7 @@ const snapshotCtx = (cwd: string): SnapshotCtx => ({
 		artifactPath: undefined,
 		manifest: undefined,
 		stagesCompleted: 0,
-		lastStageNumber: 0,
+		lastAllocatedStageNumber: 0,
 		success: false,
 		error: undefined,
 		backwardJumps: 0,

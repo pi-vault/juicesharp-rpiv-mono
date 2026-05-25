@@ -56,7 +56,7 @@ const makeState = (manifestData?: Record<string, unknown>): RunState => ({
 		? { kind: "artifact-md", data: manifestData, meta: { skill: "code-review", stageNumber: 1, ts: "", runId: "" } }
 		: undefined,
 	stagesCompleted: 0,
-	lastStageNumber: 0,
+	lastAllocatedStageNumber: 0,
 	success: false,
 	error: undefined,
 	backwardJumps: 0,
@@ -255,7 +255,7 @@ describe("[I3] recordStage signals success and advances stageNumber monotonicall
 		artifactPath: undefined,
 		manifest: undefined,
 		stagesCompleted: 0,
-		lastStageNumber: 0,
+		lastAllocatedStageNumber: 0,
 		success: false,
 		error: undefined,
 		backwardJumps: 0,
@@ -272,10 +272,10 @@ describe("[I3] recordStage signals success and advances stageNumber monotonicall
 			state,
 		);
 		expect(assigned).toBe(1);
-		expect(state.lastStageNumber).toBe(1);
+		expect(state.lastAllocatedStageNumber).toBe(1);
 	});
 
-	it("returns undefined on a write failure but still advances lastStageNumber (no number reuse)", async () => {
+	it("returns undefined on a write failure but still advances lastAllocatedStageNumber (no number reuse)", async () => {
 		const { recordStage } = await import("@juicesharp/rpiv-workflow");
 		const state = freshState();
 		const failedAssignment = recordStage(
@@ -285,7 +285,7 @@ describe("[I3] recordStage signals success and advances stageNumber monotonicall
 			state,
 		);
 		expect(failedAssignment).toBeUndefined();
-		expect(state.lastStageNumber).toBe(1);
+		expect(state.lastAllocatedStageNumber).toBe(1);
 
 		const nextAssignment = recordStage(
 			tmpDir,
@@ -294,7 +294,7 @@ describe("[I3] recordStage signals success and advances stageNumber monotonicall
 			state,
 		);
 		expect(nextAssignment).toBe(2);
-		expect(state.lastStageNumber).toBe(2);
+		expect(state.lastAllocatedStageNumber).toBe(2);
 	});
 });
 

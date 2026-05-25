@@ -16,9 +16,9 @@ import type { Manifest } from "./manifest.js";
 export type StageStatus = "completed" | "failed" | "skipped" | "aborted";
 
 /**
- * Older versions of this code used `stage` instead of `stageNumber`;
- * readers below shape-filter on `stageNumber`, so legacy rows are silently
- * skipped. Audit files are debug artifacts — no migration provided.
+ * Audit files are debug artifacts — no migration provided. Readers
+ * shape-filter on `stageNumber`, so any rows that don't satisfy the current
+ * shape are silently skipped.
  */
 export interface WorkflowStage {
 	stageNumber: number;

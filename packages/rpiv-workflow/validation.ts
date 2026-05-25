@@ -1,8 +1,7 @@
 /**
  * Manifest validation against a `NodeSchema` (Standard Schema v1 under the
- * hood). Plus a walltime-cap helper for the agent-roundtrip retry loop. The
- * schema-library boundary is `~standard.validate`; users may bring Zod /
- * Valibot / ArkType / TypeBox (wrapped via `standard-schema.ts:typeboxSchema`).
+ * hood). The schema-library boundary is `~standard.validate`; users may bring
+ * Zod / Valibot / ArkType / TypeBox (wrapped via `standard-schema.ts:typeboxSchema`).
  */
 
 import type { NodeSchema } from "./api.js";
@@ -37,23 +36,6 @@ export const DEFAULT_VALIDATION_RETRIES = 1;
 export const DEFAULT_VALIDATION_RETRY_TIMEOUT_MS = 5 * 60 * 1000;
 export const MAX_VALIDATION_RETRY_TIMEOUT_MS = 30 * 60 * 1000;
 export const MIN_VALIDATION_RETRY_TIMEOUT_MS = 1_000;
-
-/**
- * Race a promise against `ms`. The inner promise is NOT cancelled — Pi's
- * `ctx.waitForIdle()` has no abort signal today; the dangling promise becomes
- * inert when the next stage's `newSession` replaces the ctx.
- */
-export async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	const timeout = new Promise<never>((_, reject) => {
-		timer = setTimeout(() => reject(new Error(message)), ms);
-	});
-	try {
-		return await Promise.race([promise, timeout]);
-	} finally {
-		if (timer !== undefined) clearTimeout(timer);
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Validation
