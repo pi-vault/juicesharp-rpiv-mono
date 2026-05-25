@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { action, artifact, defineWorkflow } from "./api.js";
 
 // Mock runner to avoid needing the full Pi session runtime.
-vi.mock("./runner.js", () => ({
+vi.mock("./runner/index.js", () => ({
 	runWorkflow: vi.fn(async () => ({ stagesCompleted: 2, success: true })),
 }));
 
@@ -51,7 +51,7 @@ vi.mock("./load/index.js", () => ({
 
 import { parseArgs, registerWorkflowCommand } from "./command.js";
 import { loadWorkflows } from "./load/index.js";
-import { runWorkflow } from "./runner.js";
+import { runWorkflow } from "./runner/index.js";
 
 beforeEach(() => {
 	vi.mocked(runWorkflow).mockReset();

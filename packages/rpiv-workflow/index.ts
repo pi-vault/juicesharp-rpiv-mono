@@ -56,7 +56,7 @@ export type {
 	ManifestMeta,
 	SnapshotCtx,
 } from "./manifest.js";
-export { type RunWorkflowOptions, type RunWorkflowResult, runWorkflow } from "./runner.js";
+export { type RunWorkflowOptions, type RunWorkflowResult, runWorkflow } from "./runner/index.js";
 export { readLastStage, resolveStateFile, resolveWorkflowsDir } from "./state.js";
 export { typeboxSchema } from "./typebox-adapter.js";
 export type { RunContext, RunState } from "./types.js";

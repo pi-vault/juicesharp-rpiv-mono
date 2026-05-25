@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CompletionStrategy, EdgeTarget, NodeDef, Workflow } from "./api.js";
 import { definePredicate, defineStatePredicate, defineWorkflow, threshold } from "./api.js";
 import { countPhases } from "./implement-phases.js";
-import { runWorkflow } from "./runner.js";
+import { runWorkflow } from "./runner/index.js";
 import { appendRoutingDecision, readRoutingDecisions } from "./state.js";
 import { extractArtifactPath, hasAssistantMessage, lastAssistantStopReason } from "./transcript.js";
 import { typeboxSchema } from "./typebox-adapter.js";

@@ -11,7 +11,7 @@ import {
 	MSG_WORKFLOW_THREW,
 } from "./messages.js";
 import { formatWorkflowDetails, formatWorkflowList } from "./preview.js";
-import { runWorkflow } from "./runner.js";
+import { runWorkflow } from "./runner/index.js";
 
 // ---------------------------------------------------------------------------
 // Public entry
