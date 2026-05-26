@@ -87,12 +87,14 @@ describe("writeHeader + readAllStages + readLastStage", () => {
 
 		const stage1: WorkflowStage = {
 			stageNumber: 1,
+			stage: "discover",
 			skill: "discover",
 			status: "completed",
 			ts: "2026-05-20T15:31:00-0400",
 		};
 		const stage2: WorkflowStage = {
 			stageNumber: 2,
+			stage: "research",
 			skill: "research",
 			status: "completed",
 			ts: "2026-05-20T15:35:00-0400",
@@ -120,6 +122,7 @@ describe("writeHeader + readAllStages + readLastStage", () => {
 
 		const failed: WorkflowStage = {
 			stageNumber: 3,
+			stage: "design",
 			skill: "design",
 			status: "failed",
 			ts: "2026-05-20T15:40:00-0400",
@@ -156,6 +159,7 @@ describe("fail-soft I/O", () => {
 		expect(() =>
 			appendStage("/dev/null/impossible", "test", {
 				stageNumber: 1,
+				stage: "discover",
 				skill: "discover",
 				status: "completed",
 				ts: "2026",
@@ -169,6 +173,7 @@ describe("fail-soft I/O", () => {
 			expect(
 				appendStage("/dev/null/impossible", "test", {
 					stageNumber: 1,
+					stage: "discover",
 					skill: "discover",
 					status: "completed",
 					ts: "2026",
@@ -177,6 +182,7 @@ describe("fail-soft I/O", () => {
 			expect(
 				appendStage(tmpDir, "ok-run", {
 					stageNumber: 1,
+					stage: "discover",
 					skill: "discover",
 					status: "completed",
 					ts: "2026",
@@ -209,8 +215,14 @@ describe("fail-soft I/O", () => {
 		// view. Now each line parses in its own try/catch.
 		const runId = "partial-write";
 		writeHeader(tmpDir, { runId, workflow: "mid", input: "test", ts: "2026" });
-		appendStage(tmpDir, runId, { stageNumber: 1, skill: "research", status: "completed", ts: "2026" });
-		appendStage(tmpDir, runId, { stageNumber: 2, skill: "design", status: "completed", ts: "2026" });
+		appendStage(tmpDir, runId, {
+			stageNumber: 1,
+			stage: "research",
+			skill: "research",
+			status: "completed",
+			ts: "2026",
+		});
+		appendStage(tmpDir, runId, { stageNumber: 2, stage: "design", skill: "design", status: "completed", ts: "2026" });
 		// Simulate a truncated trailing line (e.g. process killed mid-append).
 		appendFileSync(stateFilePath(tmpDir, runId), '{"stageNumber":3,"skill":"impl', "utf-8");
 
@@ -244,7 +256,13 @@ describe("readHeader", () => {
 	it("returns undefined when the first line is not a valid header", () => {
 		const runId = "bad-first-line";
 		// Skip writeHeader — append a stage row first so the first line lacks header fields.
-		appendStage(tmpDir, runId, { stageNumber: 1, skill: "research", status: "completed", ts: "2026" });
+		appendStage(tmpDir, runId, {
+			stageNumber: 1,
+			stage: "research",
+			skill: "research",
+			status: "completed",
+			ts: "2026",
+		});
 		expect(readHeader(tmpDir, runId)).toBeUndefined();
 	});
 
@@ -300,7 +318,7 @@ describe("listArtifacts", () => {
 		kind: "artifact-md",
 		artifacts: artifacts.map((handle) => ({ handle })),
 		data: {},
-		meta: { skill: "x", stageNumber: 1, ts: "2026", runId: "x" },
+		meta: { stage: "x", skill: "x", stageNumber: 1, ts: "2026", runId: "x" },
 	});
 
 	it("projects every artifact across stage rows (one entry per artifact, in stage order)", () => {
@@ -308,15 +326,17 @@ describe("listArtifacts", () => {
 		writeHeader(tmpDir, { runId, workflow: "mid", input: "x", ts: "2026" });
 		appendStage(tmpDir, runId, {
 			stageNumber: 1,
+			stage: "research",
 			skill: "research",
 			status: "completed",
 			ts: "2026",
 			output: mkOutput([{ kind: "fs", path: ".rpiv/artifacts/research/r.md" }]),
 		});
 		// Stage without artifacts — should NOT appear in the list.
-		appendStage(tmpDir, runId, { stageNumber: 2, skill: "commit", status: "completed", ts: "2026" });
+		appendStage(tmpDir, runId, { stageNumber: 2, stage: "commit", skill: "commit", status: "completed", ts: "2026" });
 		appendStage(tmpDir, runId, {
 			stageNumber: 3,
+			stage: "design",
 			skill: "design",
 			status: "completed",
 			ts: "2026",
@@ -324,15 +344,23 @@ describe("listArtifacts", () => {
 		});
 
 		expect(listArtifacts(tmpDir, runId)).toEqual([
-			{ skill: "research", artifact: { handle: { kind: "fs", path: ".rpiv/artifacts/research/r.md" } } },
-			{ skill: "design", artifact: { handle: { kind: "fs", path: ".rpiv/artifacts/design/d.md" } } },
+			{
+				stage: "research",
+				skill: "research",
+				artifact: { handle: { kind: "fs", path: ".rpiv/artifacts/research/r.md" } },
+			},
+			{
+				stage: "design",
+				skill: "design",
+				artifact: { handle: { kind: "fs", path: ".rpiv/artifacts/design/d.md" } },
+			},
 		]);
 	});
 
 	it("returns an empty array when no stage row carries an artifact", () => {
 		const runId = "no-artifacts";
 		writeHeader(tmpDir, { runId, workflow: "mid", input: "x", ts: "2026" });
-		appendStage(tmpDir, runId, { stageNumber: 1, skill: "commit", status: "completed", ts: "2026" });
+		appendStage(tmpDir, runId, { stageNumber: 1, stage: "commit", skill: "commit", status: "completed", ts: "2026" });
 		expect(listArtifacts(tmpDir, runId)).toEqual([]);
 	});
 });

@@ -17,7 +17,7 @@
 
 import {
 	type AuditCtx,
-	fanoutRowLabel,
+	fanoutRowStage,
 	nowIso,
 	recordCancellation,
 	recordStage,
@@ -128,20 +128,21 @@ function haltFanout(ctx: RunnerCtx, s: FanoutSession, stop: Exclude<StopSignal, 
  * Output assignment lives here so callers get the same "output is
  * set iff the row that carried it landed" invariant.
  */
-function tryRecordStage(s: SessionContext, label: string, output: Output | undefined): boolean {
+function tryRecordStage(s: SessionContext, row: { stage: string; skill?: string; output?: Output }): boolean {
 	const assigned = recordStage(
 		s.cwd,
 		s.runId,
 		{
-			skill: label,
+			stage: row.stage,
+			skill: row.skill,
 			status: "completed",
 			ts: nowIso(),
-			output,
+			output: row.output,
 		},
 		s.state,
 	);
 	if (assigned === undefined) return false;
-	if (output) s.state.output = output;
+	if (row.output) s.state.output = row.output;
 	s.state.stagesCompleted++;
 	return true;
 }
@@ -175,7 +176,7 @@ function maybeAdvancePrimary(s: StageSession, output: Output): void {
  * `state.termination.error` to halt the run.
  */
 function recordStageSuccess(ctx: RunnerCtx, s: StageSession, output: Output): boolean {
-	if (tryRecordStage(s, s.skill, output)) {
+	if (tryRecordStage(s, { stage: s.stageName, skill: s.skill, output })) {
 		maybeAdvancePrimary(s, output);
 		ctx.ui.notify(MSG_STAGE_COMPLETE(s.skill), "info");
 		return true;
@@ -186,9 +187,9 @@ function recordStageSuccess(ctx: RunnerCtx, s: StageSession, output: Output): bo
 }
 
 function recordFanoutSuccess(s: FanoutSession): boolean {
-	const label = fanoutRowLabel(s);
-	if (tryRecordStage(s, label, undefined)) return true;
-	s.state.termination.error = ERR_AUDIT_WRITE_FAILED(label);
+	const stageLabel = fanoutRowStage(s);
+	if (tryRecordStage(s, { stage: stageLabel, skill: s.skill })) return true;
+	s.state.termination.error = ERR_AUDIT_WRITE_FAILED(stageLabel);
 	return false;
 }
 
@@ -226,5 +227,6 @@ const auditFor = (s: StageSession | FanoutSession): AuditCtx => ({
 	cwd: s.cwd,
 	runId: s.runId,
 	state: s.state,
+	stageName: "unitIndex" in s ? fanoutRowStage(s) : s.stageName,
 	skill: s.skill,
 });

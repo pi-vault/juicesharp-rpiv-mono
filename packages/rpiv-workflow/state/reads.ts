@@ -63,7 +63,9 @@ function readJsonlRows<T>(cwd: string, runId: string, match: (row: unknown) => r
 }
 
 const isWorkflowStage = (row: unknown): row is WorkflowStage =>
-	!!row && typeof (row as { stageNumber?: unknown }).stageNumber === "number";
+	!!row &&
+	typeof (row as { stageNumber?: unknown }).stageNumber === "number" &&
+	typeof (row as { stage?: unknown }).stage === "string";
 
 const isRoutingDecision = (row: unknown): row is RoutingDecision =>
 	!!row && (row as { type?: unknown }).type === "routing";
@@ -93,21 +95,28 @@ export function readRoutingDecisions(cwd: string, runId: string): RoutingDecisio
 }
 
 /**
- * Project a run's stage rows to the (skill, artifact) pairs that
+ * Project a run's stage rows to the (stage, artifact) pairs that
  * actually carried at least one artifact. One entry per artifact —
- * stages with multi-artifact resolvers expand to N entries. Used by
+ * stages with multi-artifact collectors expand to N entries. Used by
  * `notifyPartialArtifacts` for the failure recap and by past-runs UIs
  * (the `listRuns` API) for run summaries.
+ *
+ * `stage` is the workflow stage's record key (always present); `skill`
+ * is the Pi skill body when this row recorded a skill stage (absent
+ * for script stages).
  *
  * Reads from `output.artifacts` (single source); rows without an
  * output, or with an empty artifacts list, contribute nothing.
  */
-export function listArtifacts(cwd: string, runId: string): Array<{ skill: string; artifact: Artifact }> {
-	const out: Array<{ skill: string; artifact: Artifact }> = [];
+export function listArtifacts(
+	cwd: string,
+	runId: string,
+): Array<{ stage: string; skill?: string; artifact: Artifact }> {
+	const out: Array<{ stage: string; skill?: string; artifact: Artifact }> = [];
 	for (const s of readAllStages(cwd, runId)) {
 		const artifacts = s.output?.artifacts;
 		if (!artifacts) continue;
-		for (const artifact of artifacts) out.push({ skill: s.skill, artifact });
+		for (const artifact of artifacts) out.push({ stage: s.stage, skill: s.skill, artifact });
 	}
 	return out;
 }

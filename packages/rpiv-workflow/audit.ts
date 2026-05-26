@@ -29,20 +29,21 @@ export const nowIso = (): string => new Date().toISOString();
 
 /**
  * Minimal bookkeeping ctx. Structurally derived from `SessionContext` so any
- * future field added to the four-field base lands here too — no duplicate
+ * future field added to the base lands here too — no duplicate
  * maintenance. Both `StageSession` and `FanoutSession` collapse to this.
  */
-export type AuditCtx = Pick<SessionContext, "cwd" | "runId" | "state" | "skill">;
+export type AuditCtx = Pick<SessionContext, "cwd" | "runId" | "state" | "stageName" | "skill">;
 
 /**
- * JSONL row label for fanout-unit rows — stage rows use `s.skill` verbatim;
- * unit rows append the user-supplied `id` when present, falling back to
- * `label` (e.g. `"implement (phase-2)"` or `"implement (phase 2/4)"`) so
+ * JSONL `WorkflowStage.stage` value for fanout-unit rows — built from
+ * the parent stage's record key (`stageName`) suffixed with the
+ * user-supplied `id` when present, falling back to `label`
+ * (e.g. `"implement (phase-2)"` or `"implement (phase 2/4)"`) so
  * post-hoc readers can distinguish loop iterations. Owned by the audit
  * layer because the JSONL row shape is its concern; the runner stays
  * neutral about the wording.
  */
-export const fanoutRowLabel = (s: FanoutSession): string => `${s.skill} (${s.id ?? s.label})`;
+export const fanoutRowStage = (s: FanoutSession): string => `${s.stageName} (${s.id ?? s.label})`;
 
 /**
  * Allocates the next `stageNumber`, attempts the append, and returns the
@@ -69,7 +70,7 @@ export function recordStage(
 export function notifyPartialArtifacts(ctx: RunnerCtx, cwd: string, runId: string): void {
 	const items = listArtifacts(cwd, runId);
 	if (items.length === 0) return;
-	const artifactList = items.map((i) => `  • ${i.skill}: ${handleToString(i.artifact.handle)}`).join("\n");
+	const artifactList = items.map((i) => `  • ${i.stage}: ${handleToString(i.artifact.handle)}`).join("\n");
 	ctx.ui.notify(MSG_PARTIAL_ARTIFACTS(artifactList), "info");
 }
 
@@ -84,7 +85,12 @@ export function recordTerminalFailure(
 	},
 	onFailure?: (ctx: RunnerCtx) => void,
 ): void {
-	recordStage(audit.cwd, audit.runId, { skill: audit.skill, status: args.status, ts: nowIso() }, audit.state);
+	recordStage(
+		audit.cwd,
+		audit.runId,
+		{ stage: audit.stageName, skill: audit.skill, status: args.status, ts: nowIso() },
+		audit.state,
+	);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 	ctx.ui.notify(args.notifyMsg, args.notifyLevel);
 	onFailure?.(ctx);
@@ -159,7 +165,12 @@ function stopFailureArgs(
 }
 
 export function recordCancellation(ctx: RunnerCtx, audit: AuditCtx): void {
-	recordStage(audit.cwd, audit.runId, { skill: audit.skill, status: "skipped", ts: nowIso() }, audit.state);
+	recordStage(
+		audit.cwd,
+		audit.runId,
+		{ stage: audit.stageName, skill: audit.skill, status: "skipped", ts: nowIso() },
+		audit.state,
+	);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 	ctx.ui.notify(MSG_WORKFLOW_CANCELLED, "info");
 	// `success: false` alone can't distinguish "cancelled" from "never started";

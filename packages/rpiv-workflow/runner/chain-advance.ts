@@ -124,7 +124,7 @@ function checkBackwardJumpGuard(curCtx: RunnerCtx, run: RunContext, nextName: st
 	if (state.telemetry.backwardJumps <= run.maxBackwardJumps) return true;
 	recordTerminalFailure(
 		curCtx,
-		{ cwd: run.cwd, runId: run.runId, state, skill: nextName },
+		{ cwd: run.cwd, runId: run.runId, state, stageName: nextName, skill: nextName },
 		{
 			status: "failed",
 			notifyMsg: MSG_BACKWARD_JUMP_EXHAUSTED(state.telemetry.backwardJumps, run.maxBackwardJumps),
@@ -143,7 +143,7 @@ function checkBackwardJumpGuard(curCtx: RunnerCtx, run: RunContext, nextName: st
 function haltOnRoutingError(curCtx: RunnerCtx, run: RunContext, currentName: string, reason: string): void {
 	recordTerminalFailure(
 		curCtx,
-		{ cwd: run.cwd, runId: run.runId, state: run.state, skill: currentName },
+		{ cwd: run.cwd, runId: run.runId, state: run.state, stageName: currentName, skill: currentName },
 		{
 			status: "failed",
 			notifyMsg: MSG_CHAIN_ADVANCE_FAILED(currentName, reason),

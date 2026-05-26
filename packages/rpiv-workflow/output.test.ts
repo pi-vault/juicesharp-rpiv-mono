@@ -13,6 +13,7 @@ import { fs } from "./handle.js";
 import { finalizeOutput } from "./output.js";
 
 const baseCtx = {
+	stage: "research",
 	skill: "research",
 	stageNumber: 3,
 	ts: "2026-05-24T08:00:00Z",
@@ -30,6 +31,7 @@ describe("finalizeOutput", () => {
 			baseCtx,
 		);
 		expect(m.meta).toEqual({
+			stage: "research",
 			skill: "research",
 			stageNumber: 3,
 			ts: "2026-05-24T08:00:00Z",

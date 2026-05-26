@@ -76,6 +76,7 @@ const stage = (overrides: Partial<StageDef> = {}): StageDef => ({
 const stageSession = (overrides: Partial<StageSession> & Pick<StageSession, "cwd" | "state">): StageSession => ({
 	runId: "run-test",
 	prompt: "/skill:test arg",
+	stageName: "test",
 	skill: "test",
 	stage: stage(),
 	stageIndex: 0,
@@ -1012,6 +1013,7 @@ describe("sessions — success persistence", () => {
 			runId: "run-test",
 			state,
 			prompt: "/skill:implement phase",
+			stageName: "implement",
 			skill: "implement",
 			unitIndex: 2,
 			label: "phase 2/4",
@@ -1023,7 +1025,8 @@ describe("sessions — success persistence", () => {
 
 		expect(onSuccess).toHaveBeenCalledTimes(1);
 		const rows = readStageRows(tmpDir);
-		expect(rows[0]?.skill).toBe("implement (phase 2/4)");
+		expect(rows[0]?.stage).toBe("implement (phase 2/4)");
+		expect(rows[0]?.skill).toBe("implement");
 		// Phase rows MUST NOT notify — the parent stage owns the completion banner.
 		expect(chain.notifications.some((n) => /completed/.test(n.msg))).toBe(false);
 	});
@@ -1041,6 +1044,7 @@ describe("sessions — success persistence", () => {
 			runId: "run-test",
 			state,
 			prompt: "/skill:implement phase",
+			stageName: "implement",
 			skill: "implement",
 			unitIndex: 1,
 			label: "phase 1/2",
@@ -1054,6 +1058,7 @@ describe("sessions — success persistence", () => {
 		const rows = readStageRows(tmpDir);
 		// Phase halt writes a "failed" row via recordStopFailure → noResponse arm.
 		expect(rows[0]?.status).toBe("failed");
+		expect(rows[0]?.stage).toBe("implement (phase 1/2)");
 		expect(rows[0]?.skill).toBe("implement");
 	});
 });

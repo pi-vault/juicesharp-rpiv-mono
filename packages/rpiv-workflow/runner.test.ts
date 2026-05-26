@@ -402,10 +402,12 @@ describe("runWorkflow", () => {
 		const { stages } = readState(tmpDir);
 		// header + research + 3 phase rows = 4 stage entries
 		expect(stages).toHaveLength(4);
-		expect(stages[0]).toMatchObject({ skill: "research", status: "completed" });
-		expect(stages[1]?.skill).toBe("implement (phase 1/3)");
-		expect(stages[2]?.skill).toBe("implement (phase 2/3)");
-		expect(stages[3]?.skill).toBe("implement (phase 3/3)");
+		expect(stages[0]).toMatchObject({ stage: "research", skill: "research", status: "completed" });
+		// Fanout-unit identity prefix lives on `.stage`; `.skill` carries the raw skill body.
+		expect(stages[1]?.stage).toBe("implement (phase 1/3)");
+		expect(stages[2]?.stage).toBe("implement (phase 2/3)");
+		expect(stages[3]?.stage).toBe("implement (phase 3/3)");
+		expect(stages.slice(1).every((s) => s.skill === "implement")).toBe(true);
 		expect(stages.slice(1).every((s) => s.status === "completed")).toBe(true);
 	});
 
@@ -441,8 +443,54 @@ describe("runWorkflow", () => {
 		expect(result.success).toBe(true);
 
 		const { stages } = readState(tmpDir);
-		expect(stages[1]?.skill).toBe("implement (phase-1)");
-		expect(stages[2]?.skill).toBe("implement (phase 2/2)");
+		expect(stages[1]?.stage).toBe("implement (phase-1)");
+		expect(stages[2]?.stage).toBe("implement (phase 2/2)");
+		expect(stages[1]?.skill).toBe("implement");
+		expect(stages[2]?.skill).toBe("implement");
+	});
+
+	it("aliased skill stage: .stage carries the record key, .skill carries the overridden skill body", async () => {
+		// Regression for Phase A.0 split: pre-rename, the JSONL row carried a
+		// single `.skill` field that conflated workflow-graph identity (record
+		// key) with the Pi skill body. An aliased stage like:
+		//   stages: { "implement-after-revise": acts({ skill: "implement" }) }
+		// recorded `.skill === "implement"` and silently lost the record key.
+		// After the split, the row pins both — record key on `.stage`, skill
+		// body on `.skill`.
+		const chain = createMockSessionChain({
+			cwd: tmpDir,
+			steps: [
+				{ branch: [mockAssistantMessage("Plan ready: .rpiv/artifacts/plans/p.md")] },
+				{ branch: [mockAssistantMessage("implement done")] },
+			],
+		});
+
+		const workflow = defineWorkflow({
+			name: "aliased",
+			start: "research",
+			stages: {
+				research: { kind: "produces", sessionPolicy: "fresh", outcome: transcriptArtifactMdOutcome },
+				"implement-after-revise": { kind: "side-effect", sessionPolicy: "fresh", skill: "implement" },
+			},
+			edges: { research: "implement-after-revise", "implement-after-revise": "stop" },
+		});
+
+		mkdirSync(join(tmpDir, ".rpiv", "artifacts", "plans"), { recursive: true });
+		writeFileSync(join(tmpDir, ".rpiv", "artifacts", "plans", "p.md"), "# Plan\n");
+
+		const result = await runWorkflow(chain.ctx, { workflow, input: "x" });
+		expect(result.success).toBe(true);
+
+		const { stages } = readState(tmpDir);
+		expect(stages).toHaveLength(2);
+		// Common-case stage (non-aliased): record key === skill body, both equal.
+		expect(stages[0]?.stage).toBe("research");
+		expect(stages[0]?.skill).toBe("research");
+		// Aliased stage: record key and skill body diverge — both preserved.
+		expect(stages[1]?.stage).toBe("implement-after-revise");
+		expect(stages[1]?.skill).toBe("implement");
+		// The dispatched message uses the skill body, not the record key.
+		expect(chain.sentMessages[1]).toMatch(/^\/skill:implement /);
 	});
 
 	it("halts the chain when the agent ends with stopReason: aborted (user pressed ESC)", async () => {

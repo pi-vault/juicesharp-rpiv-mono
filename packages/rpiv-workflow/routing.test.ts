@@ -19,7 +19,7 @@ const makeState = (outputData?: Record<string, unknown>): RunState => ({
 				kind: "artifact-md",
 				artifacts: [],
 				data: outputData,
-				meta: { skill: "source", stageNumber: 1, ts: "", runId: "" },
+				meta: { stage: "source", skill: "source", stageNumber: 1, ts: "", runId: "" },
 			}
 		: undefined,
 	stagesCompleted: 0,

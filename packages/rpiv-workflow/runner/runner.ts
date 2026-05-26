@@ -249,7 +249,7 @@ export async function runStageOrRecordFailure(
 		if (e instanceof StagePreflightError) {
 			recordTerminalFailure(
 				curCtx,
-				{ cwd: run.cwd, runId: run.runId, state: run.state, skill: e.skill },
+				{ cwd: run.cwd, runId: run.runId, state: run.state, stageName: name, skill: e.skill },
 				{ status: "failed", notifyMsg: e.notifyMsg, notifyLevel: "error", errMsg: e.errMsg },
 				e.notifyPartial ? (ctx) => notifyPartialArtifacts(ctx, run.cwd, run.runId) : undefined,
 			);
@@ -258,7 +258,7 @@ export async function runStageOrRecordFailure(
 		const reason = e instanceof Error ? e.message : String(e);
 		recordTerminalFailure(
 			curCtx,
-			{ cwd: run.cwd, runId: run.runId, state: run.state, skill: name },
+			{ cwd: run.cwd, runId: run.runId, state: run.state, stageName: name, skill: name },
 			{ status: "failed", notifyMsg: MSG_STAGE_THREW(name, reason), notifyLevel: "error", errMsg: reason },
 		);
 	}

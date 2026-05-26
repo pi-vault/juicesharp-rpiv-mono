@@ -104,6 +104,7 @@ describe("[I2] readers must not silently drop the first row when no header is on
 		const filePath = stateFilePath(tmpDir, runId);
 		const stageRow = {
 			stageNumber: 1,
+			stage: "research",
 			skill: "research",
 			artifact: ".rpiv/artifacts/research/r.md",
 			status: "completed" as const,
@@ -255,7 +256,7 @@ describe("[I3] recordStage signals success and advances stageNumber monotonicall
 		const assigned = recordStage(
 			tmpDir,
 			"run-1",
-			{ skill: "research", status: "completed", ts: "2026-05-23T00:00:00Z" },
+			{ stage: "research", skill: "research", status: "completed", ts: "2026-05-23T00:00:00Z" },
 			state,
 		);
 		expect(assigned).toBe(1);
@@ -268,7 +269,7 @@ describe("[I3] recordStage signals success and advances stageNumber monotonicall
 		const failedAssignment = recordStage(
 			"/dev/null/impossible",
 			"run-1",
-			{ skill: "research", status: "completed", ts: "2026-05-23T00:00:00Z" },
+			{ stage: "research", skill: "research", status: "completed", ts: "2026-05-23T00:00:00Z" },
 			state,
 		);
 		expect(failedAssignment).toBeUndefined();
@@ -277,7 +278,7 @@ describe("[I3] recordStage signals success and advances stageNumber monotonicall
 		const nextAssignment = recordStage(
 			tmpDir,
 			"run-1",
-			{ skill: "design", status: "completed", ts: "2026-05-23T00:00:01Z" },
+			{ stage: "design", skill: "design", status: "completed", ts: "2026-05-23T00:00:01Z" },
 			state,
 		);
 		expect(nextAssignment).toBe(2);
@@ -332,7 +333,7 @@ describe("[Q7] non-first stage with no artifactPath halts instead of reusing ori
 // I9 — Phase fanout must label JSONL rows by stage.skill, not by the stage name.
 // ---------------------------------------------------------------------------
 
-describe("[I9] phase fanout labels by skill name, not by aliased stage name", () => {
+describe("[I9] phase fanout rows preserve both stage name (record key) and skill body across aliasing", () => {
 	let tmpDir: string;
 
 	beforeEach(() => {
@@ -351,7 +352,7 @@ describe("[I9] phase fanout labels by skill name, not by aliased stage name", ()
 		return lines.map((l) => JSON.parse(l));
 	};
 
-	it("phase rows for an aliased implement node carry skill=implement, not the node name", async () => {
+	it("phase rows for an aliased implement stage carry skill=implement AND stage='implement-after-revise (phase N/M)'", async () => {
 		const planRelPath = ".rpiv/artifacts/plans/p.md";
 		mkdirSync(join(tmpDir, ".rpiv", "artifacts", "plans"), { recursive: true });
 		writeFileSync(join(tmpDir, planRelPath), "# Plan\n\n## Phase 1: a\nbody\n## Phase 2: b\nbody\n");
@@ -400,12 +401,14 @@ describe("[I9] phase fanout labels by skill name, not by aliased stage name", ()
 		]);
 
 		const phaseRows = readRows(tmpDir).filter(
-			(r) => typeof r.skill === "string" && (r.skill as string).includes("phase"),
+			(r) => typeof r.stage === "string" && (r.stage as string).includes("phase"),
 		);
 		expect(phaseRows).toHaveLength(2);
 		for (const row of phaseRows) {
-			expect(row.skill).toMatch(/^implement \(phase \d+\/\d+\)$/);
-			expect(row.skill).not.toMatch(/implement-after-revise/);
+			// .stage carries the aliased record key + unit suffix (workflow-graph identity).
+			expect(row.stage).toMatch(/^implement-after-revise \(phase \d+\/\d+\)$/);
+			// .skill carries the raw Pi skill body — no aliasing, no unit suffix.
+			expect(row.skill).toBe("implement");
 		}
 	});
 });

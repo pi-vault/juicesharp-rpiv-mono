@@ -18,7 +18,10 @@ import type { GitCommitData } from "./outcomes/git-commit.js";
 // ---------------------------------------------------------------------------
 
 export interface OutputMeta {
-	skill: string;
+	/** Workflow stage record key — matches `WorkflowStage.stage`. */
+	stage: string;
+	/** Pi skill body when the producing stage was skill-based; absent for script stages. Matches `WorkflowStage.skill?`. */
+	skill?: string;
 	/** 1-based; matches `WorkflowStage.stageNumber`. */
 	stageNumber: number;
 	/** ISO-8601. */

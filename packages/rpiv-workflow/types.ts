@@ -109,8 +109,15 @@ export interface RunContext {
 /**
  * Per-stage / per-unit common base. Extended by `StageSession` and
  * `FanoutSession`; consumed in pick form by `AuditCtx` (audit.ts) so the audit
- * layer pins its dependency on the four-field shape structurally instead of
+ * layer pins its dependency on this shape structurally instead of
  * duplicating the field list.
+ *
+ * `stageName` is the workflow stage's record key — the value that lands
+ * in `WorkflowStage.stage`. `skill` is the Pi skill body the runner
+ * dispatches (`/skill:<skill>`). They're equal in the common case but
+ * diverge for aliased stages (`stages: { "implement-after-revise":
+ * acts({ skill: "implement" }) }` → stageName="implement-after-revise",
+ * skill="implement").
  */
 export interface SessionContext {
 	cwd: string;
@@ -118,7 +125,9 @@ export interface SessionContext {
 	state: RunState;
 	/** `/skill:<name> <args>`. */
 	prompt: string;
-	/** Status-line + JSONL "skill" label. */
+	/** Workflow stage record key — JSONL `WorkflowStage.stage` value. */
+	stageName: string;
+	/** Pi skill body — `/skill:<skill>` dispatch + status-line label + JSONL `WorkflowStage.skill`. */
 	skill: string;
 }
 
@@ -139,9 +148,9 @@ export interface StageSession extends SessionContext {
 /**
  * One unit of a fanout iteration. `label` is the user-supplied
  * disambiguating tag from `FanoutUnit.label`; it's woven into the status
- * line (`STATUS_FANOUT_UNIT`). The JSONL row (`fanoutRowLabel`) prefers
- * `id` when present and falls back to `label` so the runner adds no
- * implicit wording.
+ * line (`STATUS_FANOUT_UNIT`). The JSONL row's `stage` value (built by
+ * `fanoutRowStage`) prefixes the parent's `stageName` with `id ?? label`
+ * so the runner adds no implicit wording.
  */
 export interface FanoutSession extends SessionContext {
 	/** 1-based position within the run's fanout array — for halt diagnostics. */

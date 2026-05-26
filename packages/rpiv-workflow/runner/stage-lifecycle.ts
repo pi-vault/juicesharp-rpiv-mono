@@ -154,6 +154,7 @@ export async function runStage(curCtx: RunnerCtx, currentName: string, idx: numb
 		runId: run.runId,
 		state: run.state,
 		prompt,
+		stageName: stage.name,
 		skill: stage.skill,
 		stage: stage.def,
 		stageIndex: idx,
@@ -283,7 +284,7 @@ function computeBranchOffset(curCtx: RunnerCtx, def: StageDef): number | undefin
 async function ensureInputValid(stage: ResolvedStage, run: RunContext): Promise<void> {
 	if (!stage.def.inputSchema || run.state.output?.data === undefined) return;
 	const timeoutMs = clampValidateTimeoutMs(stage.def.validateTimeoutMs);
-	const prevSkill = run.state.output.meta.skill || "unknown";
+	const prevSkill = run.state.output.meta.stage || "unknown";
 
 	let result: ValidationResult;
 	try {

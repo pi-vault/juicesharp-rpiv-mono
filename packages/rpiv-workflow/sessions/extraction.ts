@@ -112,6 +112,7 @@ function buildCollectCtx(s: StageSession, branch: BranchEntry[], branchOffset: n
 
 function wrapOutput(s: StageSession, parts: { kind: string; artifacts: readonly Artifact[]; data: unknown }): Output {
 	return finalizeOutput(parts, {
+		stage: s.stageName,
 		skill: s.skill,
 		stageNumber: s.state.lastAllocatedStageNumber + 1,
 		ts: nowIso(),

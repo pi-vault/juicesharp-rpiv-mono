@@ -65,6 +65,7 @@ export async function runFanout(
 		runId,
 		state,
 		prompt: `/skill:${skill} ${unit.prompt}`,
+		stageName: currentName,
 		skill,
 		unitIndex: p,
 		label: unit.label,
