@@ -75,6 +75,23 @@ Three factories for the two stage kinds:
 - `acts(overrides?)` — `kind: "side-effect"`. The skill's side effect IS the work (commit, implement). The next stage inherits the prior artifact list forward — the stage's prompt receives the upstream primary artifact's handle. Without a Pi session, use [`acts.script`](#script-stages-no-pi-session).
 - `terminal(overrides?)` — `kind: "side-effect"` with `inheritsArtifacts: false`. A side-effect stage that does NOT inherit the upstream artifact: its prompt receives `originalInput` (the run's brief), the upstream-artifact preflight is bypassed, and the rolling primary slot is cleared on success so anything downstream also starts without an inherited handle. The right answer for a final cleanup / summary / post-run notification stage that shouldn't be coupled to the upstream chain. Without a Pi session, use [`terminal.script`](#script-stages-no-pi-session).
 
+### Multi-input stages — `reads:` and the named-publish registry
+
+A stage that needs more than one upstream artifact (the canonical example: a "revise plan based on review" step that consumes both the plan and the review) declares `reads:` against names it expects in the registry:
+
+```ts
+revise: produces({ outcome: planOutcome, reads: ["plans", "reviews"] })
+```
+
+When set, the runner builds a labelled-flag prompt — `/skill:revise --plans <plan-path> --reviews <review-path>` — replacing the default single-artifact form. Multi-artifact stages get flag repetition (`--plans <a> --plans <b>`).
+
+Names address `state.named`, an accumulating registry every `produces` stage appends onto on each successful run. The slot key is `outcome.name ?? stage.<record-key>`:
+
+- **Outcome carries a name.** Multiple stages wiring the same outcome converge — both stages append onto the same `state.named[name]` slot, latest-wins on read. This is how to express "two stages both produce the canonical plan" without restating the name on each stage.
+- **Outcome carries no name.** Stages publish under their record key. Downstream `reads: ["blueprint", "code-review"]` references stage names directly.
+
+Slots are arrays — iteration history is preserved across backward-jump loops; the default read resolves to `array.at(-1)`. Load-time validation rejects `reads:` references whose name no produces stage publishes; the `ensureNamedReads` preflight halts at runtime when a name's slot is empty (the producer hasn't fired yet on this path).
+
 Conditional routing uses `gate(field, branches)` with the bundled predicate helpers (`gt` / `gte` / `lt` / `lte` / `eq`):
 
 ```ts
@@ -288,16 +305,17 @@ type RunTrigger =
 
 ## Outcomes — collectors and parsers
 
-Each `produces` stage wires an `OutputSpec` that tells the runtime two things:
+Each `produces` stage wires an `OutputSpec` that tells the runtime three things:
 
 ```ts
 interface OutputSpec<Snapshot, Kind, Data> {
+  name?:     string;                                // CATEGORISE — the publish slot in state.named (optional)
   collector: ArtifactCollector<Snapshot>;          // ENUMERATE — what did the stage produce?
   parser?:   ArtifactParser<Snapshot, Kind, Data>; // INTERPRET — what's the typed data channel?
 }
 ```
 
-`collector.collect(ctx)` returns the artifacts the stage emitted. `parser.parse(ctx)` (optional) turns them into the typed `output.data` downstream stages narrow on. With no parser, `output.data` is the artifact list itself (`kind = "artifacts"`).
+`collector.collect(ctx)` returns the artifacts the stage emitted. `parser.parse(ctx)` (optional) turns them into the typed `output.data` downstream stages narrow on. With no parser, `output.data` is the artifact list itself (`kind = "artifacts"`). When `name` is set, every stage wired with this outcome publishes onto `state.named[name]` — the convergence mechanism behind [`reads:`](#multi-input-stages--reads-and-the-named-publish-registry); when omitted, stages publish under their record key.
 
 There is no framework default for `produces` — load-time validation rejects a stage without an outcome. The `.rpiv/artifacts/<bucket>/<file>.md` layout is an rpiv convention, not a framework truth; pair with [`@juicesharp/rpiv-pi`](../rpiv-pi) for `rpivArtifactMdOutcome`, or wire your own.
 

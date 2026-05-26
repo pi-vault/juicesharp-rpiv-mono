@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Added — named-publish registry for multi-input stages
+- `state.named: Record<string, Output[]>` — every `produces` stage appends
+  its `Output` envelope onto the slot keyed by
+  `stage.outcome?.name ?? stage.<record-key>`. Slots are arrays so
+  iteration history is preserved across backward-jump loops; the default
+  read resolves to the most-recent entry. Multiple stages MAY share a
+  slot on purpose (the outcome-name convergence pattern).
+- `OutputSpec.name?: string` — optional categorical name carried by the
+  outcome. The single mechanism for declaring "this outcome publishes
+  under name X"; multiple stages wiring the same outcome converge.
+- `StageDef.reads?: ReadonlyArray<string>` — names this stage consumes.
+  When set, the runner builds a labelled-flag prompt
+  (`/skill:<name> --<n1> <p1> --<n2> <p2> …`) reading the latest entry
+  each name has accumulated; multi-artifact stages repeat the flag per
+  artifact. Empty/unset → the default single-artifact prompt
+  (`/skill:<name> <handle>`) is preserved bit-for-bit.
+- `validateWorkflow` rejects `reads:` references whose name no produces
+  stage publishes (typo / rename catch at load time).
+- Runtime preflight `ensureNamedReads` halts the chain when a `reads:`
+  slot is empty (`MSG_MISSING_NAMED_READ` / `ERR_MISSING_NAMED_READ`) —
+  the "producer hasn't fired yet on this path" case.
+- `ensureUpstreamArtifact` skips when `reads:` is set — multi-input
+  stages opt out of the rolling-primary contract by declaration.
+
 ### Breaking — Pi types removed from public surface
 - The public type surface no longer names any `@earendil-works/pi-coding-agent`
   type. Three workflow-owned host ports replace them in

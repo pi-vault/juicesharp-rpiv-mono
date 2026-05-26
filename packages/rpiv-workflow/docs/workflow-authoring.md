@@ -20,6 +20,7 @@ Complete reference for the `@juicesharp/rpiv-workflow` authoring DSL. A workflow
   - [Parser catalog](#parser-catalog)
   - [Custom outcomes](#custom-outcomes)
 - [Analyzing skills before wiring](#analyzing-skills-before-wiring)
+- [Multi-input stages](#multi-input-stages)
 - [Carrying knowledge across stages](#carrying-knowledge-across-stages)
 - [Validators](#validators)
 - [Complete example](#complete-example)
@@ -85,6 +86,7 @@ produces({
 | `outcome` | (required) | `OutputSpec` — how the runtime collects + parses the artifact. |
 | `outputSchema` | none | Standard Schema v1 validator for `output.data`. Enables gate routing. |
 | `inputSchema` | none | Standard Schema v1 validator for inherited upstream `output.data`. Rejection halts immediately. |
+| `reads` | none | `ReadonlyArray<string>` — names this stage consumes from `state.named`. Switches the prompt to the labelled-flag form. See [Multi-input stages](#multi-input-stages). |
 | `onInvalid` | `"retry"` | `"retry"` (re-invoke up to `maxRetries`) or `"halt"` (fail fast). |
 | `maxRetries` | — | Max retries on schema rejection. |
 | `validateTimeoutMs` | — | Timeout for async schemas. |
@@ -257,10 +259,11 @@ edges: {
 
 ## Outcomes
 
-Each `produces` stage wires an `OutputSpec` with a collector (enumerate what the stage produced) and optional parser (interpret into typed data):
+Each `produces` stage wires an `OutputSpec` with an optional `name` (the publish key in `state.named` — see [Multi-input stages](#multi-input-stages)), a collector (enumerate what the stage produced) and optional parser (interpret into typed data):
 
 ```typescript
 interface OutputSpec<Snapshot, Kind, Data> {
+  name?:     string;                                // CATEGORISE — publish slot in state.named
   collector: ArtifactCollector<Snapshot>;          // ENUMERATE
   parser?:   ArtifactParser<Snapshot, Kind, Data>; // INTERPRET (optional)
 }
@@ -444,10 +447,55 @@ Follow this sequence when composing a new workflow:
 | `gate` without `outputSchema` on the source stage | Caught by the validator, but cheaper to fix at authoring time. |
 | `terminal()` chosen because "it's the last stage" | `terminal` clears the rolling primary slot. If post-run inspection needs the artifact, use `acts` instead. |
 | Custom collector that doesn't handle the "nothing found" case | Return `{ kind: "fatal", message: "..." }` — the runner halts and surfaces the message. Don't silently return an empty artifact list from a `produces` stage. |
+| `reads:` references a name no `produces` stage publishes | Load-time validator catches the typo. Confirm the upstream stage's `outcome.name ?? <record-key>` matches the name you're reading. |
+| Two stages publishing under different names when you wanted them to converge | Give both stages the same `OutputSpec.name` (typically via a shared outcome). The named-publish registry collapses convergent producers into one slot — there is no per-stage `publishes:` override knob. |
+
+## Multi-input stages
+
+The default prompt to a stage is `/skill:<name> <handle>` — exactly one positional arg, the upstream rolling primary artifact. When a stage needs more than one upstream artifact (the canonical case: a "revise plan based on review" step that needs both the plan and the review), declare `reads:` against names in the named-publish registry:
+
+```typescript
+revise: produces({
+  outcome: planOutcome,
+  reads: ["plans", "reviews"],
+})
+```
+
+When `reads:` is set the runner replaces the default prompt with a labelled-flag form:
+
+```
+/skill:revise --plans .rpiv/artifacts/plans/p.md --reviews .rpiv/artifacts/reviews/r.md
+```
+
+Multi-artifact stages get flag repetition: an upstream with two `fs` artifacts expands to `--plans <a> --plans <b>` so skill arg-parsers collect repeated flags into arrays the same way `argparse`/`clap`/shell utilities do.
+
+### The named-publish registry — `state.named`
+
+Every `produces` stage APPENDS its full `Output` envelope onto `state.named[key]` after each successful run. The key is computed once at write time:
+
+```
+key = stage.outcome?.name ?? stage.<record-key>
+```
+
+Two layers, no override knob:
+
+- **Outcome carries a name.** Multiple stages wiring the same outcome converge — both stages append onto the same slot, latest-wins on read. This is how a workflow expresses "two stages both produce the canonical plan" without restating the name on each stage.
+- **Outcome has no name.** Stages publish under their record key. Downstream `reads: ["blueprint", "code-review"]` references stage record keys directly.
+
+Slots are **arrays** — iteration history is preserved across backward-jump loops; the default read resolves to `array.at(-1)`. Side-effect stages don't write to the registry. The slot is never cleared by `terminal()` either: it's an additive channel orthogonal to the rolling primary.
+
+### Validation + preflight
+
+- **Load-time** (`validateWorkflow`) — every `reads:` reference must match some `produces` stage's publish key. Catches typos and rename drift before the workflow runs.
+- **Runtime** (`ensureNamedReads` preflight) — halts the chain when a `reads:` name's slot is empty (the producer hasn't fired yet on this path). Distinct from the typo case: the workflow is well-formed but the stage was placed before its producer in the edge graph.
+
+### Interaction with the rolling primary
+
+A stage with `reads:` opts out of the rolling-primary contract entirely — `ensureUpstreamArtifact` is skipped, the labelled-flag prompt replaces the single-handle prompt, and `state.primaryArtifact` is ignored for prompt construction. The stage's own produces output (if any) still updates `state.primaryArtifact` for downstream stages that DO use the rolling chain.
 
 ## Carrying knowledge across stages
 
-A fresh-session stage starts a clean Pi conversation. It only sees (1) the rolling primary artifact, (2) the inherited artifact list, and (3) `output.data` when an `outputSchema` is declared. Anything the upstream stage only *spoke* in its transcript is lost. Author the handoff deliberately — four paths:
+A fresh-session stage starts a clean Pi conversation. It only sees (1) the rolling primary artifact, (2) the inherited artifact list, (3) `output.data` when an `outputSchema` is declared, and (4) any named slots wired via `reads:`. Anything the upstream stage only *spoke* in its transcript is lost. Author the handoff deliberately — five paths:
 
 | # | Mechanism | What downstream sees | Trade-off |
 |---|-----------|----------------------|-----------|
@@ -455,6 +503,7 @@ A fresh-session stage starts a clean Pi conversation. It only sees (1) the rolli
 | 2 | `workspaceDiffCollector` outcome on the upstream stage | Every file the stage touched, as `fs` artifacts | Free when the work IS files on disk. Captures *what*, not *why*. |
 | 3 | `transcriptPathCollector` outcome on the upstream stage | The last regex-matched chunk of assistant text, written to disk | Captures narrative knowledge. Needs the skill to emit a recognizable marker. |
 | 4 | Custom collector / parser (+ optional `outputSchema`) | Author-defined typed shape | Most precise; most authoring effort. Enables gate routing. |
+| 5 | `reads:` on the downstream stage referencing named-publish slots | Latest `Output` per declared name, woven into a labelled-flag prompt | Reaches further back than the rolling primary; survives intermediate produces stages overwriting the chain. See [Multi-input stages](#multi-input-stages). |
 
 **Picking between them — where does the knowledge live after the stage finishes?**
 
@@ -573,6 +622,7 @@ Generated workflows must pass `validateWorkflow()` before writing. The validator
 - Stage kinds are valid (`"produces"` or `"side-effect"`)
 - `produces` stages have an `outcome`
 - `gate` / data-reading `defineRoute` source stages have `outputSchema`
+- Every `reads:` name is published by some `produces` stage in the workflow (publish key = `outcome.name ?? stage.<record-key>`)
 - Fanout is incompatible with `sessionPolicy: "continue"`
 - Script stages cannot declare `skill`, `outcome`, `fanout`, or `sessionPolicy: "continue"`
 
