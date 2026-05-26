@@ -19,6 +19,7 @@ Complete reference for the `@juicesharp/rpiv-workflow` authoring DSL. A workflow
   - [Collector catalog](#collector-catalog)
   - [Parser catalog](#parser-catalog)
   - [Custom outcomes](#custom-outcomes)
+- [Analyzing skills before wiring](#analyzing-skills-before-wiring)
 - [Carrying knowledge across stages](#carrying-knowledge-across-stages)
 - [Validators](#validators)
 - [Complete example](#complete-example)
@@ -329,6 +330,120 @@ export const myCollector = defineCollector((ctx) => {
 Handle constructors: `fs(path)`, `url(href)`, `opaque(id)`, `inline(bytes, mime?)`.
 
 Composite outcomes: `sideEffectOutcome` (built from `noopCollector`), `gitCommitOutcome` (built from `gitCommitCollector` + `gitCommitParser`).
+
+## Analyzing skills before wiring
+
+Before writing any workflow DSL, analyze each skill you plan to chain. The runner only sees what collectors enumerate — everything else (transcript reasoning, session state) is lost across `fresh` session boundaries. Bad collector/parser/session choices are silent: the workflow runs but downstream stages receive nothing useful.
+
+### The four questions per skill
+
+Answer these before writing DSL for any stage:
+
+**Q1 — Input contract.** What does this skill require to start?
+- Free-text prompt only (the run's original input or a composed prompt)?
+- A specific file path it reads explicitly?
+- A typed upstream artifact (structured data the prior stage produced)?
+
+This determines what the stage's prompt should provide and whether to wire `inputSchema` on the downstream stage to validate the handoff.
+
+**Q2 — Output locus.** Where does the knowledge live when the skill finishes?
+- Files on disk at a predictable path
+- Files on disk at an unpredictable path announced in the transcript
+- Every file the skill touched (diffable via git)
+- Files written via specific tool calls
+- Narrative text only in the transcript (rationale, decisions, analysis)
+- A URL emitted in the transcript
+- A new git commit
+- Multiple of the above simultaneously
+- Session memory only (nothing observable after the stage ends)
+- Nothing (pure side effect, nothing to extract)
+
+This determines which collector to wire (or whether to author a custom one).
+
+**Q3 — Downstream need.** What does the next stage actually consume from this one?
+- File paths only (the downstream reads the files itself)
+- Structured fields for routing (numeric counts, categories, pass/fail)
+- Narrative rationale (why decisions were made)
+- The full conversation (questions asked, context built)
+- Nothing (the downstream is independent)
+
+This determines session policy and whether you need a parser + `outputSchema`.
+
+**Q4 — Session requirement.** Can downstream start fresh, or does it need the prior conversation?
+- Fresh is fine when all knowledge is captured in files or transcript markers.
+- Continue is needed when reasoning isn't recoverable from disk + transcript alone.
+
+This determines `sessionPolicy`.
+
+### Translation table: output locus → collector
+
+| Knowledge lives in… | Stage kind | Collector | When downstream routes, add parser… |
+|---|---|---|---|
+| Files at a predictable path (directory + extension) | `produces` | `directoryPathCollector` | `jsonBodyParser` if body is JSON; custom otherwise |
+| Files at a path announced in transcript | `produces` | `transcriptPathCollector` with a path-matching regex | Custom, keyed to the extracted path |
+| Every file the stage touched (deliverable IS files) | `produces` or `acts` with outcome | `workspaceDiffCollector` | Custom, over the diff artifact list |
+| Files written via specific tool calls | `produces` or `acts` with outcome | `toolCallCollector` | Custom, over the tool-call artifact list |
+| Narrative section in transcript | `produces` | `transcriptPathCollector` with a section-scoped regex | Custom, parsing the materialized text |
+| A URL in transcript | `produces` | `urlCollector` | — |
+| A new git commit | `acts` with outcome | `gitCommitCollector` (or composite `gitCommitOutcome`) | `gitCommitParser` (included in `gitCommitOutcome`) |
+| Multiple of the above | `produces` or `acts` | `unionCollectors(collA, collB, ...)` | Per sub-outcome, composed |
+| None of the built-ins fit efficiently | `produces` or `acts` | Custom `defineCollector` | Custom `defineParser` as needed |
+| Pure side effect, nothing to extract | `acts()` without outcome | — (no outcome needed) | — |
+| Nothing, and downstream must not inherit | `terminal()` | — | — |
+| Session memory only | Upstream `acts`, downstream `sessionPolicy: "continue"` | — (no outcome on upstream) | — |
+
+**When to author a custom collector.** The built-in collectors cover transcript scanning, tool-call observation, filesystem diffing, and git state. If the skill's output pattern doesn't map cleanly to any of these — for example, it writes a structured artifact with frontmatter you want to parse, or it produces an identifier embedded in a branch name — author a custom collector via `defineCollector` and an optional `defineParser`. Custom collectors are first-class; they receive the same `CollectCtx` and emit the same artifact shapes as built-ins.
+
+### Validation decision rules
+
+When to add schemas:
+
+- **Add `outputSchema`** whenever a downstream edge uses `gate` or a `defineRoute` that reads `output.data`. The load-time validator enforces this — but fix it at authoring time, not after.
+- **Add `outputSchema`** when you want the runner to retry the stage on shape drift (`onInvalid: "retry"`, the default). This is useful when the skill's output is non-deterministic and might need a second attempt.
+- **Add `inputSchema`** when the downstream stage genuinely cannot proceed without specific upstream fields. A rejection on `inputSchema` halts immediately (no retry) — use it as a hard contract, not a soft warning.
+- **Default to sync** schemas for pure shape contracts. **Reach for async** only when correctness needs I/O (file existence checks, endpoint validation).
+
+### Session-policy decision rules
+
+- **Default to `"fresh"`.** It is compatible with `fanout`, script stages, and keeps context bounded.
+- **Use `"continue"` only when Q3 demands reasoning that isn't capturable on disk or via a transcript marker.** `"continue"` is incompatible with `fanout` and script stages — load-time validation rejects the combination.
+- Every `"continue"` stage grows context monotonically. Long chains of continued sessions become expensive and fragile.
+
+### Authoring protocol
+
+Follow this sequence when composing a new workflow:
+
+**1. List skills in execution order.** Write down each skill name and a one-line description. Don't write DSL yet.
+
+**2. Answer Q1–Q4 for every skill.** Record in a table:
+
+| Skill | Input (Q1) | Output locus (Q2) | Downstream need (Q3) | Fresh? (Q4) |
+|-------|-----------|-------------------|---------------------|------------|
+| ... | ... | ... | ... | ... |
+
+**3. Assign stage kind per skill.** Based on Q2: `produces` when the skill's primary output is a file the next stage reads; `acts` when the side effect IS the work; `terminal` when nothing should carry forward.
+
+**4. Pick collector + optional parser.** Use the translation table above. If no built-in fits cleanly, reach for `defineCollector`.
+
+**5. Add `outputSchema` where needed.** Required for `gate`/`defineRoute` routing; recommended when the collector/parser pair produces structured data you want to validate.
+
+**6. Set `sessionPolicy`.** Default `"fresh"`. Document the justification for any `"continue"`.
+
+**7. Draw edges.** Linear chains → string targets. Branching logic → `gate` (numeric field) or `defineRoute` (arbitrary). Every path must eventually reach `"stop"`.
+
+**8. Validate.** Run `validateWorkflow()` before shipping — it catches missing outcomes, dangling edges, and schema/routing mismatches.
+
+### Common pitfalls
+
+| Smell | Fix |
+|-------|-----|
+| `acts()` with no outcome, but the skill clearly writes files | The side effect IS the artifact. Add `outcome: workspaceDiffCollector(...)` or switch to `produces`. |
+| `produces` with `noopCollector` | `produces` exists to extract something. If there's nothing to extract, use `acts`. |
+| `sessionPolicy: "continue"` on every stage | Revisit Q3 for each stage. Context grows monotonically with continued sessions; default to fresh. |
+| `transcriptPathCollector` regex never tested against real output | Test the regex against a sample transcript before wiring it. A non-matching regex produces a fatal collector result silently. |
+| `gate` without `outputSchema` on the source stage | Caught by the validator, but cheaper to fix at authoring time. |
+| `terminal()` chosen because "it's the last stage" | `terminal` clears the rolling primary slot. If post-run inspection needs the artifact, use `acts` instead. |
+| Custom collector that doesn't handle the "nothing found" case | Return `{ kind: "fatal", message: "..." }` — the runner halts and surfaces the message. Don't silently return an empty artifact list from a `produces` stage. |
 
 ## Carrying knowledge across stages
 
