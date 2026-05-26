@@ -182,6 +182,7 @@ function checkStageSemantics(w: Workflow, issues: WorkflowValidationIssue[]): vo
 		checkStageEnums(w, name, stage, issues);
 		checkFanoutContinueInvariant(w, name, stage, issues);
 		checkInheritsArtifactsKind(w, name, stage, issues);
+		checkScriptStageInvariants(w, name, stage, issues);
 	}
 }
 
@@ -228,7 +229,7 @@ function checkStageEnums(w: Workflow, name: string, stage: StageDef, issues: Wor
 			error(w.name, name, `sessionPolicy: "${stage.sessionPolicy}" — must be one of ${SESSION_POLICIES.join(", ")}`),
 		);
 	}
-	if (stage.kind === "produces" && !stage.outcome) {
+	if (stage.kind === "produces" && !stage.outcome && !stage.run) {
 		issues.push(
 			error(
 				w.name,
@@ -292,6 +293,79 @@ function checkInheritsArtifactsKind(
 				w.name,
 				name,
 				`stage "${name}" sets \`inheritsArtifacts: false\` on a \`produces\` stage — the flag is the \`terminal()\` factory's mechanism and is only meaningful on side-effect stages`,
+			),
+		);
+	}
+}
+
+/**
+ * Skillless script stages (Phase B): presence of `stage.run` declares
+ * "the runner calls this TS function instead of dispatching a Pi skill."
+ * Four fields are categorically incompatible with that contract — fail
+ * loudly at load time so the runner branch (B.4) can assume the
+ * invariant.
+ *
+ * Mutual-exclusion rules:
+ *
+ *   - `skill`     — the function IS the work; a skill body would never
+ *                   be dispatched.
+ *   - `outcome`   — the function returns the `Output` envelope directly;
+ *                   there is no transcript / tool-use stream for a
+ *                   collector to scan.
+ *   - `fanout`    — a TS function can write its own loop; the runner's
+ *                   per-unit session machinery doesn't apply.
+ *   - `sessionPolicy: "continue"` — there is no Pi session at all on a
+ *                                   script stage; nothing to continue.
+ *
+ * Side-effect script stages with an `outputSchema` get a warning — the
+ * function returns `void`, so no data ever flows through the validator.
+ *
+ * The existing `produces` + `inheritsArtifacts: false` warning
+ * (`checkInheritsArtifactsKind`) fires uniformly for both skill and
+ * script variants — same author error, same message.
+ */
+function checkScriptStageInvariants(
+	w: Workflow,
+	name: string,
+	stage: StageDef,
+	issues: WorkflowValidationIssue[],
+): void {
+	if (!stage.run) return;
+
+	if (stage.skill !== undefined) {
+		issues.push(
+			error(w.name, name, `stage "${name}": script stages cannot set "skill" (the run function IS the work)`),
+		);
+	}
+	if (stage.outcome) {
+		issues.push(
+			error(
+				w.name,
+				name,
+				`stage "${name}": script stages cannot set "outcome" (the run function IS the OutputSpec)`,
+			),
+		);
+	}
+	if (stage.fanout) {
+		issues.push(
+			error(w.name, name, `stage "${name}": script stages cannot fanout — write a loop inside run() instead`),
+		);
+	}
+	if (stage.sessionPolicy === "continue") {
+		issues.push(
+			error(
+				w.name,
+				name,
+				`stage "${name}": script stages cannot use sessionPolicy "continue" (no session to continue)`,
+			),
+		);
+	}
+	if (stage.kind === "side-effect" && stage.outputSchema) {
+		issues.push(
+			warning(
+				w.name,
+				name,
+				`stage "${name}": outputSchema is meaningless on side-effect script stages — no data to validate`,
 			),
 		);
 	}

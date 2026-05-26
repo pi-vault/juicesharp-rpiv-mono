@@ -8,13 +8,17 @@
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
+	type ActsScriptFn,
 	acts,
 	defineRoute,
 	defineWorkflow,
 	type EdgeFn,
 	gate,
+	type ProducesScriptFn,
 	produces as producesRaw,
+	type ScriptContext,
 	type StageDef,
+	terminal,
 	type Workflow,
 } from "./api.js";
 import { noopCollector } from "./outcomes/index.js";
@@ -384,6 +388,127 @@ describe("validateWorkflow — workflow name", () => {
 		expect(
 			issues.some((i) => i.severity === "error" && /workflow name must be a non-empty string/.test(i.message)),
 		).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Phase B.3 — script-stage invariants (presence of `stage.run`)
+// ---------------------------------------------------------------------------
+
+describe("validateWorkflow — script stage invariants", () => {
+	const noopProducesScript: ProducesScriptFn = (_ctx: ScriptContext) => ({
+		kind: "noop",
+		artifacts: [],
+		data: {},
+		meta: { stage: "s", stageNumber: 1, ts: "", runId: "" },
+	});
+	const noopActsScript: ActsScriptFn = (_ctx: ScriptContext) => {};
+
+	const wf = (stage: StageDef): Workflow => ({
+		name: "scripted",
+		start: "s",
+		stages: { s: stage },
+		edges: { s: "stop" },
+	});
+
+	it("rejects `skill` alongside `run`", () => {
+		const e = errors(wf({ kind: "produces", sessionPolicy: "fresh", run: noopProducesScript, skill: "x" }));
+		expect(e.some((i) => /script stages cannot set "skill"/.test(i.message))).toBe(true);
+	});
+
+	it("rejects `outcome` alongside `run`", () => {
+		const e = errors(
+			wf({
+				kind: "produces",
+				sessionPolicy: "fresh",
+				run: noopProducesScript,
+				outcome: { collector: noopCollector },
+			}),
+		);
+		expect(e.some((i) => /script stages cannot set "outcome"/.test(i.message))).toBe(true);
+	});
+
+	it("rejects `fanout` alongside `run`", () => {
+		const e = errors(
+			wf({
+				kind: "produces",
+				sessionPolicy: "fresh",
+				run: noopProducesScript,
+				fanout: () => [],
+			}),
+		);
+		expect(e.some((i) => /script stages cannot fanout/.test(i.message))).toBe(true);
+	});
+
+	it('rejects sessionPolicy: "continue" alongside `run`', () => {
+		const e = errors(wf({ kind: "produces", sessionPolicy: "continue", run: noopProducesScript }));
+		expect(e.some((i) => /script stages cannot use sessionPolicy "continue"/.test(i.message))).toBe(true);
+	});
+
+	it("warns when a side-effect script stage carries an outputSchema (no data to validate)", () => {
+		const w = wf({
+			kind: "side-effect",
+			sessionPolicy: "fresh",
+			run: noopActsScript,
+			outputSchema: typeboxSchema(Type.Object({ ok: Type.Boolean() })),
+		});
+		const ws = warnings(w);
+		expect(ws.some((i) => /outputSchema is meaningless on side-effect script stages/.test(i.message))).toBe(true);
+		expect(errors(w)).toEqual([]);
+	});
+
+	it("reuses the existing produces-with-no-inherit warning for script stages", () => {
+		const w = wf({
+			kind: "produces",
+			sessionPolicy: "fresh",
+			run: noopProducesScript,
+			inheritsArtifacts: false,
+		});
+		const ws = warnings(w);
+		expect(ws.some((i) => /sets `inheritsArtifacts: false` on a `produces` stage/.test(i.message))).toBe(true);
+	});
+
+	it("does NOT require `outcome` on a produces script stage (the run function returns the envelope)", () => {
+		// Without the carve-out, the old "produces requires outcome" rule would
+		// fire — confirm the rule now skips when `stage.run` is set.
+		const w = wf({
+			kind: "produces",
+			sessionPolicy: "fresh",
+			run: noopProducesScript,
+			outputSchema: typeboxSchema(Type.Object({ count: Type.Integer() })),
+		});
+		expect(errors(w)).toEqual([]);
+	});
+
+	it("a fully-specified produces script stage with input + output schemas validates clean", () => {
+		const w = defineWorkflow({
+			name: "scripted-positive",
+			start: "compute",
+			stages: {
+				compute: {
+					kind: "produces",
+					sessionPolicy: "fresh",
+					run: noopProducesScript,
+					inputSchema: typeboxSchema(Type.Object({ in: Type.String() })),
+					outputSchema: typeboxSchema(Type.Object({ count: Type.Integer({ minimum: 0 }) })),
+				},
+			},
+			edges: { compute: "stop" },
+		});
+		expect(validateWorkflow(w)).toEqual([]);
+	});
+
+	it("an acts.script + terminal.script chain validates clean", () => {
+		const w = defineWorkflow({
+			name: "scripted-acts-chain",
+			start: "do",
+			stages: {
+				do: { kind: "side-effect", sessionPolicy: "fresh", run: noopActsScript },
+				cleanup: terminal({ run: noopActsScript }),
+			},
+			edges: { do: "cleanup", cleanup: "stop" },
+		});
+		expect(validateWorkflow(w)).toEqual([]);
 	});
 });
 
