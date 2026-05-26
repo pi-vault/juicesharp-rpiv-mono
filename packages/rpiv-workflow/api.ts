@@ -160,13 +160,15 @@ export interface ScriptContext {
 }
 
 /**
- * Script `produces` stage body — returns the `Output` envelope directly
- * (no `OutputSpec` extraction step). The runner records the returned
- * envelope as the stage's outcome and feeds it to downstream stages.
+ * Script `produces` stage body — returns the `Output` envelope's
+ * value-channel fields (`kind` + `artifacts` + `data`) directly. The
+ * runner stamps `meta` (stage, stageNumber, ts, runId) — same posture
+ * as how `ArtifactParser`s return `{ kind, data }` and `finalizeOutput`
+ * fills the meta in.
  */
 export type ProducesScriptFn<K extends string = string, D = unknown> = (
 	ctx: ScriptContext,
-) => Output<K, D> | Promise<Output<K, D>>;
+) => Omit<Output<K, D>, "meta"> | Promise<Omit<Output<K, D>, "meta">>;
 
 /**
  * Script `acts` / `terminal` stage body — returns nothing. The runner

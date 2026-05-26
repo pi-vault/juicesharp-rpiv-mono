@@ -6,7 +6,7 @@
 
 import { handleToString } from "./handle.js";
 import { assertNever } from "./internal-utils.js";
-import { buildLifecycleContext, skillStageRef } from "./lifecycle.js";
+import { buildLifecycleContext, scriptStageRef, skillStageRef } from "./lifecycle.js";
 import {
 	ERR_STAGE_ABORTED,
 	ERR_STAGE_NO_RESPONSE,
@@ -32,11 +32,18 @@ export const nowIso = (): string => new Date().toISOString();
  * Minimal bookkeeping ctx. Structurally derived from `SessionContext` so any
  * future field added to the base lands here too — no duplicate
  * maintenance. Both `StageSession` and `FanoutSession` collapse to this.
+ *
+ * `isScript` toggles the `onStageError` ref construction in
+ * `recordTerminalFailure` from `skillStageRef` to `scriptStageRef` (the
+ * script branch carries no `skill` field). Defaulting to `undefined`
+ * preserves the skill-path behaviour for every existing caller.
  */
 export type AuditCtx = Pick<
 	SessionContext,
 	"cwd" | "runId" | "state" | "stageName" | "skill" | "lifecycle" | "runIdentity"
->;
+> & {
+	isScript?: boolean;
+};
 
 /**
  * JSONL `WorkflowStage.stage` value for fanout-unit rows — built from
@@ -92,17 +99,27 @@ export async function recordTerminalFailure(
 	recordStage(
 		audit.cwd,
 		audit.runId,
-		{ stage: audit.stageName, skill: audit.skill, status: args.status, ts: nowIso() },
+		// Script-stage failure rows omit `skill` (the row split landed in A.0);
+		// skill rows continue to carry it. `undefined` is dropped by JSON.stringify.
+		{
+			stage: audit.stageName,
+			skill: audit.isScript ? undefined : audit.skill,
+			status: args.status,
+			ts: nowIso(),
+		},
 		audit.state,
 	);
 	ctx.ui.setStatus(STATUS_KEY, undefined);
 	ctx.ui.notify(args.notifyMsg, args.notifyLevel);
 	onFailure?.(ctx);
 	audit.state.termination.error = args.errMsg;
+	const ref = audit.isScript
+		? scriptStageRef(audit.stageName, audit.state.lastAllocatedStageNumber)
+		: skillStageRef(audit.stageName, audit.state.lastAllocatedStageNumber, audit.skill);
 	await audit.lifecycle.fire(
 		ctx,
 		"onStageError",
-		skillStageRef(audit.stageName, audit.state.lastAllocatedStageNumber, audit.skill),
+		ref,
 		args.errMsg,
 		buildLifecycleContext({
 			cwd: audit.cwd,

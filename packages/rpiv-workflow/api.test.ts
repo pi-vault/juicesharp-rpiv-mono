@@ -157,7 +157,6 @@ describe("produces.script", () => {
 		kind: "noop",
 		artifacts: [],
 		data: {},
-		meta: { stage: "s", stageNumber: 1, ts: "", runId: "" },
 	});
 
 	it('returns { kind: "produces", sessionPolicy: "fresh", run }', () => {

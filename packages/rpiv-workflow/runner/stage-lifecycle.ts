@@ -39,6 +39,7 @@ import {
 } from "../validate-output.js";
 import { advanceChain } from "./chain-advance.js";
 import { lifecycleCtxFor } from "./runner.js";
+import { runScript } from "./script-stage.js";
 
 export interface ResolvedStage {
 	def: StageDef;
@@ -141,6 +142,19 @@ export async function runStage(curCtx: RunnerCtx, currentName: string, idx: numb
 	const stage = resolveStage(currentName, idx, run);
 
 	if (await tryFanout(curCtx, stage, idx, run)) return;
+
+	// Script stages (`stage.def.run` set) skip the entire skill pipeline —
+	// no `/skill:<name>` prompt to build, no skill-registry check, no
+	// session to open, no outcome/collector to snapshot. Input-schema
+	// validation still applies (`ensureInputValid` runs upstream output
+	// against `inputSchema` if declared); the script-stage runner owns
+	// its own status line + lifecycle fires from here.
+	if (stage.def.run) {
+		await ensureInputValid(stage, run);
+		await runScript(curCtx, stage, idx, run);
+		return;
+	}
+
 	for (const check of PRE_PROMPT_CHECKS) await check.run(stage, run);
 
 	const prompt = buildPrompt(stage.skill, inputForStage(stage, run));

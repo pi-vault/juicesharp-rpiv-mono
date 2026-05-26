@@ -271,3 +271,8 @@ export function buildLifecycleContext(args: {
 export function skillStageRef(name: string, stageNumber: number, skill: string): StageRef {
 	return { kind: "skill", name, stageNumber, skill };
 }
+
+/** Build the `"script"` arm of `StageRef` — skillless TS stages (Phase B.4). */
+export function scriptStageRef(name: string, stageNumber: number): StageRef {
+	return { kind: "script", name, stageNumber };
+}

@@ -400,7 +400,6 @@ describe("validateWorkflow — script stage invariants", () => {
 		kind: "noop",
 		artifacts: [],
 		data: {},
-		meta: { stage: "s", stageNumber: 1, ts: "", runId: "" },
 	});
 	const noopActsScript: ActsScriptFn = (_ctx: ScriptContext) => {};
 

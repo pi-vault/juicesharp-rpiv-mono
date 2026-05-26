@@ -126,6 +126,16 @@ export const MSG_PARTIAL_ARTIFACTS = (artifactList: string) => `Artifacts produc
 export const MSG_LIFECYCLE_THREW = (event: string, reason: string) =>
 	`⚠ rpiv: lifecycle listener (${event}) threw: ${reason}`;
 
+/**
+ * Script stage's `run()` body threw. Distinct from `MSG_STAGE_THREW`
+ * (which covers session-machinery and preflight throws) so users see
+ * the failure surface attributed to the script function rather than to
+ * the runner.
+ */
+export const MSG_SCRIPT_THREW = (stage: string, reason: string) =>
+	`✗ ${stage} script threw — stopping workflow: ${reason}`;
+export const ERR_SCRIPT_THREW = (stage: string, reason: string) => `${stage} script threw: ${reason}`;
+
 // ---------------------------------------------------------------------------
 // /wf command shell — notify-only (never lands in state.error; ERR_ reserved)
 // ---------------------------------------------------------------------------
