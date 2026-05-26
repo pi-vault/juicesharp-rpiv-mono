@@ -71,9 +71,9 @@ A workflow is a typed graph: named entry point, a `stages` record, and an `edges
 
 Three factories for the two stage kinds:
 
-- `produces(overrides?)` — `kind: "produces"`. The skill writes a file the next stage reads. Halts the chain if the path doesn't appear in the transcript.
-- `acts(overrides?)` — `kind: "side-effect"`. The skill's side effect IS the work (commit, implement). The next stage inherits the prior artifact list forward — the stage's prompt receives the upstream primary artifact's handle.
-- `terminal(overrides?)` — `kind: "side-effect"` with `inheritsArtifacts: false`. A side-effect stage that does NOT inherit the upstream artifact: its prompt receives `originalInput` (the run's brief), the upstream-artifact preflight is bypassed, and the rolling primary slot is cleared on success so anything downstream also starts without an inherited handle. The right answer for a final cleanup / summary / post-run notification stage that shouldn't be coupled to the upstream chain.
+- `produces(overrides?)` — `kind: "produces"`. The skill writes a file the next stage reads. Halts the chain if the path doesn't appear in the transcript. Without a Pi session, use [`produces.script`](#script-stages-no-pi-session).
+- `acts(overrides?)` — `kind: "side-effect"`. The skill's side effect IS the work (commit, implement). The next stage inherits the prior artifact list forward — the stage's prompt receives the upstream primary artifact's handle. Without a Pi session, use [`acts.script`](#script-stages-no-pi-session).
+- `terminal(overrides?)` — `kind: "side-effect"` with `inheritsArtifacts: false`. A side-effect stage that does NOT inherit the upstream artifact: its prompt receives `originalInput` (the run's brief), the upstream-artifact preflight is bypassed, and the rolling primary slot is cleared on success so anything downstream also starts without an inherited handle. The right answer for a final cleanup / summary / post-run notification stage that shouldn't be coupled to the upstream chain. Without a Pi session, use [`terminal.script`](#script-stages-no-pi-session).
 
 Conditional routing uses `gate(field, branches)` with the bundled predicate helpers (`gt` / `gte` / `lt` / `lte` / `eq`):
 
@@ -85,6 +85,87 @@ edges: { "code-review": gate("blockers_count", { revise: gt(0), commit: eq(0) })
 Branches are evaluated against `Number(output.data[field])` in declaration order; the first matching predicate wins, and the last declared branch is the fallback when no predicate matches (so missing or non-numeric fields route to the last branch).
 
 Hand-rolled routes use `defineRoute(targets, fn, opts?)` — by default `opts.readsData` is `true` (reads `output.data`, requires the source stage to declare an `outputSchema`); pass `{ readsData: false }` for a route that consults only `state` / `output.meta`.
+
+## Script stages (no Pi session)
+
+Some stages don't need an LLM — they merge two upstream artifacts, bump a version field, or fire a post-run notification. The `.script` accessor on each factory runs a pure TS function in place of a Pi skill body. No `/skill:<name>` dispatch, no session, no transcript scan: the function gets a `ScriptContext` (`cwd`, `input` — upstream `Output` envelope, `state` — `Readonly<RunState>`) and either returns the new envelope (`produces.script`) or returns `void` (`acts.script` / `terminal.script`).
+
+Stages with `.run` set CANNOT also declare `skill`, `outcome`, `fanout`, or `sessionPolicy: "continue"` — load-time validation rejects the combination. `produces.script` may declare `outputSchema` + `maxRetries` + `onInvalid` (same retry semantics as skill stages); `acts.script` / `terminal.script` may declare `inputSchema` for the upstream-data contract.
+
+### `produces.script` — merge two upstream artifacts into a new Output
+
+```ts
+import { produces, fs, type ScriptContext } from "@juicesharp/rpiv-workflow";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+const merge = produces.script({
+  outputSchema: typeboxSchema(Type.Object({ planPath: Type.String() })),
+  run: async (ctx: ScriptContext) => {
+    const upstream = ctx.input?.artifacts ?? [];
+    const bodies = await Promise.all(
+      upstream
+        .filter((a) => a.handle.kind === "fs")
+        .map((a) => readFile(join(ctx.cwd, (a.handle as { path: string }).path), "utf-8")),
+    );
+    const planPath = `.rpiv/artifacts/plans/${Date.now()}.md`;
+    await writeFile(join(ctx.cwd, planPath), bodies.join("\n\n---\n\n"));
+    return {
+      kind: "plan",
+      artifacts: [{ handle: fs(planPath), role: "primary" }],
+      data: { planPath },
+    };
+  },
+});
+```
+
+The runner stamps `meta` (`stage`, `stageNumber`, `ts`, `runId`) on the returned envelope — authors only fill `kind` + `artifacts` + `data`. The first artifact (if any) becomes the rolling primary so downstream stages inherit it via `ctx.input.artifacts[0]` and `ctx.state.primaryArtifact`.
+
+### `acts.script` — bump a file's version field
+
+```ts
+import { acts, type ScriptContext } from "@juicesharp/rpiv-workflow";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+const bumpVersion = acts.script({
+  run: async (ctx: ScriptContext) => {
+    const path = join(ctx.cwd, "package.json");
+    const pkg = JSON.parse(await readFile(path, "utf-8")) as { version: string };
+    const [major, minor, patch] = pkg.version.split(".").map(Number);
+    pkg.version = `${major}.${minor}.${(patch ?? 0) + 1}`;
+    await writeFile(path, `${JSON.stringify(pkg, null, 2)}\n`);
+  },
+});
+```
+
+The runner synthesises a `{ kind: "side-effect", artifacts: [], data: {} }` envelope for the audit row. The rolling primary artifact slot is preserved — a downstream stage still inherits whatever the upstream `produces` stage set, same posture as a skill-based `acts(...)`.
+
+### `terminal.script` — post-run cleanup that doesn't see the artifact
+
+```ts
+import { terminal, type ScriptContext } from "@juicesharp/rpiv-workflow";
+
+const notifySlack = terminal.script({
+  run: async (ctx: ScriptContext) => {
+    // ctx.input is the upstream row's envelope — `ctx.state.primaryArtifact`
+    // is NOT consulted (terminal.* opts out of inheritance). Any stage that
+    // runs after also starts without an inherited handle.
+    await fetch(process.env.SLACK_WEBHOOK!, {
+      method: "POST",
+      body: JSON.stringify({ text: `Run ${ctx.state.originalInput} complete.` }),
+    });
+  },
+});
+```
+
+Like `terminal()`, the script variant desugars to `acts.script({ ...opts, inheritsArtifacts: false })`: the rolling primary slot is cleared on success so downstream stages start from a clean inheritance state. The right answer for a final cleanup / summary / post-run notification stage that shouldn't be coupled to the upstream chain.
+
+### Lifecycle parity
+
+Script stages fire the same lifecycle events as skill stages — `onStageStart` → (`onStageRetry`?) → `onStageEnd` | `onStageError` — with a `StageRef` discriminator of `kind: "script"` (vs `kind: "skill"`). The JSONL audit row carries the stage's record key in `stage` and omits the `skill` field entirely, so post-hoc readers distinguish the two paths by `row.skill === undefined`.
+
+A thrown `run()` body records a terminal failure attributed to the stage via `MSG_SCRIPT_THREW`; the run halts and `onStageError` fires.
 
 ## Programmatic registration
 
