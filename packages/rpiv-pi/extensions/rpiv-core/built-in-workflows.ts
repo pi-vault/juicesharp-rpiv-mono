@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import {
 	acts,
+	defineRoute,
 	defineWorkflow,
 	eq,
 	type FanoutFn,
@@ -33,6 +34,30 @@ import { rpivArtifactMdOutcome } from "./artifact-collector.js";
 
 const CODE_REVIEW_SCHEMA = typeboxSchema(
 	Type.Object({ blockers_count: Type.Integer({ minimum: 0 }) }, { additionalProperties: true }),
+);
+
+/**
+ * Status discriminator for the review-loop workflow's code-review stage.
+ *
+ * Three statuses are emitted by the code-review skill:
+ *   - "approved"           — review passed, route to commit
+ *   - "needs_changes"      — issues found, route to blueprint (fix loop)
+ *   - "requesting_changes" — criticals > 3, route to blueprint (fix loop)
+ *
+ * The routing predicate collapses "needs_changes" and "requesting_changes"
+ * into the same "blueprint" branch — both mean "not approved, go fix it".
+ */
+const REVIEW_STATUS_SCHEMA = typeboxSchema(
+	Type.Object(
+		{
+			status: Type.Union([
+				Type.Literal("approved"),
+				Type.Literal("needs_changes"),
+				Type.Literal("requesting_changes"),
+			]),
+		},
+		{ additionalProperties: true },
+	),
 );
 
 /**
@@ -153,7 +178,45 @@ const largeWorkflow = defineWorkflow({
 });
 
 // ===========================================================================
+// review-loop — code-review → (blueprint → implement → validate → loop) | commit
+//              Review existing changes; if not approved, blueprint a fix plan,
+//              implement it, validate, and re-review. Loops until approved.
+// ===========================================================================
+
+const reviewLoopWorkflow = defineWorkflow({
+	name: "review-loop",
+	start: "code-review",
+	stages: {
+		"code-review": produces({ outcome: rpivArtifactMdOutcome, outputSchema: REVIEW_STATUS_SCHEMA }),
+		blueprint: produces({ outcome: rpivArtifactMdOutcome }),
+		implement: acts({ fanout: PHASE_FANOUT }),
+		validate: produces({ outcome: rpivArtifactMdOutcome }),
+		commit: acts({ outcome: gitCommitOutcome }),
+	},
+	edges: {
+		// Uses defineRoute (not gate()) because the routing decision is based
+		// on a string status discriminator, not a numeric threshold — gate()
+		// is designed for numeric comparisons (e.g., blockers_count > 0).
+		// The `outputSchema` on the code-review stage guarantees `data.status`
+		// is validated before this predicate runs, so the undefined/null case
+		// is unreachable in practice (the predicate's fallback to "blueprint"
+		// is defensive only).
+		"code-review": defineRoute(["blueprint", "commit"], ({ output }) => {
+			const data = output?.data as Record<string, unknown> | undefined;
+			return data?.status === "approved" ? "commit" : "blueprint";
+		}),
+		blueprint: "implement",
+		implement: "validate",
+		// Backward edge: validate → code-review creates the review-fix loop.
+		// Bounded by the runner's default maxBackwardJumps (2), permitting at
+		// most 3 review iterations (initial + 2 retries) before the guard halts.
+		validate: "code-review",
+		commit: "stop",
+	},
+});
+
+// ===========================================================================
 // Exports
 // ===========================================================================
 
-export const builtInWorkflows: readonly Workflow[] = [smallWorkflow, midWorkflow, largeWorkflow];
+export const builtInWorkflows: readonly Workflow[] = [smallWorkflow, midWorkflow, largeWorkflow, reviewLoopWorkflow];

@@ -30,7 +30,9 @@ import { isAbsolute, join } from "node:path";
 import { createMockSessionChain, mockAssistantMessage } from "@juicesharp/rpiv-test-utils";
 import {
 	acts,
+	defineRoute,
 	defineWorkflow,
+	type EdgeFn,
 	type FanoutFn,
 	produces,
 	type RunState,
@@ -410,5 +412,189 @@ describe("[I9] phase fanout rows preserve both stage name (record key) and skill
 			// .skill carries the raw Pi skill body — no aliasing, no unit suffix.
 			expect(row.skill).toBe("implement");
 		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Q4 — Dedicated tests for review-loop workflow routing predicate and
+//       backward-jump loop behavior.
+// ---------------------------------------------------------------------------
+
+describe("[Q4] review-loop workflow", () => {
+	const findEdge = (): EdgeFn => {
+		const wf = findWorkflow("review-loop");
+		const edge = wf.edges["code-review"];
+		if (typeof edge !== "function") throw new Error("code-review edge is not an EdgeFn");
+		return edge as EdgeFn;
+	};
+
+	const ctxWithStatus = (status: string) =>
+		({
+			output: {
+				kind: "artifact-md",
+				artifacts: [],
+				data: { status },
+				meta: { stage: "code-review", skill: "code-review", stageNumber: 1, ts: "", runId: "" },
+			},
+			state: {} as RunState,
+		}) as const;
+
+	// --- Unit tests: routing predicate ---
+
+	describe("routing predicate", () => {
+		it("declares targets matching both possible return values", () => {
+			const edge = findEdge();
+			expect(edge.targets).toEqual(["blueprint", "commit"]);
+		});
+
+		it('routes status="approved" to "commit"', () => {
+			const edge = findEdge();
+			expect(edge(ctxWithStatus("approved"))).toBe("commit");
+		});
+
+		it('routes status="needs_changes" to "blueprint"', () => {
+			const edge = findEdge();
+			expect(edge(ctxWithStatus("needs_changes"))).toBe("blueprint");
+		});
+
+		it('routes status="requesting_changes" to "blueprint"', () => {
+			const edge = findEdge();
+			expect(edge(ctxWithStatus("requesting_changes"))).toBe("blueprint");
+		});
+
+		it('routes undefined output to "blueprint" (defensive fallback)', () => {
+			const edge = findEdge();
+			expect(edge({ output: undefined, state: {} as RunState })).toBe("blueprint");
+		});
+
+		it('routes output with missing status to "blueprint" (defensive fallback)', () => {
+			const edge = findEdge();
+			expect(
+				edge({
+					output: {
+						kind: "artifact-md",
+						artifacts: [],
+						data: {},
+						meta: { stage: "code-review", skill: "code-review", stageNumber: 1, ts: "", runId: "" },
+					},
+					state: {} as RunState,
+				}),
+			).toBe("blueprint");
+		});
+	});
+
+	// --- Structural tests ---
+
+	describe("structural validation", () => {
+		it("code-review stage carries REVIEW_STATUS_SCHEMA outputSchema", () => {
+			const wf = findWorkflow("review-loop");
+			const codeReview = wf.stages["code-review"];
+			expect(codeReview?.outputSchema).toBeDefined();
+		});
+
+		it("validate routes back to code-review (backward-jump cycle)", () => {
+			const wf = findWorkflow("review-loop");
+			expect(wf.edges.validate).toBe("code-review");
+		});
+
+		it("all stages are reachable from start", () => {
+			const wf = findWorkflow("review-loop");
+			const issues = validateWorkflow(wf);
+			expect(
+				issues.filter((i) => /unreachable/.test(i.message)),
+				`review-loop has unreachable stages`,
+			).toEqual([]);
+		});
+	});
+
+	// --- Integration test: backward-jump loop behavior ---
+
+	describe("backward-jump loop behavior", () => {
+		let tmpDir: string;
+
+		beforeEach(() => {
+			tmpDir = mkdtempSync(join(tmpdir(), "rpiv-q4-loop-"));
+		});
+
+		afterEach(() => {
+			rmSync(tmpDir, { recursive: true, force: true });
+		});
+
+		const writeArtifact = (relPath: string) => {
+			const parts = relPath.split("/");
+			const dir = join(tmpDir, ...parts.slice(0, -1));
+			mkdirSync(dir, { recursive: true });
+			writeFileSync(join(tmpDir, relPath), "");
+		};
+
+		it("halts when review-loop exceeds maxBackwardJumps", async () => {
+			// Pre-write artifacts for each stage pass. With default
+			// maxBackwardJumps=2, the guard halts after the 4th code-review's
+			// decision-edge increments backwardJumps to 3 (>2). The cycle:
+			//   cr1→bp1→impl1→v1 → cr2→bp2→impl2→v2 → cr3→bp3→impl3→v3 → cr4(HALT)
+			// Stages completed: 13 (cr×4 + bp×3 + impl×3 + validate×3).
+			writeArtifact(".rpiv/artifacts/code-review/cr1.md");
+			writeArtifact(".rpiv/artifacts/blueprint/bp1.md");
+			writeArtifact(".rpiv/artifacts/implement/impl1.md");
+			writeArtifact(".rpiv/artifacts/validate/v1.md");
+			writeArtifact(".rpiv/artifacts/code-review/cr2.md");
+			writeArtifact(".rpiv/artifacts/blueprint/bp2.md");
+			writeArtifact(".rpiv/artifacts/implement/impl2.md");
+			writeArtifact(".rpiv/artifacts/validate/v2.md");
+			writeArtifact(".rpiv/artifacts/code-review/cr3.md");
+			writeArtifact(".rpiv/artifacts/blueprint/bp3.md");
+			writeArtifact(".rpiv/artifacts/implement/impl3.md");
+			writeArtifact(".rpiv/artifacts/validate/v3.md");
+			writeArtifact(".rpiv/artifacts/code-review/cr4.md");
+
+			const chain = createMockSessionChain({
+				cwd: tmpDir,
+				steps: [
+					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/code-review/cr1.md")] },
+					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/blueprint/bp1.md")] },
+					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/implement/impl1.md")] },
+					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/validate/v1.md")] },
+					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/code-review/cr2.md")] },
+					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/blueprint/bp2.md")] },
+					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/implement/impl2.md")] },
+					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/validate/v2.md")] },
+					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/code-review/cr3.md")] },
+					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/blueprint/bp3.md")] },
+					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/implement/impl3.md")] },
+					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/validate/v3.md")] },
+					{ branch: [mockAssistantMessage("Wrote .rpiv/artifacts/code-review/cr4.md")] },
+				],
+			});
+
+			// Build a workflow matching review-loop's graph shape, but the
+			// code-review predicate always routes to "blueprint" (never approves),
+			// so the loop runs until maxBackwardJumps exhausts.
+			const workflow = defineWorkflow({
+				name: "review-loop-test",
+				start: "code-review",
+				stages: {
+					"code-review": produces({ outcome: rpivArtifactMdOutcome }),
+					blueprint: produces({ outcome: rpivArtifactMdOutcome }),
+					implement: acts(),
+					validate: produces({ outcome: rpivArtifactMdOutcome }),
+					commit: acts(),
+				},
+				edges: {
+					"code-review": defineRoute(["blueprint", "commit"], () => "blueprint", { readsData: false }),
+					blueprint: "implement",
+					implement: "validate",
+					validate: "code-review",
+					commit: "stop",
+				},
+			});
+
+			const result = await runWorkflow(chain.ctx, { workflow, input: "review changes" });
+
+			expect(result.success).toBe(false);
+			expect(result.error).toMatch(/backward-jump limit exceeded/i);
+			// 13 stages: cr×4 + bp×3 + impl×3 + validate×3. The 4th code-review's
+			// decision increments backwardJumps to 3 (> maxBackwardJumps=2).
+			expect(result.stagesCompleted).toBe(13);
+		});
 	});
 });
