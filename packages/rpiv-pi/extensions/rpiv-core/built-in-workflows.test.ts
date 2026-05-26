@@ -62,9 +62,9 @@ describe("[I1] validate → code-review routing in built-in workflows", () => {
 		expect(mid.edges.validate).toBe("code-review");
 	});
 
-	it("routes validate → code-review-large in large", () => {
+	it("routes validate → code-review in large", () => {
 		const large = findWorkflow("large");
-		expect(large.edges.validate).toBe("code-review-large");
+		expect(large.edges.validate).toBe("code-review");
 	});
 
 	it("every stage in every built-in workflow is reachable from start", () => {

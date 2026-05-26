@@ -147,10 +147,10 @@ const midWorkflow = defineWorkflow({
 });
 
 // ===========================================================================
-// large — research → design → plan → implement → validate → code-review-large →
+// large — research → design → plan → implement → validate → code-review →
 //         (design → loop) | commit
 //         Loops the full design/plan/implement/validate/review chain until
-//         code-review-large reports zero blockers, bounded by the runner's
+//         code-review reports zero blockers, bounded by the runner's
 //         maxBackwardJumps (default 2 → up to 3 review iterations).
 // ===========================================================================
 
@@ -163,11 +163,7 @@ const largeWorkflow = defineWorkflow({
 		plan: produces({ outcome: rpivBucketOutcome("plans") }),
 		implement: acts({ fanout: PHASE_FANOUT }),
 		validate: produces({ outcome: rpivBucketOutcome("validation") }),
-		"code-review-large": produces({
-			skill: "code-review",
-			outcome: rpivBucketOutcome("reviews"),
-			outputSchema: CODE_REVIEW_SCHEMA,
-		}),
+		"code-review": produces({ outcome: rpivBucketOutcome("reviews"), outputSchema: CODE_REVIEW_SCHEMA }),
 		commit: acts({ outcome: gitCommitOutcome }),
 	},
 	edges: {
@@ -175,12 +171,12 @@ const largeWorkflow = defineWorkflow({
 		design: "plan",
 		plan: "implement",
 		implement: "validate",
-		validate: "code-review-large",
-		// Backward edge: code-review-large → design re-enters the full
+		validate: "code-review",
+		// Backward edge: code-review → design re-enters the full
 		// design/plan/implement/validate/review cycle. Bounded by the
 		// runner's default maxBackwardJumps (2), permitting at most 3
 		// review iterations before the guard halts.
-		"code-review-large": gate("blockers_count", { design: gt(0), commit: eq(0) }),
+		"code-review": gate("blockers_count", { design: gt(0), commit: eq(0) }),
 		commit: "stop",
 	},
 });

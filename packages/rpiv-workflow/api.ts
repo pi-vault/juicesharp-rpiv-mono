@@ -395,7 +395,8 @@ function terminalScript<TIn = unknown>(opts: ActsScriptOptions<TIn>): StageDef<T
  * `.rpiv/artifacts/<bucket>/<file>.md`. Defaults to fresh-session. The
  * skill body defaults to the surrounding `stages` record key — override
  * via `{ skill: "<other>" }` only when the stage id and the Pi skill
- * differ (e.g. `code-review-large` aliasing the `code-review` skill).
+ * differ (e.g. a stage keyed `design-after-review` aliasing the
+ * `design` skill so it can appear twice in the same workflow's edge graph).
  *
  * Skillless variant: `produces.script({ run, outputSchema?, ... })` runs
  * a pure TS function in place of a Pi skill body. The function returns
