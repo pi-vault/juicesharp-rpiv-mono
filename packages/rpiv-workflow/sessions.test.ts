@@ -60,6 +60,7 @@ const freshRunState = (overrides: Partial<RunState> = {}): RunState => ({
 	originalInput: "x",
 	primaryArtifact: undefined,
 	output: undefined,
+	named: {},
 	stagesCompleted: 0,
 	lastAllocatedStageNumber: 0,
 	telemetry: {

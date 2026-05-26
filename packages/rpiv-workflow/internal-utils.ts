@@ -7,6 +7,7 @@
  */
 
 import { isAbsolute, join } from "node:path";
+import type { StageDef } from "./api.js";
 import type { Artifact } from "./handle.js";
 import type { RunState } from "./types.js";
 
@@ -24,6 +25,20 @@ export function assertNever(value: never): never {
  */
 export function currentPrimaryArtifact(state: RunState): Artifact | undefined {
 	return state.primaryArtifact;
+}
+
+/**
+ * Resolve the `state.named` key a produces stage appends its `Output`
+ * envelope onto. Two layers of fallback, in priority order:
+ *   1. `stage.outcome?.name` — categorical name carried by the outcome.
+ *   2. The stage's record key — always defined.
+ *
+ * Single source of truth for the key derivation so the skill-stage path
+ * and the script-stage path stay in lockstep, and so `validateWorkflow`
+ * can compute the same key set at load time.
+ */
+export function resolvePublishName(def: StageDef, stageName: string): string {
+	return def.outcome?.name ?? stageName;
 }
 
 /**

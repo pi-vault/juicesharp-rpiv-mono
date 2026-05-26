@@ -18,10 +18,12 @@ import { skillStageRef } from "../lifecycle.js";
 import {
 	ERR_INPUT_VALIDATION_FAILED,
 	ERR_MISSING_ARTIFACT,
+	ERR_MISSING_NAMED_READ,
 	ERR_SCHEMA_TIMEOUT,
 	ERR_SKILL_NOT_REGISTERED,
 	MSG_INPUT_VALIDATION_FAILED,
 	MSG_MISSING_ARTIFACT,
+	MSG_MISSING_NAMED_READ,
 	MSG_SKILL_NOT_REGISTERED,
 	MSG_STAGE_THREW,
 	STATUS_KEY,
@@ -100,13 +102,19 @@ function buildPrompt(skill: string, inputForStage: string): string {
 }
 
 /**
- * The arg string the stage's `/skill:<name> <args>` prompt carries. Three
- * cases:
+ * The arg string the stage's `/skill:<name> <args>` prompt carries. Four
+ * cases (checked in order):
  *   1. The start stage always receives `originalInput` (the user's brief).
  *   2. A stage opting out of inheritance (`inheritsArtifacts: false`, i.e.
  *      authored via `terminal()`) also receives `originalInput` — the
  *      `ensureUpstreamArtifact` preflight is bypassed for the same opt-out.
- *   3. Otherwise: the upstream primary artifact's handle string. The
+ *   3. A stage with `reads: [...]` receives a labelled multi-flag form:
+ *      `--<name1> <handle1> --<name2> <handle2> …`. Each name resolves
+ *      against `state.named[name].at(-1)` (the latest entry). When that
+ *      entry's `artifacts` array carries multiple handles, the flag
+ *      repeats: `--<name> <h1> --<name> <h2>`. The `ensureNamedReads`
+ *      preflight has already verified every name resolves; the `!` is safe.
+ *   4. Otherwise: the upstream primary artifact's handle string. The
  *      `ensureUpstreamArtifact` preflight guarantees the slot is set; the
  *      `!` is safe.
  */
@@ -114,7 +122,29 @@ function inputForStage(stage: ResolvedStage, run: RunContext): string {
 	const isStart = stage.name === run.workflow.start;
 	if (isStart) return run.state.originalInput;
 	if (stage.def.inheritsArtifacts === false) return run.state.originalInput;
+	if (stage.def.reads?.length) return formatNamedInputs(stage.def.reads, run);
 	return handleToString(currentPrimaryArtifact(run.state)!.handle);
+}
+
+/**
+ * Build the labelled-flag prompt body for a `reads:`-style stage. Iterates
+ * declared names in author-supplied order, resolves each to the latest
+ * `Output` accumulated in `state.named`, and emits one `--<name> <handle>`
+ * pair per artifact in that output (so multi-artifact stages get
+ * flag-repetition rather than space-collision).
+ *
+ * Pre-condition: every name resolves (enforced by `ensureNamedReads`).
+ */
+function formatNamedInputs(names: ReadonlyArray<string>, run: RunContext): string {
+	const parts: string[] = [];
+	for (const name of names) {
+		const latest = run.state.named[name]?.at(-1);
+		if (!latest) continue; // unreachable given preflight; defensive
+		for (const artifact of latest.artifacts) {
+			parts.push(`--${name}`, handleToString(artifact.handle));
+		}
+	}
+	return parts.join(" ");
 }
 
 /**
@@ -274,13 +304,17 @@ function ensureSkillRegistered(stage: ResolvedStage, run: RunContext): void {
  * an upstream artifactPath. Falling back to originalInput past the start
  * would silently hand a downstream skill the raw feature description.
  *
- * Stages authored via `terminal()` (`inheritsArtifacts: false`) opt out of
- * the upstream-artifact contract entirely — they consume `originalInput`
- * by design, so the check is skipped.
+ * Two opt-outs skip the check:
+ *   - `inheritsArtifacts: false` (authored via `terminal()`) — stage consumes
+ *     `originalInput` by design.
+ *   - `reads: [...]` — stage builds its prompt from the named-publish
+ *     registry instead of the rolling primary slot; `ensureNamedReads`
+ *     enforces its own coverage rule.
  */
 function ensureUpstreamArtifact(stage: ResolvedStage, run: RunContext): void {
 	if (stage.name === run.workflow.start) return;
 	if (stage.def.inheritsArtifacts === false) return;
+	if (stage.def.reads?.length) return;
 	if (currentPrimaryArtifact(run.state)) return;
 	throw new StagePreflightError(
 		"halt",
@@ -289,6 +323,28 @@ function ensureUpstreamArtifact(stage: ResolvedStage, run: RunContext): void {
 		ERR_MISSING_ARTIFACT(stage.skill, stage.stageNumber),
 		true,
 	);
+}
+
+/**
+ * A stage declaring `reads: [...]` must find every name filled in
+ * `state.named` before the prompt is built. `validateWorkflow` already
+ * confirms the names CAN exist (some upstream stage publishes them); this
+ * catches the runtime path where the producer hasn't fired yet — e.g.
+ * the stage was placed before its producer in the edge graph.
+ */
+function ensureNamedReads(stage: ResolvedStage, run: RunContext): void {
+	const reads = stage.def.reads;
+	if (!reads?.length) return;
+	for (const name of reads) {
+		if (run.state.named[name]?.length) continue;
+		throw new StagePreflightError(
+			"halt",
+			stage.skill,
+			MSG_MISSING_NAMED_READ(stage.skill, name),
+			ERR_MISSING_NAMED_READ(stage.skill, name, stage.stageNumber),
+			true,
+		);
+	}
 }
 
 function enforceSessionInvariants(stage: ResolvedStage, run: RunContext): void {
@@ -381,6 +437,7 @@ async function captureStageSnapshot(def: StageDef, idx: number, run: RunContext)
 
 const PRE_PROMPT_CHECKS: readonly PreflightCheck[] = [
 	{ name: "ensureUpstreamArtifact", kind: "halt", run: ensureUpstreamArtifact },
+	{ name: "ensureNamedReads", kind: "halt", run: ensureNamedReads },
 	{ name: "enforceSessionInvariants", kind: "invariant", run: enforceSessionInvariants },
 	{ name: "ensureSkillRegistered", kind: "halt", run: ensureSkillRegistered },
 ];

@@ -161,6 +161,7 @@ export async function runWorkflow(ctx: WorkflowContext, options: RunWorkflowOpti
 		originalInput: options.input,
 		primaryArtifact: undefined,
 		output: undefined,
+		named: {},
 		stagesCompleted: 0,
 		lastAllocatedStageNumber: 0,
 		telemetry: {

@@ -22,6 +22,7 @@ const makeState = (outputData?: Record<string, unknown>): RunState => ({
 				meta: { stage: "source", skill: "source", stageNumber: 1, ts: "", runId: "" },
 			}
 		: undefined,
+	named: {},
 	stagesCompleted: 0,
 	lastAllocatedStageNumber: 0,
 	telemetry: {

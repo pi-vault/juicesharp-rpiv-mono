@@ -72,6 +72,19 @@ export const MSG_MISSING_ARTIFACT = (currentSkill: string) =>
 export const ERR_MISSING_ARTIFACT = (currentSkill: string, stageNumber: number) =>
 	`Stage ${stageNumber} (${currentSkill}) has no upstream artifactPath; only stage 1 may consume the user's original input`;
 
+/**
+ * A stage declares `reads: [..., name, ...]` but `state.named[name]` is
+ * empty at preflight time. Either the producing stage hasn't run yet on
+ * this path (workflow-load reachability catches the impossible case;
+ * this surfaces the "haven't reached the producer" runtime case), or
+ * the producer was authored with no outcome and a name that doesn't
+ * match any stage record key.
+ */
+export const MSG_MISSING_NAMED_READ = (currentSkill: string, name: string) =>
+	`✗ ${currentSkill} reads "${name}" but no upstream produces stage has published it yet — stopping workflow`;
+export const ERR_MISSING_NAMED_READ = (currentSkill: string, name: string, stageNumber: number) =>
+	`Stage ${stageNumber} (${currentSkill}) reads "${name}" but state.named["${name}"] is empty; check that an upstream produces stage publishes this name`;
+
 export const MSG_BACKWARD_JUMP_EXHAUSTED = (jumps: number, max: number) =>
 	`rpiv: backward-jump limit exceeded (${jumps}/${max}) — stopping workflow to prevent infinite loop`;
 

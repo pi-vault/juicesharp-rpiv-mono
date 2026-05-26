@@ -30,6 +30,7 @@
 import type { ScriptContext, StageDef } from "../api.js";
 import { nowIso, recordStage, recordTerminalFailure } from "../audit.js";
 import type { Artifact } from "./../handle.js";
+import { resolvePublishName } from "../internal-utils.js";
 import { scriptStageRef } from "../lifecycle.js";
 import {
 	ERR_AUDIT_WRITE_FAILED,
@@ -179,7 +180,7 @@ function recordScriptSuccess(
 		state.termination.error = ERR_AUDIT_WRITE_FAILED(stage.name);
 		return false;
 	}
-	advancePrimaryForScript(state, stage.def, output);
+	advancePrimaryForScript(state, stage.def, stage.name, output);
 	state.output = output;
 	state.stagesCompleted++;
 	curCtx.ui.notify(MSG_STAGE_COMPLETE(stage.name), "info");
@@ -200,10 +201,14 @@ function recordScriptSuccess(
  *   - other `side-effect` → leave the slot untouched (a downstream
  *     stage still inherits whatever the upstream produces stage set).
  */
-function advancePrimaryForScript(state: RunState, def: StageDef, output: Output): void {
+function advancePrimaryForScript(state: RunState, def: StageDef, stageName: string, output: Output): void {
 	if (def.kind === "produces") {
 		const next = output.artifacts[0];
 		if (next) state.primaryArtifact = next;
+		const key = resolvePublishName(def, stageName);
+		const slot = state.named[key];
+		if (slot) slot.push(output);
+		else state.named[key] = [output];
 		return;
 	}
 	if (def.inheritsArtifacts === false) {

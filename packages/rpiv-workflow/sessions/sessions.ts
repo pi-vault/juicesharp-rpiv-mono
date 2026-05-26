@@ -24,6 +24,7 @@ import {
 	recordStopFailure,
 	recordTerminalFailure,
 } from "../audit.js";
+import { resolvePublishName } from "../internal-utils.js";
 import { buildLifecycleContext, skillStageRef } from "../lifecycle.js";
 import {
 	ERR_AUDIT_WRITE_FAILED,
@@ -163,6 +164,10 @@ function maybeAdvancePrimary(s: StageSession, output: Output): void {
 	if (s.stage.kind === "produces") {
 		const next = output.artifacts[0];
 		if (next) s.state.primaryArtifact = next;
+		const key = resolvePublishName(s.stage, s.stageName);
+		const slot = s.state.named[key];
+		if (slot) slot.push(output);
+		else s.state.named[key] = [output];
 		return;
 	}
 	if (s.stage.inheritsArtifacts === false) {

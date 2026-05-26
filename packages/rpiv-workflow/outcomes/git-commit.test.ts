@@ -47,6 +47,7 @@ const snapshotCtx = (cwd: string): SnapshotCtx => ({
 		originalInput: "",
 		primaryArtifact: undefined,
 		output: undefined,
+		named: {},
 		stagesCompleted: 0,
 		lastAllocatedStageNumber: 0,
 		telemetry: {

@@ -287,6 +287,21 @@ export interface StageDef<TIn = unknown, TOut = unknown> {
 	 * by `validateWorkflow`.
 	 */
 	run?: ProducesScriptFn<string, TOut> | ActsScriptFn;
+	/**
+	 * Names this stage consumes from `state.named` to build its prompt.
+	 * When set, the runner replaces the default single-artifact prompt
+	 * (`/skill:<name> <handle>`) with a labelled-flag form
+	 * (`/skill:<name> --<n1> <h1> --<n2> <h2> …`), reading the most recent
+	 * `Output` each name has accumulated and iterating its `artifacts` list.
+	 * Empty (or unset) → default prompt behaviour preserved.
+	 *
+	 * Names address `state.named` slots, which are keyed by
+	 * `stage.outcome?.name ?? stage.<record-key>`. Every name in `reads:`
+	 * must be filled by some upstream stage's produces success (validated
+	 * at load time by `validateWorkflow`; the `ensureNamedReads` preflight
+	 * catches the "haven't reached the producer yet" case at runtime).
+	 */
+	reads?: ReadonlyArray<string>;
 }
 
 /**
@@ -328,6 +343,7 @@ interface ProducesScriptOptions<TIn = unknown, TOut = unknown> {
 	maxRetries?: number;
 	validateTimeoutMs?: number;
 	inheritsArtifacts?: boolean;
+	reads?: ReadonlyArray<string>;
 }
 
 /**
@@ -340,6 +356,7 @@ interface ActsScriptOptions<TIn = unknown> {
 	run: ActsScriptFn;
 	inputSchema?: StageSchema<unknown, TIn>;
 	inheritsArtifacts?: boolean;
+	reads?: ReadonlyArray<string>;
 }
 
 function producesFn(overrides: Partial<StageDef> = {}): StageDef {
@@ -361,6 +378,7 @@ function producesScript<TIn = unknown, TOut = unknown>(opts: ProducesScriptOptio
 		maxRetries: opts.maxRetries,
 		validateTimeoutMs: opts.validateTimeoutMs,
 		inheritsArtifacts: opts.inheritsArtifacts,
+		reads: opts.reads,
 	};
 }
 
@@ -379,6 +397,7 @@ function actsScript<TIn = unknown>(opts: ActsScriptOptions<TIn>): StageDef<TIn, 
 		run: opts.run,
 		inputSchema: opts.inputSchema,
 		inheritsArtifacts: opts.inheritsArtifacts,
+		reads: opts.reads,
 	};
 }
 

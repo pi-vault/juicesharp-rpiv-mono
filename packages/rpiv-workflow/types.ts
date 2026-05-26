@@ -58,6 +58,20 @@ export interface RunState {
 	 */
 	primaryArtifact: Artifact | undefined;
 	output: Output | undefined;
+	/**
+	 * Named publish registry — `produces` stages APPEND their full `Output`
+	 * envelope onto the slot keyed by `stage.outcome?.name ??
+	 * stage.<record-key>` after each successful run. Slots are arrays so
+	 * iteration history is preserved across backward-jump loops; the
+	 * default read resolves to the most-recent entry (`array.at(-1)`).
+	 * Multiple stages MAY share a slot on purpose — their outputs interleave
+	 * in run order.
+	 *
+	 * Side-effect stages don't write to this slot. The slot is never
+	 * cleared by `terminal()` either: it's an additive history channel
+	 * orthogonal to the rolling `primaryArtifact`.
+	 */
+	named: Record<string, Output[]>;
 	/** Stages whose JSONL row landed on disk. */
 	stagesCompleted: number;
 	/** Most recently allocated stageNumber. Advances on every recordStage call. */

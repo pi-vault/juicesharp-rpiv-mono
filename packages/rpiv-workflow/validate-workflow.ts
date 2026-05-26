@@ -78,6 +78,7 @@ export function validateWorkflow(workflow: Workflow): WorkflowValidationIssue[] 
 	if (!hasUnenumerableEdge) checkReachability(workflow, issues);
 	checkStageSemantics(workflow, issues);
 	checkPredicateSchemas(workflow, issues);
+	checkReadsReferences(workflow, issues);
 
 	return issues;
 }
@@ -367,6 +368,38 @@ function checkScriptStageInvariants(
 				`stage "${name}": outputSchema is meaningless on side-effect script stages — no data to validate`,
 			),
 		);
+	}
+}
+
+/**
+ * Every name in a stage's `reads:` must be filled by some `produces` stage
+ * in the workflow. The publish key is `stage.outcome?.name ?? <record-key>`
+ * — same rule the runner enforces at write time (see
+ * `resolvePublishName`). Reachability isn't checked here: validating that
+ * the producer can actually reach the consumer in the edge graph is a
+ * larger graph problem and the static check is intentionally narrow —
+ * it answers "does this name correspond to something in the workflow at
+ * all?", catching typos and renames; the runtime `ensureNamedReads`
+ * preflight handles the "haven't fired yet" case.
+ */
+function checkReadsReferences(w: Workflow, issues: WorkflowValidationIssue[]): void {
+	const publishedNames = new Set<string>();
+	for (const [name, stage] of Object.entries(w.stages)) {
+		if (stage.kind !== "produces") continue;
+		publishedNames.add(stage.outcome?.name ?? name);
+	}
+	for (const [name, stage] of Object.entries(w.stages)) {
+		if (!stage.reads?.length) continue;
+		for (const read of stage.reads) {
+			if (publishedNames.has(read)) continue;
+			issues.push(
+				error(
+					w.name,
+					name,
+					`stage "${name}" reads "${read}" but no produces stage in this workflow publishes it (check outcome.name or stage record key)`,
+				),
+			);
+		}
 	}
 }
 

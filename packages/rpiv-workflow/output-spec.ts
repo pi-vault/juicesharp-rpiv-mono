@@ -135,6 +135,18 @@ export interface ArtifactParser<Snapshot = unknown, Kind extends string = string
  * `output.data`.
  */
 export interface OutputSpec<Snapshot = unknown, Kind extends string = string, Data = unknown> {
+	/**
+	 * Categorical name this outcome publishes under in `state.named`. When set,
+	 * the runner uses it as the default publish name for any stage wired with
+	 * this outcome — multiple stages sharing the same outcome converge to one
+	 * `state.named[name]` slot. Resolution order at write time:
+	 *   `stage.publishes ?? outcome.name ?? stage.<record-key>`.
+	 *
+	 * Optional. Outcomes that omit it cause stages to publish under their
+	 * record key by default; downstream `reads:` references stage names
+	 * directly.
+	 */
+	name?: string;
 	collector: ArtifactCollector<Snapshot>;
 	parser?: ArtifactParser<Snapshot, Kind, Data>;
 }
