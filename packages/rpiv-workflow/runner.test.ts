@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { createMockPi, createMockSessionChain, mockAssistantMessage } from "@juicesharp/rpiv-test-utils";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { EdgeTarget, FanoutFn, StageDef, StageKind, StageSchema, Workflow } from "./api.js";
-import { defineRoute, defineWorkflow, gate } from "./api.js";
+import type { EdgeTarget, FanoutFn, ScriptContext, StageDef, StageKind, StageSchema, Workflow } from "./api.js";
+import { defineRoute, defineWorkflow, gate, produces, terminal } from "./api.js";
 import { fs as fsHandle } from "./handle.js";
 import type { OutputSpec } from "./output.js";
 import { eq, gt } from "./predicates.js";
@@ -726,6 +726,68 @@ describe("runWorkflow", () => {
 
 			expect(result.success).toBe(true);
 			expect(result.stagesCompleted).toBe(1);
+		});
+	});
+
+	// Phase B.5 — focused regression for `terminal.script` clearing the
+	// rolling primary artifact slot in a [produces, terminal.script, produces]
+	// chain. B.4 test 6 covers the same surface with `acts.script` downstream;
+	// this pin uses `produces.script` downstream so a future runner refactor
+	// that re-introduces inheritance through terminal stages on the produces
+	// path trips the test rather than silently feeding stage 3 the wrong
+	// upstream handle. Lives next to `per-node kind dispatch` because the
+	// invariant is a per-kind concern (terminal.script === side-effect with
+	// `inheritsArtifacts: false`).
+	describe("terminal.script — artifact isolation regression", () => {
+		it("clears the rolling primary slot between two produces.script stages", async () => {
+			const upstreamHandle = fsHandle("/tmp/upstream.md");
+			let stage3InputKind: string | undefined;
+			let stage3InputArtifacts: number | undefined;
+			let stage3Primary: unknown;
+
+			const workflow = defineWorkflow({
+				name: "terminal-script-isolation",
+				start: "upstream",
+				stages: {
+					upstream: produces.script({
+						run: () => ({
+							kind: "artifact",
+							artifacts: [{ handle: upstreamHandle, role: "primary" }],
+							data: { source: "upstream" },
+						}),
+					}),
+					cleanup: terminal.script({ run: () => {} }),
+					verify: produces.script({
+						run: (ctx: ScriptContext) => {
+							stage3InputKind = ctx.input?.kind;
+							stage3InputArtifacts = ctx.input?.artifacts?.length;
+							stage3Primary = ctx.state.primaryArtifact;
+							return { kind: "report", artifacts: [], data: { ok: true } };
+						},
+					}),
+				},
+				edges: { upstream: "cleanup", cleanup: "verify", verify: "stop" },
+			});
+
+			const chain = createMockSessionChain({ cwd: tmpDir, steps: [] });
+			const result = await runWorkflow(chain.ctx, { workflow, input: "x" });
+
+			expect(result.success).toBe(true);
+			expect(result.stagesCompleted).toBe(3);
+
+			// The downstream produces.script must observe cleanup's row as its
+			// upstream Output — NOT the original `upstream` artifact envelope.
+			expect(stage3InputKind).toBe("side-effect");
+			expect(stage3InputArtifacts).toBe(0);
+
+			// The rolling primary-artifact slot was cleared by terminal.script
+			// (`inheritsArtifacts: false`), so stage 3 reads `undefined`.
+			expect(stage3Primary).toBeUndefined();
+
+			// Final run.lastArtifact reflects whatever stage 3 produced (nothing
+			// here) — confirms terminal.script's clear isn't sticky once a
+			// downstream produces stage that actually emits an artifact runs.
+			expect(result.lastArtifact).toBeUndefined();
 		});
 	});
 
