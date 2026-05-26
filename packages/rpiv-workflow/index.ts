@@ -117,6 +117,7 @@
  */
 
 import { registerWorkflowCommand } from "./command.js";
+import { type DocsProtocolHost, registerDocsProtocol } from "./docs-protocol.js";
 import type { WorkflowHost } from "./host.js";
 
 export {
@@ -221,4 +222,9 @@ export { validateWorkflow, type WorkflowValidationIssue } from "./validate-workf
 
 export default function (host: WorkflowHost): void {
 	registerWorkflowCommand(host);
+	// Pi passes the full ExtensionAPI at runtime, which has on().
+	// WorkflowHost doesn't declare on() to keep the programmatic-embedder
+	// surface narrow. Cast to satisfy the type — Pi always provides the
+	// full API.
+	registerDocsProtocol(host as unknown as DocsProtocolHost);
 }

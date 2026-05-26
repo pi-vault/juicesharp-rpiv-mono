@@ -59,6 +59,8 @@
     "types.ts",
     "validate-output.ts",
     "validate-workflow.ts",
+    "docs-protocol.ts",
+    "docs",
     "README.md",
     "LICENSE"
   ],
