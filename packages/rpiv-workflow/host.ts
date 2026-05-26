@@ -6,12 +6,16 @@
  * from its public surface. Pi's `ExtensionAPI` / `ExtensionCommandContext`
  * / `ReplacedSessionContext` structurally satisfy these ports, so
  * embedders pass their Pi handles directly without casting; consumers
- * wanting to drive the runtime from a non-Pi adapter implement these
- * three interfaces.
+ * wanting to drive the runtime from a non-Pi adapter implement these two
+ * interfaces.
  *
- *  - `WorkflowHost`         — registry-level host (default-export ctor + continue-policy sender).
- *  - `WorkflowCommandHost`  — per-command ctx passed into `runWorkflow`.
- *  - `WorkflowSessionHost`  — the replacement ctx delivered to `newSession`'s `withSession` callback.
+ *  - `WorkflowHost`    — registry-level host (default-export ctor + continue-policy sender).
+ *  - `WorkflowContext` — per-command ctx passed into `runWorkflow`, also the
+ *                        replacement ctx delivered to `newSession`'s `withSession`
+ *                        callback. `sendUserMessage` is optional at the type
+ *                        level (the outer command ctx may not carry one) but
+ *                        the runtime guarantees it is present inside
+ *                        `withSession`.
  *
  * Compile-time tripwire: `host.test.ts` asserts Pi's concrete types
  * extend these ports. If Pi's API drifts (a method renames, a signature
@@ -32,7 +36,7 @@ export interface WorkflowHost {
 		name: string,
 		options: {
 			description?: string;
-			handler: (args: string, ctx: WorkflowCommandHost) => Promise<void>;
+			handler: (args: string, ctx: WorkflowContext) => Promise<void>;
 		},
 	): void;
 	/**
@@ -55,8 +59,14 @@ export interface WorkflowHost {
  *
  * Exhaustive list of members the runtime touches — adding any reach
  * outside this list is a port-widening decision, not an oversight.
+ *
+ * `sendUserMessage` is declared optional because the outer command ctx
+ * Pi delivers to a `/wf` handler does not carry one — only the
+ * replacement ctx inside `newSession`'s `withSession` callback does. The
+ * runtime guarantees it is present in that callback; callers outside
+ * `withSession` must not rely on it.
  */
-export interface WorkflowCommandHost {
+export interface WorkflowContext {
 	cwd: string;
 	hasUI: boolean;
 	ui: {
@@ -76,16 +86,12 @@ export interface WorkflowCommandHost {
 	 * delivered to `withSession`.
 	 */
 	newSession(options: {
-		withSession: (replacement: WorkflowSessionHost) => Promise<void>;
+		withSession: (replacement: WorkflowContext) => Promise<void>;
 	}): Promise<{ cancelled: boolean }>;
-}
-
-/**
- * Replacement ctx delivered to `WorkflowCommandHost.newSession`'s
- * `withSession` callback. Same shape as the command host plus a
- * `sendUserMessage` on the freshly opened session — the fresh-handler's
- * single use of the replacement.
- */
-export interface WorkflowSessionHost extends WorkflowCommandHost {
-	sendUserMessage(content: string): Promise<void>;
+	/**
+	 * Present on the replacement ctx delivered inside `withSession`; not
+	 * present on the outer command ctx. The runtime narrows internally
+	 * before calling.
+	 */
+	sendUserMessage?(content: string): Promise<void>;
 }

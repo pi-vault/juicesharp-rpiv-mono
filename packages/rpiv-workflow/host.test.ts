@@ -15,7 +15,7 @@
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { it } from "vitest";
-import type { WorkflowCommandHost, WorkflowHost, WorkflowSessionHost } from "./host.js";
+import type { WorkflowContext, WorkflowHost } from "./host.js";
 
 // Pi keeps `ReplacedSessionContext` (the withSession parameter type)
 // internal — derive it from `newSession`'s signature so we don't depend
@@ -29,8 +29,8 @@ type PiReplacedSessionContext = WithSessionParam<Parameters<ExtensionCommandCont
 type Satisfies<Concrete, Port> = Concrete extends Port ? true : false;
 
 const _hostOk: Satisfies<ExtensionAPI, WorkflowHost> = true;
-const _cmdOk: Satisfies<ExtensionCommandContext, WorkflowCommandHost> = true;
-const _sessionOk: Satisfies<PiReplacedSessionContext, WorkflowSessionHost> = true;
+const _cmdOk: Satisfies<ExtensionCommandContext, WorkflowContext> = true;
+const _sessionOk: Satisfies<PiReplacedSessionContext, WorkflowContext> = true;
 
 void _hostOk;
 void _cmdOk;

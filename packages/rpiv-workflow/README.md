@@ -108,17 +108,20 @@ These workflows are merged into the lowest layer (`built-in`); user/project over
 ## Host boundary
 
 `rpiv-workflow`'s public type surface names **zero** `@earendil-works/pi-coding-agent`
-types. The runtime declares three workflow-owned port interfaces in
+types. The runtime declares two workflow-owned port interfaces in
 `./host.js`:
 
 - `WorkflowHost` — registry-level host (default export, continue-policy
   sends, skill-registration preflight).
-- `WorkflowCommandHost` — per-command ctx for `runWorkflow`.
-- `WorkflowSessionHost` — the replacement ctx delivered to
-  `newSession`'s `withSession` callback.
+- `WorkflowContext` — per-command ctx passed to `runWorkflow`; also the
+  replacement ctx delivered to `newSession`'s `withSession` callback.
+  `sendUserMessage` is optional at the type level (the outer command ctx
+  Pi delivers to `/wf` doesn't carry one) — the runtime guarantees it is
+  present inside `withSession`.
 
-Pi's `ExtensionAPI` / `ExtensionCommandContext` structurally satisfy these
-ports, so existing embedders pass their Pi handles through unchanged. A
+Pi's `ExtensionAPI` / `ExtensionCommandContext` / `ReplacedSessionContext`
+structurally satisfy these ports, so existing embedders pass their Pi
+handles through unchanged. A
 compile-time tripwire (`host.test.ts`) fails immediately if Pi's API ever
 drifts below the port shape. A future non-Pi host implements the three
 port interfaces and drives the runtime without any pi-coding-agent

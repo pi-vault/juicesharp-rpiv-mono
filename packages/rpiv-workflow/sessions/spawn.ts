@@ -50,6 +50,9 @@ export const FRESH_HANDLER: SessionPolicyHandler = {
 	async spawn(ctx, prompt, body) {
 		const { cancelled } = await ctx.newSession({
 			withSession: async (freshCtx) => {
+				if (!freshCtx.sendUserMessage) {
+					throw new Error("FRESH_HANDLER.spawn: replacement ctx missing sendUserMessage");
+				}
 				await freshCtx.sendUserMessage(prompt);
 				await body(freshCtx);
 			},
@@ -57,7 +60,13 @@ export const FRESH_HANDLER: SessionPolicyHandler = {
 		return { cancelled };
 	},
 	async send(ctx, msg) {
-		await (ctx as unknown as { sendUserMessage(m: string): Promise<void> }).sendUserMessage(msg);
+		// Inside fresh-policy stages, ctx is the replacement delivered to
+		// `withSession` — Pi guarantees `sendUserMessage` is present there.
+		// The port marks it optional because the outer command ctx lacks it.
+		if (!ctx.sendUserMessage) {
+			throw new Error("FRESH_HANDLER.send: replacement ctx missing sendUserMessage");
+		}
+		await ctx.sendUserMessage(msg);
 	},
 };
 

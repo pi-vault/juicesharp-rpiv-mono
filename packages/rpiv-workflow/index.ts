@@ -26,9 +26,9 @@
  *   2. Runner (programmatic embedders) — `./runner/index.js`, `./host.js`
  *      Drive a workflow from outside `/wf`: `runWorkflow`,
  *      `RunWorkflowOptions`, `RunWorkflowResult`. Embedders type their
- *      host handles against `WorkflowHost` / `WorkflowCommandHost` /
- *      `WorkflowSessionHost` (the host ports) — Pi's `ExtensionAPI` /
- *      `ExtensionCommandContext` structurally satisfy them, so the
+ *      host handles against `WorkflowHost` / `WorkflowContext` (the host
+ *      ports) — Pi's `ExtensionAPI` / `ExtensionCommandContext` /
+ *      `ReplacedSessionContext` structurally satisfy them, so the
  *      values pass through without casting.
  *
  *   3. Loader (programmatic embedders) — `./load/index.js`
@@ -94,10 +94,13 @@
  * types. Every host capability the runtime needs is declared as a
  * workflow-owned port in `./host.js`:
  *
- *   • `WorkflowHost`         — registry-level (default export + continue sends)
- *   • `WorkflowCommandHost`  — per-command ctx for `runWorkflow`
- *   • `WorkflowSessionHost`  — replacement ctx delivered to `newSession`'s
- *                              `withSession` callback
+ *   • `WorkflowHost`     — registry-level (default export + continue sends)
+ *   • `WorkflowContext`  — per-command ctx for `runWorkflow`; also the
+ *                          replacement ctx delivered to `newSession`'s
+ *                          `withSession` callback. `sendUserMessage` is
+ *                          optional at the type level (the outer command
+ *                          ctx omits it); the runtime guarantees it is
+ *                          present inside `withSession`.
  *
  * Pi's `ExtensionAPI` / `ExtensionCommandContext` are structurally
  * compatible with these ports — embedders pass their existing Pi handles
@@ -152,7 +155,7 @@ export {
 	opaque,
 	url,
 } from "./handle.js";
-export type { WorkflowCommandHost, WorkflowHost, WorkflowSessionHost } from "./host.js";
+export type { WorkflowContext, WorkflowHost } from "./host.js";
 export type { ConfigLayer, Issue, LoadedWorkflows, LoadIssue, OverlayPaths } from "./load/index.js";
 export { loadWorkflows, projectOverlayPaths, userOverlayPaths } from "./load/index.js";
 export { defineCollector, defineParser } from "./outcome-types.js";

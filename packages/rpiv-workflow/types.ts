@@ -22,16 +22,16 @@
 
 import type { StageDef, Workflow } from "./api.js";
 import type { Artifact } from "./handle.js";
-import type { WorkflowCommandHost, WorkflowHost } from "./host.js";
+import type { WorkflowContext, WorkflowHost } from "./host.js";
 import type { Output } from "./output.js";
 
 /**
- * Per-stage runtime ctx. Alias for `WorkflowCommandHost` (the port) —
+ * Per-stage runtime ctx. Alias for `WorkflowContext` (the port) —
  * kept as a domain noun ("the runner's command ctx") so consumers can
  * read stage/phase code without learning the port name. Identical
  * shape; rename-only.
  */
-export type RunnerCtx = WorkflowCommandHost;
+export type RunnerCtx = WorkflowContext;
 
 /** Mutable per-run bookkeeping threaded through the chain by reference. */
 export interface RunState {
