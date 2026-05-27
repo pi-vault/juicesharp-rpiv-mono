@@ -37,7 +37,7 @@ const CODE_REVIEW_SCHEMA = typeboxSchema(
 );
 
 /**
- * Status discriminator for the review-loop workflow's code-review stage.
+ * Status discriminator for the vet workflow's code-review stage.
  *
  * Three statuses are emitted by the code-review skill:
  *   - "approved"           — review passed, route to commit
@@ -91,13 +91,13 @@ const PHASE_FANOUT: FanoutFn = ({ artifact: primary, cwd }) => {
 };
 
 // ===========================================================================
-// feat — blueprint → implement → validate → commit
+// ship — blueprint → implement → validate → commit
 // ===========================================================================
 
-const featWorkflow = defineWorkflow({
-	name: "feat",
+const shipWorkflow = defineWorkflow({
+	name: "ship",
 	description:
-		"Quick implementation: plan → implement → validate → commit. Best for small to medium features (up to ~7 files).",
+		"Fast path with no research or review. Best when the change is small and the approach is obvious. Chain: blueprint → implement → validate → commit.",
 	start: "blueprint",
 	stages: {
 		blueprint: produces({ outcome: rpivBucketOutcome("plans") }),
@@ -114,14 +114,16 @@ const featWorkflow = defineWorkflow({
 });
 
 // ===========================================================================
-// mid — research → blueprint → implement → validate → code-review →
-//       (revise → implement → loop) | commit
-//       Loops until code-review reports zero blockers, bounded by the
-//       runner's maxBackwardJumps (default 2 → up to 3 review iterations).
+// build — research → blueprint → implement → validate → code-review →
+//         (revise → implement → loop) | commit
+//         Loops until code-review reports zero blockers, bounded by the
+//         runner's maxBackwardJumps (default 2 → up to 3 review iterations).
 // ===========================================================================
 
-const midWorkflow = defineWorkflow({
-	name: "mid",
+const buildWorkflow = defineWorkflow({
+	name: "build",
+	description:
+		"Research-backed feature work with a review loop. Best for medium changes where you want a second pass before committing. Chain: research → blueprint → implement → validate → code-review → (revise loop) → commit.",
 	start: "research",
 	stages: {
 		research: produces({ outcome: rpivBucketOutcome("research") }),
@@ -147,15 +149,17 @@ const midWorkflow = defineWorkflow({
 });
 
 // ===========================================================================
-// large — research → design → plan → implement → validate → code-review →
-//         (design → loop) | commit
-//         Loops the full design/plan/implement/validate/review chain until
-//         code-review reports zero blockers, bounded by the runner's
-//         maxBackwardJumps (default 2 → up to 3 review iterations).
+// arch — research → design → plan → implement → validate → code-review →
+//        (design → loop) | commit
+//        Loops the full design/plan/implement/validate/review chain until
+//        code-review reports zero blockers, bounded by the runner's
+//        maxBackwardJumps (default 2 → up to 3 review iterations).
 // ===========================================================================
 
-const largeWorkflow = defineWorkflow({
-	name: "large",
+const archWorkflow = defineWorkflow({
+	name: "arch",
+	description:
+		"Design-led pipeline for complex changes touching many files or layers. Best when the approach itself needs to be worked out before planning. Chain: research → design → plan → implement → validate → code-review → (design loop) → commit.",
 	start: "research",
 	stages: {
 		research: produces({ outcome: rpivBucketOutcome("research") }),
@@ -182,13 +186,15 @@ const largeWorkflow = defineWorkflow({
 });
 
 // ===========================================================================
-// review-loop — code-review → (blueprint → implement → validate → loop) | commit
-//              Review existing changes; if not approved, blueprint a fix plan,
-//              implement it, validate, and re-review. Loops until approved.
+// vet — code-review → (blueprint → implement → validate → loop) | commit
+//       Examine existing changes; if not approved, blueprint a fix plan,
+//       implement it, validate, and re-review. Loops until approved.
 // ===========================================================================
 
-const reviewLoopWorkflow = defineWorkflow({
-	name: "review-loop",
+const vetWorkflow = defineWorkflow({
+	name: "vet",
+	description:
+		"Examine existing changes for approval; loop a fix cycle if not approved. Best when a diff already exists (yours or a teammate's) and you want a structured review with optional repair. Chain: code-review → (blueprint → implement → validate → loop) → commit.",
 	start: "code-review",
 	stages: {
 		"code-review": produces({ outcome: rpivBucketOutcome("reviews"), outputSchema: REVIEW_STATUS_SCHEMA }),
@@ -223,4 +229,4 @@ const reviewLoopWorkflow = defineWorkflow({
 // Exports
 // ===========================================================================
 
-export const builtInWorkflows: readonly Workflow[] = [featWorkflow, midWorkflow, largeWorkflow, reviewLoopWorkflow];
+export const builtInWorkflows: readonly Workflow[] = [shipWorkflow, buildWorkflow, archWorkflow, vetWorkflow];

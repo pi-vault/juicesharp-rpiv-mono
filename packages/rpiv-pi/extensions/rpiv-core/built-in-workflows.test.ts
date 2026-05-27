@@ -53,18 +53,18 @@ const findWorkflow = (name: string): Workflow => {
 };
 
 // ---------------------------------------------------------------------------
-// I1 — validate must route to code-review (not commit) in mid/large workflows.
+// I1 — validate must route to code-review (not commit) in build/arch workflows.
 // ---------------------------------------------------------------------------
 
 describe("[I1] validate → code-review routing in built-in workflows", () => {
-	it("routes validate → code-review in mid", () => {
-		const mid = findWorkflow("mid");
-		expect(mid.edges.validate).toBe("code-review");
+	it("routes validate → code-review in build", () => {
+		const build = findWorkflow("build");
+		expect(build.edges.validate).toBe("code-review");
 	});
 
-	it("routes validate → code-review in large", () => {
-		const large = findWorkflow("large");
-		expect(large.edges.validate).toBe("code-review");
+	it("routes validate → code-review in arch", () => {
+		const arch = findWorkflow("arch");
+		expect(arch.edges.validate).toBe("code-review");
 	});
 
 	it("every stage in every built-in workflow is reachable from start", () => {
@@ -78,8 +78,8 @@ describe("[I1] validate → code-review routing in built-in workflows", () => {
 	});
 
 	it("revise loops back to implement (backward edge re-enters implement → validate → code-review cycle)", () => {
-		const mid = findWorkflow("mid");
-		expect(mid.edges.revise).toBe("implement");
+		const build = findWorkflow("build");
+		expect(build.edges.revise).toBe("implement");
 	});
 });
 
@@ -127,14 +127,14 @@ describe("[I2] readers must not silently drop the first row when no header is on
 
 describe("[I6] code-review predicate must not silently route to commit on missing field", () => {
 	it("built-in code-review stage carries an outputSchema", () => {
-		const mid = findWorkflow("mid");
-		const codeReview = mid.stages["code-review"];
+		const build = findWorkflow("build");
+		const codeReview = build.stages["code-review"];
 		expect(codeReview?.outputSchema).toBeDefined();
 	});
 
 	it("the declared schema rejects an empty data object", async () => {
-		const mid = findWorkflow("mid");
-		const schema = mid.stages["code-review"]?.outputSchema;
+		const build = findWorkflow("build");
+		const schema = build.stages["code-review"]?.outputSchema;
 		if (!schema) throw new Error("code-review outputSchema missing — fix I6 first");
 		const { validateOutputData } = await import("@juicesharp/rpiv-workflow");
 		const result = await validateOutputData(schema, {});
@@ -417,13 +417,13 @@ describe("[I9] phase fanout rows preserve both stage name (record key) and skill
 });
 
 // ---------------------------------------------------------------------------
-// Q4 — Dedicated tests for review-loop workflow routing predicate and
+// Q4 — Dedicated tests for vet workflow routing predicate and
 //       backward-jump loop behavior.
 // ---------------------------------------------------------------------------
 
-describe("[Q4] review-loop workflow", () => {
+describe("[Q4] vet workflow", () => {
 	const findEdge = (): EdgeFn => {
-		const wf = findWorkflow("review-loop");
+		const wf = findWorkflow("vet");
 		const edge = wf.edges["code-review"];
 		if (typeof edge !== "function") throw new Error("code-review edge is not an EdgeFn");
 		return edge as EdgeFn;
@@ -488,22 +488,22 @@ describe("[Q4] review-loop workflow", () => {
 
 	describe("structural validation", () => {
 		it("code-review stage carries REVIEW_STATUS_SCHEMA outputSchema", () => {
-			const wf = findWorkflow("review-loop");
+			const wf = findWorkflow("vet");
 			const codeReview = wf.stages["code-review"];
 			expect(codeReview?.outputSchema).toBeDefined();
 		});
 
 		it("validate routes back to code-review (backward-jump cycle)", () => {
-			const wf = findWorkflow("review-loop");
+			const wf = findWorkflow("vet");
 			expect(wf.edges.validate).toBe("code-review");
 		});
 
 		it("all stages are reachable from start", () => {
-			const wf = findWorkflow("review-loop");
+			const wf = findWorkflow("vet");
 			const issues = validateWorkflow(wf);
 			expect(
 				issues.filter((i) => /unreachable/.test(i.message)),
-				`review-loop has unreachable stages`,
+				`vet has unreachable stages`,
 			).toEqual([]);
 		});
 	});
@@ -528,7 +528,7 @@ describe("[Q4] review-loop workflow", () => {
 			writeFileSync(join(tmpDir, relPath), "");
 		};
 
-		it("halts when review-loop exceeds maxBackwardJumps", async () => {
+		it("halts when vet exceeds maxBackwardJumps", async () => {
 			// Pre-write artifacts for each stage pass. With default
 			// maxBackwardJumps=2, the guard halts after the 4th code-review's
 			// decision-edge increments backwardJumps to 3 (>2). The cycle:
@@ -567,11 +567,11 @@ describe("[Q4] review-loop workflow", () => {
 				],
 			});
 
-			// Build a workflow matching review-loop's graph shape, but the
+			// Build a workflow matching vet's graph shape, but the
 			// code-review predicate always routes to "blueprint" (never approves),
 			// so the loop runs until maxBackwardJumps exhausts.
 			const workflow = defineWorkflow({
-				name: "review-loop-test",
+				name: "vet-test",
 				start: "code-review",
 				stages: {
 					"code-review": produces({ outcome: rpivArtifactMdOutcome }),
