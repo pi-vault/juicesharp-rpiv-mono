@@ -272,5 +272,8 @@ function notifyCleanup(ui: UI, result: CleanupResult): void {
 function warnMissingSiblings(ui: UI): void {
 	const missing = findMissingSiblings();
 	if (missing.length === 0) return;
-	ui.notify(msgMissingSiblings(missing.map((m) => m.pkg.replace(/^npm:/, ""))), "warning");
+	// Leading newline so Pi's "Warning: " severity prefix sits on its own
+	// line; every box row then gets Pi's 1-space continuation indent
+	// uniformly and the border stays aligned.
+	ui.notify(`\n${msgMissingSiblings(missing.map((m) => m.pkg.replace(/^npm:/, "")))}`, "warning");
 }
