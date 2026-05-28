@@ -35,3 +35,17 @@ export function appendErrorLog(scope: string, err: unknown): void {
 		// stderr would corrupt it.
 	}
 }
+
+// Sibling of appendErrorLog for non-error breadcrumbs (e.g. "mic opened
+// at 48 kHz in resample-rms mode"). Same sink, same best-effort
+// semantics — separating the entry point keeps the call sites honest
+// about whether something actually went wrong.
+export function appendDiagnosticLog(scope: string, message: string): void {
+	try {
+		mkdirSync(LOG_DIR, { recursive: true });
+		const line = `${new Date().toISOString()} [${scope}] ${message}\n`;
+		appendFileSync(LOG_PATH, line, "utf-8");
+	} catch {
+		// See appendErrorLog above.
+	}
+}
