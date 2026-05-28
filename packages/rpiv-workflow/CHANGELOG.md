@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Promote `jiti` and `@juicesharp/rpiv-config` from `peerDependencies` to `dependencies`. Both are runtime value imports (`load/cache.ts` and `load/paths.ts`), but Pi's installer (`pi install`) does not auto-install peer dependencies into `~/.pi/agent/npm/node_modules`, so fresh installs failed with `Cannot find module 'jiti'` when the extension loaded.
+
 ## [1.14.1] - 2026-05-28
 
 ### Fixed

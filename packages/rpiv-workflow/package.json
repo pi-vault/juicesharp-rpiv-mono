@@ -75,11 +75,13 @@
       "./index.ts"
     ]
   },
+  "dependencies": {
+    "@juicesharp/rpiv-config": "*",
+    "jiti": "^2.7.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
-    "@juicesharp/rpiv-config": "*",
     "@standard-schema/spec": "*",
-    "jiti": "*",
     "typebox": "*"
   }
 }
