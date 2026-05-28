@@ -13,6 +13,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [1.14.0] - 2026-05-28
 
+> **Upgrade note:** After updating, run `/rpiv-setup` inside a Pi session to install the new `@juicesharp/rpiv-workflow` sibling that provides the workflows below. `pi update` alone won't pick it up — siblings have to be registered with Pi explicitly.
+
 ### Added
 - `architecture-review` skill for top-down, layer-by-layer architecture reviews (experimental — under test).
 - `ship` workflow — fast path with no research or review (blueprint → implement → validate → commit).
