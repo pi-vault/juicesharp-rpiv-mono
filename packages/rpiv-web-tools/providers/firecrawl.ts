@@ -1,4 +1,4 @@
-import type { FetchResponse, SearchProvider, SearchResponse, SearchResult } from "./types.js";
+import type { FetchResponse, FullProvider, SearchResponse, SearchResult } from "./types.js";
 
 const FIRECRAWL_API_URL = "https://api.firecrawl.dev/v1";
 export const FIRECRAWL_API_KEY_ENV_VAR = "FIRECRAWL_API_KEY";
@@ -6,6 +6,7 @@ export const FIRECRAWL_PROVIDER_META = {
 	name: "firecrawl",
 	label: "Firecrawl",
 	envVar: FIRECRAWL_API_KEY_ENV_VAR,
+	roles: ["search", "fetch"] as const,
 } as const;
 
 interface FirecrawlSearchResult {
@@ -43,7 +44,7 @@ function normalizeFirecrawlResults(results: FirecrawlSearchResult[]): SearchResu
 	}));
 }
 
-export class FirecrawlProvider implements SearchProvider {
+export class FirecrawlProvider implements FullProvider {
 	readonly name = FIRECRAWL_PROVIDER_META.name;
 	readonly label = FIRECRAWL_PROVIDER_META.label;
 	readonly envVar = FIRECRAWL_PROVIDER_META.envVar;

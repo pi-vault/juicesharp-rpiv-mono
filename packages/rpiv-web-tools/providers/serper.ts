@@ -1,5 +1,4 @@
-import { assertTextContentType, extractBodyAsText, fetchUrlOrThrow } from "./fetch-helpers.js";
-import type { FetchResponse, SearchProvider, SearchResponse, SearchResult } from "./types.js";
+import type { SearchProvider, SearchResponse, SearchResult } from "./types.js";
 
 const SERPER_API_URL = "https://google.serper.dev/search";
 export const SERPER_API_KEY_ENV_VAR = "SERPER_API_KEY";
@@ -7,6 +6,7 @@ export const SERPER_PROVIDER_META = {
 	name: "serper",
 	label: "Serper",
 	envVar: SERPER_API_KEY_ENV_VAR,
+	roles: ["search"] as const,
 } as const;
 
 interface SerperOrganicResult {
@@ -60,22 +60,5 @@ export class SerperProvider implements SearchProvider {
 
 		const raw = (await res.json()) as SerperRawResponse;
 		return { query, results: normalizeSerperResults(raw.organic ?? []) };
-	}
-
-	// No apiKey guard: Serper's fetch() wraps the built-in HTTP+htmlToText
-	// pipeline and does not call any vendor endpoint. Same rationale as Brave.
-	async fetch(url: string, raw: boolean, signal?: AbortSignal): Promise<FetchResponse> {
-		const res = await fetchUrlOrThrow(url, signal);
-		const contentType = res.headers.get("content-type") ?? "";
-		assertTextContentType(contentType);
-
-		const { text, title } = await extractBodyAsText(res, contentType, raw);
-		const contentLengthHeader = res.headers.get("content-length");
-		return {
-			text,
-			title,
-			contentType: contentType || undefined,
-			contentLength: contentLengthHeader ? Number(contentLengthHeader) : undefined,
-		};
 	}
 }

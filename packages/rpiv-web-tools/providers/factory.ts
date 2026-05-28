@@ -1,20 +1,23 @@
 import { BraveProvider } from "./brave.js";
 import { ExaProvider } from "./exa.js";
 import { FirecrawlProvider } from "./firecrawl.js";
-import { GitHubProvider } from "./github.js";
 import { JinaProvider } from "./jina.js";
 import { OllamaProvider } from "./ollama.js";
 import { SearxngProvider } from "./searxng.js";
 import { SerperProvider } from "./serper.js";
 import { TavilyProvider } from "./tavily.js";
-import type { SearchProvider } from "./types.js";
+import type { FullProvider, SearchProvider } from "./types.js";
 
 export interface ProviderCredentials {
 	apiKey?: string;
 	baseUrl?: string;
 }
 
-export function createSearchProvider(name: string, creds: ProviderCredentials): SearchProvider {
+// The return union mirrors the role split: Brave/Serper/SearXNG are search-
+// only (SearchProvider); the other five expose native fetch endpoints too
+// (FullProvider). Consumers narrow with `"fetch" in provider` when they need
+// to dispatch on capability.
+export function createSearchProvider(name: string, creds: ProviderCredentials): SearchProvider | FullProvider {
 	const apiKey = creds.apiKey ?? "";
 	switch (name) {
 		case "brave":
@@ -33,8 +36,6 @@ export function createSearchProvider(name: string, creds: ProviderCredentials): 
 			return new SearxngProvider({ apiKey: creds.apiKey, baseUrl: creds.baseUrl ?? "" });
 		case "ollama":
 			return new OllamaProvider({ apiKey: creds.apiKey, baseUrl: creds.baseUrl ?? "" });
-		case "github":
-			return new GitHubProvider(apiKey);
 		default:
 			throw new Error(`Unknown search provider: "${name}"`);
 	}

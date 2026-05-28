@@ -9,7 +9,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Static, TObject } from "typebox";
+import { type Static, type TObject, Type } from "typebox";
 import { Value } from "typebox/value";
 
 // ---------------------------------------------------------------------------
@@ -102,6 +102,21 @@ export interface GuidanceFields {
 	promptSnippet?: string;
 	promptGuidelines?: string[];
 }
+
+// TypeBox form of GuidanceFields. Mirrors the interface 1:1 — same fields,
+// same optionality. `additionalProperties: true` lets consumers compose
+// wrappers that may carry sibling-specific keys without those leaking back
+// into rpiv-config. The runtime invariants (non-empty string, non-empty
+// array of non-empty strings) are still enforced by `validateGuidanceFields`;
+// the schema is a structural type-narrowing aid for callers that bake
+// guidance into a larger TypeBox-validated config object.
+export const GuidanceFieldsSchema = Type.Object(
+	{
+		promptSnippet: Type.Optional(Type.String()),
+		promptGuidelines: Type.Optional(Type.Array(Type.String())),
+	},
+	{ additionalProperties: true },
+);
 
 /**
  * Validate and extract guidance fields from an unknown value.

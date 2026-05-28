@@ -1,7 +1,6 @@
 import { BRAVE_PROVIDER_META } from "./brave.js";
 import { EXA_PROVIDER_META } from "./exa.js";
 import { FIRECRAWL_PROVIDER_META } from "./firecrawl.js";
-import { GITHUB_PROVIDER_META } from "./github.js";
 import { JINA_PROVIDER_META } from "./jina.js";
 import { OLLAMA_PROVIDER_META } from "./ollama.js";
 import { SEARXNG_PROVIDER_META } from "./searxng.js";
@@ -13,15 +12,17 @@ export { BRAVE_API_KEY_ENV_VAR, BRAVE_PROVIDER_META, BraveProvider } from "./bra
 export { EXA_API_KEY_ENV_VAR, EXA_PROVIDER_META, ExaProvider } from "./exa.js";
 export { createSearchProvider, type ProviderCredentials } from "./factory.js";
 export { FIRECRAWL_API_KEY_ENV_VAR, FIRECRAWL_PROVIDER_META, FirecrawlProvider } from "./firecrawl.js";
+// URL interceptors live in providers/interceptors/. The github primitives
+// (parseGitHubUrl, GitHubUrlInfo, etc.) are re-exported from there.
 export {
 	clearCloneCache,
-	extractGitHub,
-	GITHUB_PROVIDER_META,
 	GITHUB_TOKEN_ENV_VAR,
-	GitHubProvider,
+	GitHubInterceptor,
+	type GitHubInterceptorOptions,
 	type GitHubUrlInfo,
 	parseGitHubUrl,
-} from "./github.js";
+	type UrlInterceptor,
+} from "./interceptors/index.js";
 export { JINA_API_KEY_ENV_VAR, JINA_PROVIDER_META, JinaProvider } from "./jina.js";
 export {
 	configureOllama,
@@ -45,11 +46,14 @@ export {
 export { SERPER_API_KEY_ENV_VAR, SERPER_PROVIDER_META, SerperProvider } from "./serper.js";
 export { TAVILY_API_KEY_ENV_VAR, TAVILY_PROVIDER_META, TavilyProvider } from "./tavily.js";
 export type {
+	FetchProvider,
 	FetchResponse,
+	FullProvider,
 	ProviderConfigChange,
 	ProviderConfigCurrent,
 	ProviderConfigUi,
 	ProviderMeta,
+	ProviderRole,
 	SearchProvider,
 	SearchResponse,
 	SearchResult,
@@ -68,5 +72,4 @@ export const PROVIDERS: readonly ProviderMeta[] = [
 	FIRECRAWL_PROVIDER_META,
 	SEARXNG_PROVIDER_META,
 	OLLAMA_PROVIDER_META,
-	GITHUB_PROVIDER_META,
 ];

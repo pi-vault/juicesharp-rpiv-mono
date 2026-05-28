@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
+import { configPath } from "@juicesharp/rpiv-config";
 import { createMockCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
 import { beforeEach, describe, expect, it, type vi } from "vitest";
 import registerWebTools, {
@@ -9,7 +10,7 @@ import registerWebTools, {
 	DEFAULT_WEB_SEARCH_SNIPPET,
 } from "./index.js";
 
-const CONFIG_PATH = join(process.env.HOME!, ".config", "rpiv-web-tools", "config.json");
+const CONFIG_PATH = configPath("rpiv-web-tools");
 const DEFAULT_SEARCH_GUIDELINES_LENGTH = DEFAULT_WEB_SEARCH_GUIDELINES.length;
 const DEFAULT_FETCH_GUIDELINES_LENGTH = DEFAULT_WEB_FETCH_GUIDELINES.length;
 

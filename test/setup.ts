@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { configPath } from "@juicesharp/rpiv-config";
 import { beforeEach, vi } from "vitest";
 
 const TEST_HOME = mkdtempSync(join(tmpdir(), "rpiv-test-home-"));
@@ -86,6 +87,9 @@ beforeEach(async () => {
 	const voice = await import("../packages/rpiv-voice/config/voice-config.js");
 	voice.__resetState();
 
+	const webToolsInterceptors = await import("../packages/rpiv-web-tools/providers/interceptors/index.js");
+	webToolsInterceptors.__resetWebToolsInterceptors();
+
 	delete (globalThis as Record<symbol, unknown>)[ADVISOR_SYMBOL];
 	delete (globalThis as Record<symbol, unknown>)[BTW_SYMBOL];
 	delete (globalThis as Record<symbol, unknown>)[I18N_SYMBOL];
@@ -99,7 +103,7 @@ beforeEach(async () => {
 	const voiceErrorsLog = join(process.env.HOME!, ".config", "rpiv-voice", "errors.log");
 	const todoConfig = join(process.env.HOME!, ".config", "rpiv-todo", "config.json");
 	const askUserQuestionConfig = join(process.env.HOME!, ".config", "rpiv-ask-user-question", "config.json");
-	const webToolsConfig = join(process.env.HOME!, ".config", "rpiv-web-tools", "config.json");
+	const webToolsConfig = configPath("rpiv-web-tools");
 	rmSync(piAgentSettings, { force: true });
 	rmSync(xdgPiAgentDir, { recursive: true, force: true });
 	rmSync(advisorConfig, { force: true });

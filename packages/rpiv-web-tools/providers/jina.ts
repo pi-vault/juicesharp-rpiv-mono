@@ -1,4 +1,4 @@
-import type { FetchResponse, SearchProvider, SearchResponse, SearchResult } from "./types.js";
+import type { FetchResponse, FullProvider, SearchResponse, SearchResult } from "./types.js";
 
 const JINA_SEARCH_API_URL = "https://s.jina.ai/";
 const JINA_READER_API_URL = "https://r.jina.ai/";
@@ -7,6 +7,7 @@ export const JINA_PROVIDER_META = {
 	name: "jina",
 	label: "Jina",
 	envVar: JINA_API_KEY_ENV_VAR,
+	roles: ["search", "fetch"] as const,
 } as const;
 
 interface JinaSearchResult {
@@ -33,7 +34,7 @@ function normalizeJinaResults(results: JinaSearchResult[]): SearchResult[] {
 	}));
 }
 
-export class JinaProvider implements SearchProvider {
+export class JinaProvider implements FullProvider {
 	readonly name = JINA_PROVIDER_META.name;
 	readonly label = JINA_PROVIDER_META.label;
 	readonly envVar = JINA_PROVIDER_META.envVar;

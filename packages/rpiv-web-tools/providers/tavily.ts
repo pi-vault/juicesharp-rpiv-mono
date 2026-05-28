@@ -1,4 +1,4 @@
-import type { FetchResponse, SearchProvider, SearchResponse, SearchResult } from "./types.js";
+import type { FetchResponse, FullProvider, SearchResponse, SearchResult } from "./types.js";
 
 const TAVILY_API_URL = "https://api.tavily.com/search";
 const TAVILY_EXTRACT_API_URL = "https://api.tavily.com/extract";
@@ -7,6 +7,7 @@ export const TAVILY_PROVIDER_META = {
 	name: "tavily",
 	label: "Tavily",
 	envVar: TAVILY_API_KEY_ENV_VAR,
+	roles: ["search", "fetch"] as const,
 } as const;
 
 interface TavilyRawResult {
@@ -39,7 +40,7 @@ function normalizeTavilyResults(results: TavilyRawResult[]): SearchResult[] {
 	}));
 }
 
-export class TavilyProvider implements SearchProvider {
+export class TavilyProvider implements FullProvider {
 	readonly name = TAVILY_PROVIDER_META.name;
 	readonly label = TAVILY_PROVIDER_META.label;
 	readonly envVar = TAVILY_PROVIDER_META.envVar;

@@ -48,7 +48,7 @@ export const SIBLINGS: readonly SiblingPlugin[] = [
 	{
 		pkg: "npm:@juicesharp/rpiv-web-tools",
 		matches: /rpiv-web-tools/i,
-		provides: "web_search + web_fetch tools + /web-search-config",
+		provides: "web_search + web_fetch tools + /web-tools",
 	},
 	{
 		pkg: "npm:@juicesharp/rpiv-args",

@@ -1,5 +1,4 @@
-import { assertTextContentType, extractBodyAsText, fetchUrlOrThrow } from "./fetch-helpers.js";
-import type { FetchResponse, SearchProvider, SearchResponse, SearchResult } from "./types.js";
+import type { SearchProvider, SearchResponse, SearchResult } from "./types.js";
 
 const BRAVE_SEARCH_API_URL = "https://api.search.brave.com/res/v1/web/search";
 export const BRAVE_API_KEY_ENV_VAR = "BRAVE_SEARCH_API_KEY";
@@ -7,6 +6,7 @@ export const BRAVE_PROVIDER_META = {
 	name: "brave",
 	label: "Brave",
 	envVar: BRAVE_API_KEY_ENV_VAR,
+	roles: ["search"] as const,
 } as const;
 
 interface BraveRawResponse {
@@ -54,23 +54,5 @@ export class BraveProvider implements SearchProvider {
 
 		const raw = (await res.json()) as BraveRawResponse;
 		return { query, results: normalizeBraveResults(raw) };
-	}
-
-	// No apiKey guard: Brave's fetch() wraps the built-in HTTP+htmlToText
-	// pipeline and does not call any vendor endpoint. Adding a guard would
-	// break the "use any provider for fetch" contract.
-	async fetch(url: string, raw: boolean, signal?: AbortSignal): Promise<FetchResponse> {
-		const res = await fetchUrlOrThrow(url, signal);
-		const contentType = res.headers.get("content-type") ?? "";
-		assertTextContentType(contentType);
-
-		const { text, title } = await extractBodyAsText(res, contentType, raw);
-		const contentLengthHeader = res.headers.get("content-length");
-		return {
-			text,
-			title,
-			contentType: contentType || undefined,
-			contentLength: contentLengthHeader ? Number(contentLengthHeader) : undefined,
-		};
 	}
 }

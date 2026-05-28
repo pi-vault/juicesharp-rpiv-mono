@@ -1,6 +1,7 @@
 export {
 	configPath,
 	type GuidanceFields,
+	GuidanceFieldsSchema,
 	loadJsonConfig,
 	readEnvVar,
 	saveJsonConfig,

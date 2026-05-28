@@ -1,11 +1,11 @@
 import {
 	type FetchResponse,
+	type FullProvider,
 	isCancellation,
 	type ProviderConfigChange,
 	type ProviderConfigCurrent,
 	type ProviderConfigUi,
 	type ProviderMeta,
-	type SearchProvider,
 	type SearchResponse,
 	type SearchResult,
 } from "./types.js";
@@ -40,6 +40,7 @@ export const OLLAMA_PROVIDER_META: ProviderMeta = {
 	envVar: OLLAMA_API_KEY_ENV_VAR,
 	baseUrlEnvVar: OLLAMA_HOST_ENV_VAR,
 	defaultBaseUrl: OLLAMA_DEFAULT_URL,
+	roles: ["search", "fetch"],
 	configure: (ui, current) => configureOllama(ui, current),
 };
 
@@ -124,7 +125,7 @@ interface OllamaProviderOptions {
 	baseUrl: string;
 }
 
-export class OllamaProvider implements SearchProvider {
+export class OllamaProvider implements FullProvider {
 	readonly name = "ollama";
 	readonly label = "Ollama";
 	readonly envVar = OLLAMA_API_KEY_ENV_VAR;

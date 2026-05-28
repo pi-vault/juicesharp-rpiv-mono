@@ -1,6 +1,4 @@
-import { assertTextContentType, extractBodyAsText, fetchUrlOrThrow } from "./fetch-helpers.js";
 import {
-	type FetchResponse,
 	isCancellation,
 	type ProviderConfigChange,
 	type ProviderConfigCurrent,
@@ -37,6 +35,7 @@ export const SEARXNG_PROVIDER_META: ProviderMeta = {
 	envVar: SEARXNG_API_KEY_ENV_VAR,
 	baseUrlEnvVar: SEARXNG_URL_ENV_VAR,
 	defaultBaseUrl: SEARXNG_DEFAULT_URL,
+	roles: ["search"],
 	configure: (ui, current) => configureSearxng(ui, current),
 };
 
@@ -123,23 +122,6 @@ export class SearxngProvider implements SearchProvider {
 		if (!res.ok) throw await this.searchApiError(res);
 		const raw = (await res.json()) as SearxngRawResponse;
 		return { query, results: normalizeSearxngResults(raw, maxResults) };
-	}
-
-	// No guard: SearXNG's fetch() wraps the built-in HTTP+htmlToText pipeline
-	// and does not call the SearXNG instance — same contract as Brave/Serper.
-	async fetch(url: string, raw: boolean, signal?: AbortSignal): Promise<FetchResponse> {
-		const res = await fetchUrlOrThrow(url, signal);
-		const contentType = res.headers.get("content-type") ?? "";
-		assertTextContentType(contentType);
-
-		const { text, title } = await extractBodyAsText(res, contentType, raw);
-		const contentLengthHeader = res.headers.get("content-length");
-		return {
-			text,
-			title,
-			contentType: contentType || undefined,
-			contentLength: contentLengthHeader ? Number(contentLengthHeader) : undefined,
-		};
 	}
 
 	private requireBaseUrl(): void {

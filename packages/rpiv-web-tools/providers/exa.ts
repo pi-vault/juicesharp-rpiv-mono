@@ -1,4 +1,4 @@
-import type { FetchResponse, SearchProvider, SearchResponse, SearchResult } from "./types.js";
+import type { FetchResponse, FullProvider, SearchResponse, SearchResult } from "./types.js";
 
 const EXA_API_URL = "https://api.exa.ai/search";
 const EXA_CONTENTS_API_URL = "https://api.exa.ai/contents";
@@ -7,6 +7,7 @@ export const EXA_PROVIDER_META = {
 	name: "exa",
 	label: "Exa",
 	envVar: EXA_API_KEY_ENV_VAR,
+	roles: ["search", "fetch"] as const,
 } as const;
 const EXA_MAX_SNIPPET_CHARACTERS = 300;
 const EXA_MAX_FETCH_CHARACTERS = 10000;
@@ -30,7 +31,7 @@ function normalizeExaResults(results: ExaRawResult[]): SearchResult[] {
 	}));
 }
 
-export class ExaProvider implements SearchProvider {
+export class ExaProvider implements FullProvider {
 	readonly name = EXA_PROVIDER_META.name;
 	readonly label = EXA_PROVIDER_META.label;
 	readonly envVar = EXA_PROVIDER_META.envVar;

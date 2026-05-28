@@ -23,12 +23,14 @@ import {
 	truncateHead,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import type { GuidanceFields } from "@juicesharp/rpiv-config";
-import { configPath, loadJsonConfig, saveJsonConfig, validateGuidanceFields } from "@juicesharp/rpiv-config";
+import { validateGuidanceFields } from "@juicesharp/rpiv-config";
 import { Type } from "typebox";
+import { getConfigPath, readConfig, type WebToolsConfig, writeConfig } from "./providers/config.js";
 import { createSearchProvider } from "./providers/factory.js";
-import { extractGitHub, PROVIDERS } from "./providers/index.js";
-import type { FetchResponse, ProviderMeta, SearchProvider, SearchResult } from "./providers/types.js";
+import { fetchViaGenericHtml } from "./providers/fetch-helpers.js";
+import { PROVIDERS } from "./providers/index.js";
+import { GITHUB_TOKEN_ENV_VAR, getActiveGitHubInterceptor, getInterceptors } from "./providers/interceptors/index.js";
+import type { FetchResponse, FullProvider, ProviderMeta, SearchProvider, SearchResult } from "./providers/types.js";
 
 // ---------------------------------------------------------------------------
 // Tunables and external surface
@@ -45,7 +47,7 @@ const API_KEY_MASK_VISIBLE_CHARS = 4;
 const FETCH_TEMP_DIR_PREFIX = "rpiv-fetch-";
 const FETCH_TEMP_FILE_NAME = "content.txt";
 
-const CONFIG_PATH = configPath("rpiv-web-tools");
+const CONFIG_PATH = getConfigPath();
 
 const SUPPORTED_HTTP_PROTOCOLS = new Set(["http:", "https:"]);
 
@@ -62,31 +64,13 @@ const DEFAULT_PROVIDER_NAME = "brave";
 const LEGACY_TOP_LEVEL_KEY_PROVIDER = "brave";
 
 // ---------------------------------------------------------------------------
-// Config file persistence
+// Config persistence — schema + reader/writer live in providers/config.ts.
+// The two local aliases keep the call-site shape identical to pre-refactor
+// (loadConfig / saveConfig) so the rest of this file reads unchanged.
 // ---------------------------------------------------------------------------
 
-// GuidanceFields is now imported from @juicesharp/rpiv-config
-
-interface WebToolsGuidance {
-	web_search?: GuidanceFields;
-	web_fetch?: GuidanceFields;
-}
-
-interface WebToolsConfig {
-	provider?: string;
-	apiKeys?: Record<string, string>;
-	baseUrls?: Record<string, string>;
-	apiKey?: string; // legacy — kept for backward compat
-	guidance?: WebToolsGuidance;
-}
-
-function loadConfig(): WebToolsConfig {
-	return loadJsonConfig<WebToolsConfig>(CONFIG_PATH);
-}
-
-function saveConfig(config: WebToolsConfig): boolean {
-	return saveJsonConfig(CONFIG_PATH, config);
-}
+const loadConfig = readConfig;
+const saveConfig = writeConfig;
 
 // ---------------------------------------------------------------------------
 // Executor guidance — overrides + defaults
@@ -148,7 +132,10 @@ function resolveProviderBaseUrl(meta: ProviderMeta, config: WebToolsConfig): str
 
 // Centralized instantiation: load active provider name + creds, build via
 // the factory. Called by both registerWebSearchTool and registerWebFetchTool.
-function instantiateActiveProvider(config: WebToolsConfig): { providerName: string; provider: SearchProvider } {
+function instantiateActiveProvider(config: WebToolsConfig): {
+	providerName: string;
+	provider: SearchProvider | FullProvider;
+} {
 	const providerName = config.provider ?? DEFAULT_PROVIDER_NAME;
 	const apiKey = resolveProviderApiKey(providerName, config);
 	const meta = PROVIDERS.find((p) => p.name === providerName);
@@ -383,18 +370,27 @@ export function registerWebFetchTool(pi: ExtensionAPI): void {
 			const config = loadConfig();
 			const { provider } = instantiateActiveProvider(config);
 
-			// Always-on GitHub URL interception: github.com and www.github.com URLs are handled by the
-			// GitHub provider regardless of which search provider is active. The SSRF
-			// guard (parseAndAssertHttpUrl above) still runs first — no ordering change.
-			// extractGitHub() returns null for non-code GitHub URLs (e.g. /issues, /pull)
-			// and falls through to the active provider's fetch in that case.
+			// Three-way capability dispatch:
+			//   1. URL interceptors (currently just GitHub) — opt-in URL specialists
+			//      that handle their own host pattern. Cheap-reject to null for
+			//      unrelated URLs; empty chain (interceptor disabled) is a no-op.
+			//   2. Provider's native fetch — full providers (Tavily, Exa, Jina,
+			//      Firecrawl, Ollama) have vendor endpoints worth using.
+			//   3. Generic HTML fallback — for search-only providers (Brave, Serper,
+			//      SearXNG) or any provider that doesn't carry a `fetch` method.
 			let fetchResponse: FetchResponse | undefined;
-			const githubResult = await extractGitHub(url, signal);
-			if (githubResult) {
-				fetchResponse = githubResult;
+			for (const interceptor of getInterceptors()) {
+				const r = await interceptor.intercept(url, { raw, signal });
+				if (r) {
+					fetchResponse = r;
+					break;
+				}
+			}
+			if (!fetchResponse && "fetch" in provider) {
+				fetchResponse = await provider.fetch(url, raw, signal);
 			}
 			if (!fetchResponse) {
-				fetchResponse = await provider.fetch(url, raw, signal);
+				fetchResponse = await fetchViaGenericHtml(url, raw, signal);
 			}
 			const { text: bodyText, title, contentType, contentLength } = fetchResponse;
 
@@ -492,6 +488,21 @@ function formatShowConfigMessage(current: WebToolsConfig): string {
 		const resolvedUrl = envUrl || configUrl || meta.defaultBaseUrl || "";
 		const urlSource = envUrl ? "env" : configUrl ? "config" : "default";
 		lines.push(`  ${meta.name} url: ${resolvedUrl} (source: ${urlSource})`);
+	}
+
+	lines.push("");
+	lines.push("URL interceptors:");
+	const githubInterceptor = getActiveGitHubInterceptor();
+	if (githubInterceptor) {
+		const opts = githubInterceptor.resolvedOptions;
+		const token = process.env[GITHUB_TOKEN_ENV_VAR]?.trim();
+		lines.push(
+			`  github: enabled (${GITHUB_TOKEN_ENV_VAR}: ${maskApiKey(token)}, maxRepoSizeMB: ${opts.maxRepoSizeMB}, clonePath: ${opts.clonePath})`,
+		);
+	} else {
+		lines.push("  github: disabled");
+		lines.push('  ↳ enable:  add  "interceptors": { "github": true }   to config.json');
+		lines.push('  ↳ disable: set  "interceptors": { "github": false }  to override a consumer-enabled default');
 	}
 
 	return lines.join("\n");

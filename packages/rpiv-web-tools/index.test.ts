@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
+import { configPath } from "@juicesharp/rpiv-config";
 import { createMockCtx, createMockPi, stubFetch } from "@juicesharp/rpiv-test-utils";
 import { beforeEach, describe, expect, it, type vi } from "vitest";
 import registerWebTools from "./index.js";
@@ -11,7 +12,7 @@ import {
 	SearxngProvider,
 } from "./providers/index.js";
 
-const CONFIG_PATH = join(process.env.HOME!, ".config", "rpiv-web-tools", "config.json");
+const CONFIG_PATH = configPath("rpiv-web-tools");
 
 function registerAndCapture() {
 	const { pi, captured } = createMockPi();
@@ -540,19 +541,17 @@ describe("web_fetch.execute — happy path", () => {
 	});
 });
 
+// Extraction providers — those with native fetch endpoints. Each entry drives
+// the per-provider error-path assertions below: no-key throw + labeled non-2xx.
+// Search-only providers (Brave/Serper/SearXNG) no longer have their own fetch()
+// after the role split; their fallback path is asserted once in the
+// "search-only providers fall back to generic HTML fetch" block.
 const FETCH_ERROR_MATRIX: ReadonlyArray<{
 	provider: string;
 	envVar: string;
 	fetchUrlMatcher: (u: string) => boolean;
 	label: string;
 }> = [
-	{
-		provider: "brave",
-		envVar: "BRAVE_SEARCH_API_KEY",
-		fetchUrlMatcher: (u) => u.includes("example.com"),
-		label: "Brave",
-	},
-	{ provider: "serper", envVar: "SERPER_API_KEY", fetchUrlMatcher: (u) => u.includes("example.com"), label: "Serper" },
 	{
 		provider: "tavily",
 		envVar: "TAVILY_API_KEY",
@@ -567,21 +566,7 @@ const FETCH_ERROR_MATRIX: ReadonlyArray<{
 		fetchUrlMatcher: (u) => u.includes("api.firecrawl.dev/v1/scrape"),
 		label: "Firecrawl",
 	},
-	{
-		provider: "searxng",
-		envVar: "SEARXNG_API_KEY",
-		fetchUrlMatcher: (u) => u.includes("example.com"),
-		label: "SearXNG",
-	},
-	{
-		provider: "github",
-		envVar: "GITHUB_TOKEN",
-		fetchUrlMatcher: (u) => u.includes("example.com"),
-		label: "GitHub",
-	},
 ];
-
-const SHARED_FETCH_HELPERS_PROVIDERS = new Set(["brave", "serper", "searxng", "github"]);
 
 describe.each(FETCH_ERROR_MATRIX)("web_fetch.execute — $provider error paths", ({
 	provider,
@@ -589,29 +574,15 @@ describe.each(FETCH_ERROR_MATRIX)("web_fetch.execute — $provider error paths",
 	fetchUrlMatcher,
 	label,
 }) => {
-	// Brave/Serper/SearXNG share fetch-helpers and read keys via
-	// resolveProviderApiKey; their fetch() doesn't gate on apiKey (raw HTTP
-	// doesn't authenticate to the target URL). Extraction providers
-	// (Tavily/Exa/Jina/Firecrawl) DO gate.
-	const guardsKey = !SHARED_FETCH_HELPERS_PROVIDERS.has(provider);
-
-	if (guardsKey) {
-		it(`fetch throws when no key configured for ${provider}`, async () => {
-			writeConfig({ provider });
-			const { captured } = registerAndCapture();
-			await expect(
-				captured.tools
-					.get("web_fetch")
-					?.execute?.(
-						"tc",
-						{ url: "https://example.com" },
-						undefined as never,
-						undefined as never,
-						createMockCtx(),
-					),
-			).rejects.toThrow(new RegExp(`${envVar} is not set`));
-		});
-	}
+	it(`fetch throws when no key configured for ${provider}`, async () => {
+		writeConfig({ provider });
+		const { captured } = registerAndCapture();
+		await expect(
+			captured.tools
+				.get("web_fetch")
+				?.execute?.("tc", { url: "https://example.com" }, undefined as never, undefined as never, createMockCtx()),
+		).rejects.toThrow(new RegExp(`${envVar} is not set`));
+	});
 
 	it(`fetch wraps non-2xx as '${label} Fetch API error (429)'`, async () => {
 		process.env[envVar] = "k";
@@ -623,15 +594,52 @@ describe.each(FETCH_ERROR_MATRIX)("web_fetch.execute — $provider error paths",
 			},
 		]);
 		const { captured } = registerAndCapture();
-		// Brave/Serper/SearXNG raise generic HTTP error (shared pipeline), extraction providers raise labeled "Fetch API error".
-		const expectedPattern = SHARED_FETCH_HELPERS_PROVIDERS.has(provider)
-			? /HTTP 429/
-			: new RegExp(`${label} Fetch API error \\(429\\)`);
 		await expect(
 			captured.tools
 				.get("web_fetch")
 				?.execute?.("tc", { url: "https://example.com" }, undefined as never, undefined as never, createMockCtx()),
-		).rejects.toThrow(expectedPattern);
+		).rejects.toThrow(new RegExp(`${label} Fetch API error \\(429\\)`));
+	});
+});
+
+// Brave/Serper/SearXNG are SearchProvider-only after the role split: the
+// orchestrator falls through to `fetchViaGenericHtml`. The dispatch is
+// provider-agnostic — one assertion per behavior is enough.
+describe.each([
+	{ provider: "brave", envVar: "BRAVE_SEARCH_API_KEY" },
+	{ provider: "serper", envVar: "SERPER_API_KEY" },
+	{ provider: "searxng", envVar: "SEARXNG_API_KEY" },
+])("web_fetch.execute — $provider falls back to generic HTML", ({ provider, envVar }) => {
+	it("does not throw on missing key (raw HTTP doesn't authenticate to the target)", async () => {
+		writeConfig({ provider });
+		stubFetch([
+			{
+				match: (u) => u.includes("example.com"),
+				response: () => new Response("<p>ok</p>", { status: 200, headers: { "content-type": "text/html" } }),
+			},
+		]);
+		const { captured } = registerAndCapture();
+		const r = await captured.tools
+			.get("web_fetch")
+			?.execute?.("tc", { url: "https://example.com" }, undefined as never, undefined as never, createMockCtx());
+		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("ok") });
+	});
+
+	it("wraps non-2xx as generic HTTP error from fetchViaGenericHtml", async () => {
+		process.env[envVar] = "k";
+		writeConfig({ provider });
+		stubFetch([
+			{
+				match: (u) => u.includes("example.com"),
+				response: () => new Response("rate limit", { status: 429 }),
+			},
+		]);
+		const { captured } = registerAndCapture();
+		await expect(
+			captured.tools
+				.get("web_fetch")
+				?.execute?.("tc", { url: "https://example.com" }, undefined as never, undefined as never, createMockCtx()),
+		).rejects.toThrow(/HTTP 429/);
 	});
 });
 
@@ -1126,16 +1134,7 @@ describe("/web-tools command", () => {
 		const selectCall = (ctx.ui.select as ReturnType<typeof vi.fn>).mock.calls[0];
 		const labels = selectCall[1] as string[];
 		expect(labels[0]).toBe("Exa ✓ (configured)");
-		expect(labels.slice(1)).toEqual([
-			"Brave",
-			"Tavily",
-			"Serper",
-			"Jina",
-			"Firecrawl",
-			"SearXNG",
-			"Ollama",
-			"GitHub",
-		]);
+		expect(labels.slice(1)).toEqual(["Brave", "Tavily", "Serper", "Jina", "Firecrawl", "SearXNG", "Ollama"]);
 		expect(labels.filter((l) => l.includes("✓"))).toHaveLength(1);
 
 		const saved = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
@@ -1159,7 +1158,6 @@ describe("/web-tools command", () => {
 		expect(labels).toContain("Serper");
 		expect(labels).toContain("Jina");
 		expect(labels).toContain("Firecrawl");
-		expect(labels).not.toContain("GitHub (configured)"); // no github key saved in this test
 	});
 
 	it("marks provider as (configured) when key is in env var", async () => {
@@ -1944,12 +1942,68 @@ describe("/web-tools command — ollama", () => {
 });
 
 describe("web_fetch.execute — github intercept", () => {
-	it("falls back to provider.fetch when parseGitHubUrl returns null (non-code github URL)", async () => {
-		// github.com/owner/repo/issues — "issues" is in NON_CODE_SEGMENTS,
-		// parseGitHubUrl returns null → extractGitHub returns null immediately
-		// → falls back to active provider's fetch()
+	it("default OFF: github.com URLs go straight to active provider (no interceptor registered)", async () => {
+		// No consumer opt-in, no user config — chain is empty. github.com URL
+		// is fetched by the active provider just like any other URL.
 		process.env.BRAVE_SEARCH_API_KEY = "k";
 		writeConfig({ provider: "brave" });
+		stubFetch([
+			{
+				match: () => true,
+				response: () =>
+					new Response("<html><body>plain github page</body></html>", {
+						status: 200,
+						headers: { "content-type": "text/html" },
+					}),
+			},
+		]);
+		const { pi, captured } = createMockPi();
+		registerWebTools(pi); // no opts → interceptor stays off
+		const r = await captured.tools
+			.get("web_fetch")
+			?.execute?.(
+				"tc",
+				{ url: "https://github.com/owner/repo/blob/main/file.ts" },
+				undefined as never,
+				undefined as never,
+				createMockCtx(),
+			);
+		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("plain github page") });
+	});
+
+	it("user config wins: { interceptors: { github: false } } overrides consumer opt-in", async () => {
+		process.env.BRAVE_SEARCH_API_KEY = "k";
+		writeConfig({ provider: "brave", interceptors: { github: false } });
+		stubFetch([
+			{
+				match: () => true,
+				response: () =>
+					new Response("<html><body>plain github page</body></html>", {
+						status: 200,
+						headers: { "content-type": "text/html" },
+					}),
+			},
+		]);
+		const { pi, captured } = createMockPi();
+		registerWebTools(pi, { interceptors: { github: true } });
+		const r = await captured.tools
+			.get("web_fetch")
+			?.execute?.(
+				"tc",
+				{ url: "https://github.com/owner/repo/blob/main/file.ts" },
+				undefined as never,
+				undefined as never,
+				createMockCtx(),
+			);
+		expect(r?.content[0]).toMatchObject({ text: expect.stringContaining("plain github page") });
+	});
+
+	it("falls back to provider.fetch when parseGitHubUrl returns null (non-code github URL)", async () => {
+		// Even with the interceptor enabled, github.com/owner/repo/issues lands
+		// in NON_CODE_SEGMENTS, so intercept() returns null and the chain falls
+		// through to the active provider's fetch.
+		process.env.BRAVE_SEARCH_API_KEY = "k";
+		writeConfig({ provider: "brave", interceptors: { github: true } });
 		stubFetch([
 			{
 				match: () => true,
@@ -1976,7 +2030,7 @@ describe("web_fetch.execute — github intercept", () => {
 
 	it("does not intercept non-GitHub URLs — active provider handles them", async () => {
 		process.env.BRAVE_SEARCH_API_KEY = "k";
-		writeConfig({ provider: "brave" });
+		writeConfig({ provider: "brave", interceptors: { github: true } });
 		stubFetch([
 			{
 				match: (u) => u.includes("example.com"),
@@ -1998,6 +2052,7 @@ describe("web_fetch.execute — github intercept", () => {
 	it("SSRF guard fires before github.com hostname check — refuses private/loopback addresses", async () => {
 		// Confirms parseAndAssertHttpUrl() runs first; private IPs cannot sneak
 		// through by having a github.com-shaped path segment.
+		writeConfig({ interceptors: { github: true } });
 		const { captured } = registerAndCapture();
 		await expect(
 			captured.tools
@@ -2013,83 +2068,27 @@ describe("web_fetch.execute — github intercept", () => {
 	});
 });
 
-describe("web_search.execute — github provider", () => {
-	it("throws GITHUB_TOKEN is not set when no key configured", async () => {
-		writeConfig({ provider: "github" });
+describe("formatShowConfigMessage — URL interceptors block", () => {
+	it("--show lists 'github: disabled' with how-to-enable hint when interceptor is off", async () => {
 		const { captured } = registerAndCapture();
-		await expect(
-			captured.tools
-				.get("web_search")
-				?.execute?.("tc", { query: "x" }, undefined as never, undefined as never, createMockCtx()),
-		).rejects.toThrow(/GITHUB_TOKEN is not set/);
+		const ctx = createMockCtx({ hasUI: true });
+		await captured.commands.get("web-tools")?.handler("--show", ctx as never);
+		const msg = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls[0][0];
+		expect(msg).toContain("URL interceptors:");
+		expect(msg).toContain("github: disabled");
+		expect(msg).toMatch(/enable.*interceptors.*github.*true/);
 	});
 
-	it("throws 'does not support web search' when GITHUB_TOKEN is set", async () => {
-		process.env.GITHUB_TOKEN = "ghp_test";
-		writeConfig({ provider: "github" });
-		const { captured } = registerAndCapture();
-		await expect(
-			captured.tools
-				.get("web_search")
-				?.execute?.("tc", { query: "x" }, undefined as never, undefined as never, createMockCtx()),
-		).rejects.toThrow(/does not support web search/);
-	});
-});
-
-describe("formatShowConfigMessage — github token display", () => {
-	it("--show shows github key masked (env source)", async () => {
+	it("--show lists 'github: enabled' with token + clonePath when opted in", async () => {
 		process.env.GITHUB_TOKEN = "ghp_abcdefgh1234";
+		writeConfig({ interceptors: { github: true } });
 		const { captured } = registerAndCapture();
 		const ctx = createMockCtx({ hasUI: true });
 		await captured.commands.get("web-tools")?.handler("--show", ctx as never);
 		const msg = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls[0][0];
-		expect(msg).toContain("github:");
-		expect(msg).toContain("ghp_");
-	});
-
-	it("--show shows github key masked (config source)", async () => {
-		writeConfig({ apiKeys: { github: "ghp_config1234" } });
-		const { captured } = registerAndCapture();
-		const ctx = createMockCtx({ hasUI: true });
-		await captured.commands.get("web-tools")?.handler("--show", ctx as never);
-		const msg = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls[0][0];
-		expect(msg).toContain("github:");
-		expect(msg).toContain("ghp_");
-	});
-
-	it("--show shows github: (not set) when no key configured", async () => {
-		const { captured } = registerAndCapture();
-		const ctx = createMockCtx({ hasUI: true });
-		await captured.commands.get("web-tools")?.handler("--show", ctx as never);
-		const msg = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls[0][0];
-		expect(msg).toContain("github:");
-		expect(msg).toContain("(not set)");
-	});
-});
-
-describe("GitHubProvider — direct unit tests", () => {
-	it("search() throws GITHUB_TOKEN is not set when apiKey empty", async () => {
-		const { GitHubProvider } = await import("./providers/github.js");
-		const p = new GitHubProvider("");
-		await expect(p.search("q", 5)).rejects.toThrow(/GITHUB_TOKEN is not set/);
-	});
-
-	it("search() throws does not support web search when apiKey set", async () => {
-		const { GitHubProvider } = await import("./providers/github.js");
-		const p = new GitHubProvider("ghp_test");
-		await expect(p.search("q", 5)).rejects.toThrow(/does not support web search/);
-	});
-
-	it("fetch() passes through to shared HTTP pipeline — no key guard", async () => {
-		const { GitHubProvider } = await import("./providers/github.js");
-		const p = new GitHubProvider("");
-		stubFetch([
-			{
-				match: (u) => u.includes("example.com"),
-				response: () => new Response("<p>hello</p>", { status: 200, headers: { "content-type": "text/html" } }),
-			},
-		]);
-		const r = await p.fetch("https://example.com", false);
-		expect(r.text).toContain("hello");
+		expect(msg).toContain("URL interceptors:");
+		expect(msg).toContain("github: enabled");
+		expect(msg).toContain("GITHUB_TOKEN: ghp_");
+		expect(msg).toContain("clonePath:");
 	});
 });
