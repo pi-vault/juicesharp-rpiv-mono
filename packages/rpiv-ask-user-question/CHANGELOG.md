@@ -5,7 +5,7 @@ All notable changes to `@juicesharp/rpiv-ask-user-question` are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.14.7] - 2026-05-28
 
 ### Added
 - `Ctrl+]` collapses the questionnaire overlay to a single-line footer (`Ctrl+] to expand · Esc to cancel`), exposing the agent transcript that sat behind the bottom-anchored dialog. Pressing `Ctrl+]` again expands. Works from any inner mode (notes, inputMode, chat, submit tab); the overlay stays focused so expand never falls through to a lower overlay (e.g. `/btw`), preserving the focus-restore semantics from v1.14.0.
