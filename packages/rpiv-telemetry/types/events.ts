@@ -34,13 +34,22 @@ export interface TelemetryEventBase {
 	timestamp: number;
 }
 
-/** Unified token-usage shape. Optional cache + cost fields ride alongside the always-reported input/output/total counts. */
+/**
+ * Unified token-usage shape carried by `turn_end`, `message_end`, and
+ * `subagent_completed`. The always-reported `input` / `output` / `totalTokens`
+ * trio is filled by every carrier; the optional fields below are populated
+ * unevenly because Pi's underlying providers expose them at different lifecycle
+ * stages.
+ */
 export interface LlmUsage {
 	input: number;
 	output: number;
+	/** Populated by `message_end` only — Pi exposes cache-read on the message-finalize event but not on `turn_end`. Always `undefined` on `turn_end` and `subagent_completed`. */
 	cacheRead?: number;
+	/** Populated by `message_end` only — see `cacheRead`. */
 	cacheWrite?: number;
 	totalTokens: number;
+	/** Populated by `turn_end` and `message_end` when the underlying provider reports a price; absent from `subagent_completed` (sub-agent runs aggregate token counts but not cost). */
 	cost?: number;
 }
 
@@ -183,10 +192,26 @@ export interface LlmRequestEndEvent extends TelemetryEventBase {
 
 // -- Per-message finalize (carries assistant token usage) --
 
+/**
+ * Pi message roles — the LLM trio (`user` / `assistant` / `toolResult`) plus
+ * Pi's custom roles emitted by extensions and internal pipeline stages.
+ *
+ * Kept as a string-literal union (not `string`) so consumers narrowing on
+ * `role === "..."` get a compile error when a new Pi role appears upstream
+ * and we forget to mirror it here.
+ */
+export type MessageRole =
+	| "user"
+	| "assistant"
+	| "toolResult"
+	| "custom"
+	| "bashExecution"
+	| "branchSummary"
+	| "compactionSummary";
+
 export interface MessageEndEvent extends TelemetryEventBase {
 	kind: "message_end";
-	/** Pi message role — covers the LLM trio (user/assistant/toolResult) plus Pi custom roles (custom, bashExecution, branchSummary, compactionSummary). */
-	role: string;
+	role: MessageRole;
 	model?: string;
 	provider?: string;
 	stopReason?: string;

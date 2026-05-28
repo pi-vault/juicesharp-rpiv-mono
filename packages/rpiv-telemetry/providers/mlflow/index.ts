@@ -1,5 +1,5 @@
 import { flushTraces, init, type LiveSpan } from "@mlflow/core";
-import { resolveMlflowConfig } from "../../config.js";
+import { type MlflowConfig, resolveMlflowConfig } from "../../config.js";
 import type { TelemetryEvent } from "../../types/events.js";
 import type { TelemetryProvider, TelemetryProviderMeta } from "../../types/provider.js";
 import { onLlmRequestEnd, onLlmRequestStart, onMessageEnd } from "./llm-spans.js";
@@ -27,7 +27,7 @@ export class MlflowProvider implements TelemetryProvider {
 
 	private initialized = false;
 	private initAttempted = false;
-	private readonly providerConfig: Record<string, string>;
+	private readonly providerConfig: MlflowConfig;
 
 	/** Active agent-turn root spans keyed by sessionId. */
 	private readonly activeTurnSpans = new Map<string, LiveSpan>();
@@ -41,7 +41,7 @@ export class MlflowProvider implements TelemetryProvider {
 	/** Latest open LLM-request span per session — O(1) lookup target for message_end attribution. */
 	private readonly latestLlmSpanBySession = new Map<string, LiveSpan>();
 
-	constructor(providerConfig: Record<string, string>) {
+	constructor(providerConfig: MlflowConfig) {
 		this.providerConfig = providerConfig;
 	}
 

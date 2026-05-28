@@ -80,6 +80,10 @@ export type LlmPayloadMode = Static<typeof LlmPayloadModeSchema>;
 // ---------------------------------------------------------------------------
 
 export type MlflowConfig = Static<typeof MlflowProviderConfig>;
+export type ConsoleConfig = Static<typeof ConsoleProviderConfig>;
+
+/** Schema-derived provider-config shape. Adding a built-in provider requires editing only `ProvidersConfigSchema` above. */
+export type ProvidersConfig = Static<typeof ProvidersConfigSchema>;
 
 export interface DispatcherConfig {
 	/** Max events buffered before backpressure drops. Defaults to 100. */
@@ -87,7 +91,7 @@ export interface DispatcherConfig {
 }
 
 export interface TelemetryConfig {
-	providers: Record<string, Record<string, string>>;
+	providers: ProvidersConfig;
 	/** `"*"` → all events enabled; `[]` → none enabled; allowlist → only listed kinds. */
 	events: "*" | TelemetryEventKind[];
 	/** Controls how much of the raw provider-request body is recorded. Defaults to `"off"`. */
@@ -105,7 +109,7 @@ export function loadTelemetryConfig(): TelemetryConfig {
 	const validated = validateConfig(TelemetryConfigSchema, raw);
 
 	return {
-		providers: (validated.providers as Record<string, Record<string, string>>) ?? {},
+		providers: validated.providers ?? {},
 		events: validateEventAllowlist(validated.events),
 		llmPayload: validated.llmPayload ?? "off",
 		dispatcher: {
@@ -119,7 +123,7 @@ export function saveTelemetryConfig(config: TelemetryConfig): boolean {
 }
 
 /** Env-first, config-second resolution for MLflow credentials. */
-export function resolveMlflowConfig(providerConfig: Record<string, string>): MlflowConfig {
+export function resolveMlflowConfig(providerConfig: MlflowConfig): MlflowConfig {
 	return {
 		trackingUri: readEnvVar("MLFLOW_TRACKING_URI") || providerConfig.trackingUri,
 		experimentId: readEnvVar("MLFLOW_EXPERIMENT_ID") || providerConfig.experimentId,

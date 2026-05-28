@@ -13,11 +13,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { initInstrumentation } from "./instrumentation.js";
 
 export {
+	type ConsoleConfig,
 	type DispatcherConfig,
 	isEventEnabled,
 	type LlmPayloadMode,
 	loadTelemetryConfig,
 	type MlflowConfig,
+	type ProvidersConfig,
 	resolveMlflowConfig,
 	saveTelemetryConfig,
 	type TelemetryConfig,
@@ -44,6 +46,7 @@ export type {
 	LlmRequestEndEvent,
 	LlmRequestStartEvent,
 	MessageEndEvent,
+	MessageRole,
 	ModelSelectEvent,
 	SessionCompactEvent,
 	SessionShutdownEvent,

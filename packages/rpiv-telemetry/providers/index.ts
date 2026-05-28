@@ -1,5 +1,6 @@
+import type { ProvidersConfig } from "../config.js";
 import { registerTelemetryProvider } from "../dispatcher.js";
-import type { TelemetryProvider, TelemetryProviderMeta } from "../types/provider.js";
+import type { TelemetryProviderMeta } from "../types/provider.js";
 import { CONSOLE_PROVIDER_META, ConsoleProvider } from "./console.js";
 import { MLFLOW_PROVIDER_META, MlflowProvider } from "./mlflow/index.js";
 
@@ -10,25 +11,17 @@ export { MLFLOW_PROVIDER_META, MlflowProvider } from "./mlflow/index.js";
 export const BUILT_IN_PROVIDERS: readonly TelemetryProviderMeta[] = [MLFLOW_PROVIDER_META, CONSOLE_PROVIDER_META];
 
 /**
- * Single source of truth for built-in provider factories. Adding a provider is
- * one map entry — the schema enumeration in `config.ts` mirrors these keys.
+ * Register every built-in provider present in the given config. Called at
+ * extension load time by instrumentation.ts. The schema in `config.ts` is
+ * the single source of truth for the provider key set — adding a built-in
+ * provider means editing `ProvidersConfigSchema` and adding a branch below.
  */
-const PROVIDER_FACTORIES: Record<string, (config: Record<string, string>) => TelemetryProvider> = {
-	mlflow: (config) => new MlflowProvider(config),
-	console: () => new ConsoleProvider(),
-};
-
-/**
- * Register all configured providers from the given config.
- * Called at extension load time by instrumentation.ts.
- */
-export function registerConfiguredProviders(config: { providers: Record<string, Record<string, string>> }): void {
-	for (const [name, providerConfig] of Object.entries(config.providers)) {
-		const factory = PROVIDER_FACTORIES[name];
-		if (!factory) {
-			console.warn(`[rpiv-telemetry] unknown provider "${name}" in config`);
-			continue;
-		}
-		registerTelemetryProvider(factory(providerConfig));
+export function registerConfiguredProviders(config: { providers: ProvidersConfig }): void {
+	const { providers } = config;
+	if (providers.mlflow !== undefined) {
+		registerTelemetryProvider(new MlflowProvider(providers.mlflow));
+	}
+	if (providers.console !== undefined) {
+		registerTelemetryProvider(new ConsoleProvider());
 	}
 }
