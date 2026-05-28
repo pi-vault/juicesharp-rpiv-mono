@@ -33,7 +33,7 @@ const asst = (text: string) => ({
 // ---------------------------------------------------------------------------
 
 const phaseHeadingsFanout: FanoutFn = ({ artifact, cwd }) => {
-	if (!artifact || artifact.handle.kind !== "fs") return [];
+	if (artifact?.handle.kind !== "fs") return [];
 	const path = artifact.handle.path;
 	const abs = path.startsWith("/") ? path : join(cwd, path);
 	const content = readFileSync(abs, "utf-8");
@@ -102,7 +102,7 @@ const transcriptArtifactMdOutcome: OutputSpec<unknown, "artifact-md", Record<str
 	parser: {
 		parse: (ctx) => {
 			const primary = ctx.artifacts[0];
-			if (!primary || primary.handle.kind !== "fs") {
+			if (primary?.handle.kind !== "fs") {
 				return { kind: "ok", payload: { kind: "artifact-md", data: {} } };
 			}
 			const abs = primary.handle.path.startsWith("/") ? primary.handle.path : join(ctx.cwd, primary.handle.path);
@@ -2228,7 +2228,7 @@ describe("runWorkflow", () => {
 				],
 			});
 			const phaseFanout: FanoutFn = ({ artifact, cwd }) => {
-				if (!artifact || artifact.handle.kind !== "fs") return [];
+				if (artifact?.handle.kind !== "fs") return [];
 				const abs = artifact.handle.path.startsWith("/") ? artifact.handle.path : join(cwd, artifact.handle.path);
 				const matches = [...readFileSync(abs, "utf-8").matchAll(/^## Phase (\d+):/gm)];
 				return matches.map((m, i) => ({

@@ -27,7 +27,7 @@ export function replayFromBranch(ctx: { sessionManager: { getBranch(): Iterable<
 		const e = entry as { type?: string; message?: { role?: string; toolName?: string; details?: unknown } };
 		if (e.type !== "message") continue;
 		const msg = e.message;
-		if (!msg || msg.role !== "toolResult" || msg.toolName !== "todo") continue;
+		if (msg?.role !== "toolResult" || msg.toolName !== "todo") continue;
 		if (!isTaskDetails(msg.details)) continue;
 		result = {
 			tasks: msg.details.tasks.map((t) => ({ ...t })),

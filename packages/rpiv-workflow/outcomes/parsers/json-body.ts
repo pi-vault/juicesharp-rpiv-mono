@@ -26,7 +26,7 @@ import { defineParser } from "../../output-spec.js";
 export const jsonBodyParser: ArtifactParser<unknown, "json", unknown> = defineParser({
 	parse: (ctx) => {
 		const primary = ctx.artifacts[0];
-		if (!primary || primary.handle.kind !== "fs") {
+		if (primary?.handle.kind !== "fs") {
 			return {
 				kind: "fatal",
 				message: `${ctx.skill}: jsonBodyParser requires an fs artifact (got ${primary?.handle.kind ?? "none"})`,

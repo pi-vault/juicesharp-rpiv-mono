@@ -146,7 +146,7 @@ describe("state.named — publish key resolution + accumulation", () => {
 			parser: {
 				parse: (ctx) => {
 					const primary = ctx.artifacts[0];
-					if (!primary || primary.handle.kind !== "fs") {
+					if (primary?.handle.kind !== "fs") {
 						return { kind: "ok", payload: { kind: "artifact-md", data: {} } };
 					}
 					const abs = primary.handle.path.startsWith("/")
@@ -290,7 +290,7 @@ describe("reads: prompt format", () => {
 			parser: {
 				parse: (ctx) => {
 					const primary = ctx.artifacts[0];
-					if (!primary || primary.handle.kind !== "fs") {
+					if (primary?.handle.kind !== "fs") {
 						return { kind: "ok", payload: { kind: "artifact-md", data: {} } };
 					}
 					const abs = primary.handle.path.startsWith("/")

@@ -73,7 +73,7 @@ const REVIEW_STATUS_SCHEMA = typeboxSchema(
 const MAX_PHASES = 32;
 
 const PHASE_FANOUT: FanoutFn = ({ artifact: primary, cwd }) => {
-	if (!primary || primary.handle.kind !== "fs") return [];
+	if (primary?.handle.kind !== "fs") return [];
 	const path = primary.handle.path;
 	const abs = isAbsolute(path) ? path : join(cwd, path);
 	const content = readFileSync(abs, "utf-8");

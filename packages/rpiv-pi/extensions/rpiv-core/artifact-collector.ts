@@ -64,7 +64,7 @@ export function rpivBucketCollector(bucket: string): ArtifactCollector {
 export const frontmatterParser: ArtifactParser<undefined, "artifact-md", Record<string, unknown>> = defineParser({
 	parse(ctx: ParseCtx<undefined>) {
 		const primary = ctx.artifacts[0];
-		if (!primary || primary.handle.kind !== "fs") {
+		if (primary?.handle.kind !== "fs") {
 			return {
 				kind: "fatal",
 				message: `${ctx.skill}: frontmatterParser requires an fs artifact (got ${primary?.handle.kind ?? "none"})`,

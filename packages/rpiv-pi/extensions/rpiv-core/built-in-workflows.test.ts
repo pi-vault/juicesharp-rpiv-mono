@@ -364,7 +364,7 @@ describe("[I9] phase fanout rows preserve both stage name (record key) and skill
 		// workflows — mirrors `PHASE_FANOUT` in `built-in-workflows.ts`. Inlined
 		// rather than imported so the test exercises the public FanoutFn shape.
 		const phaseFanout: FanoutFn = ({ artifact: primary, cwd }) => {
-			if (!primary || primary.handle.kind !== "fs") return [];
+			if (primary?.handle.kind !== "fs") return [];
 			const path = primary.handle.path;
 			const abs = isAbsolute(path) ? path : join(cwd, path);
 			const content = readFileSync(abs, "utf-8");

@@ -5,7 +5,7 @@ All notable changes to `@juicesharp/rpiv-args` are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.14.0] - 2026-05-28
 
 ### Fixed
 - `${SKILL_DIR}` now resolves to the skill's own directory instead of the extension package root, fixing relative shell command paths.
