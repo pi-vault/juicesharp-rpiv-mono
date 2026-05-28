@@ -2,9 +2,10 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, type Input } from "@earendil-works/pi-tui";
 import type { QuestionData, QuestionnaireResult, QuestionParams } from "../tool/types.js";
 import type { WrappingSelectItem } from "../view/components/wrapping-select.js";
+import { COLLAPSED_HINT } from "../view/dialog-builder.js";
 import type { QuestionnairePropsAdapter } from "../view/props-adapter.js";
 import { buildQuestionnaire } from "./build-questionnaire.js";
-import { displayLabel } from "./i18n-bridge.js";
+import { displayLabel, t } from "./i18n-bridge.js";
 import { type QuestionnaireAction, routeKey } from "./key-router.js";
 import { computeFocusedOptionHasPreview } from "./selectors/derivations.js";
 import type { QuestionnaireRuntime, QuestionnaireState } from "./state.js";
@@ -41,6 +42,7 @@ function initialState(): QuestionnaireState {
 		focusedOptionHasPreview: false,
 		submitChoiceIndex: 0,
 		notesDraft: "",
+		collapsed: false,
 	};
 }
 
@@ -89,8 +91,18 @@ export class QuestionnaireSession {
 		this.inlineInput = built.inlineInput;
 		this.viewAdapter = built.adapter;
 
+		const theme = config.theme;
+		// Collapsed render: a single dim row at the bottom of the overlay. pi-tui sizes
+		// the overlay to `min(lines.length, maxHeight)`, so returning one line shrinks
+		// the bottom-anchored overlay from full-height to one row and the transcript
+		// behind it becomes readable (#47). The overlay stays focused and in the
+		// stack, so Ctrl+] still routes here to expand.
+		const collapsedRender = (_width: number): string[] => [
+			theme.fg("dim", ` ${t("hint.expand_line", COLLAPSED_HINT)} `),
+		];
+
 		this.component = {
-			render: built.render,
+			render: (width) => (this.state.collapsed ? collapsedRender(width) : built.render(width)),
 			invalidate: built.invalidate,
 			handleInput: (data) => this.dispatch(data),
 		};

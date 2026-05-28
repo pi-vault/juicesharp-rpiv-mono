@@ -286,3 +286,32 @@ describe("reduce — focus_chat / focus_options / submit_nav / ignore", () => {
 		expect(r.effects).toEqual([]);
 	});
 });
+
+describe("reduce — toggle_collapsed", () => {
+	it("flips false → true with no effects (rendering shrinks on the next adapter.apply tick)", () => {
+		const r = reduce(makeState(), { kind: "toggle_collapsed" }, makeCtx());
+		expect(r.state.collapsed).toBe(true);
+		expect(r.effects).toEqual([]);
+	});
+
+	it("flips true → false (expand round-trip)", () => {
+		const r = reduce(makeState({ collapsed: true }), { kind: "toggle_collapsed" }, makeCtx());
+		expect(r.state.collapsed).toBe(false);
+		expect(r.effects).toEqual([]);
+	});
+
+	it("preserves orthogonal fields — collapse is a pure render-mode flip, never touches answers/optionIndex/notes", () => {
+		// Regression guard: a future refactor that resets nav/notes on collapse would silently
+		// drop the user's mid-edit work. The collapse toggle must be additive only.
+		const answers = new Map<QuestionAnswer["questionIndex"], QuestionAnswer>([
+			[0, { questionIndex: 0, question: "Pick one", kind: "option", answer: "A" }],
+		]);
+		const s = makeState({ optionIndex: 1, notesVisible: true, notesDraft: "in-flight", answers });
+		const r = reduce(s, { kind: "toggle_collapsed" }, makeCtx());
+		expect(r.state.collapsed).toBe(true);
+		expect(r.state.optionIndex).toBe(1);
+		expect(r.state.notesVisible).toBe(true);
+		expect(r.state.notesDraft).toBe("in-flight");
+		expect(r.state.answers).toBe(answers);
+	});
+});

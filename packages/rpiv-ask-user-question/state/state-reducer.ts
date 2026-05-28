@@ -254,6 +254,10 @@ const notesForwardHandler: Handler<"notes_forward"> = (s, a, _c) => ({
 	state: s,
 	effects: [{ kind: "forward_notes_keystroke", data: a.data }],
 });
+const toggleCollapsedHandler: Handler<"toggle_collapsed"> = (s, _a, _c) => ({
+	state: { ...s, collapsed: !s.collapsed },
+	effects: [],
+});
 const ignoreHandler: Handler<"ignore"> = (s, _a, _c) => ({ state: s, effects: [] });
 
 /**
@@ -276,6 +280,7 @@ const HANDLERS: { [K in QuestionnaireAction["kind"]]: Handler<K> } = {
 	submit_nav: submitNavHandler,
 	focus_chat: focusChatHandler,
 	focus_options: focusOptionsHandler,
+	toggle_collapsed: toggleCollapsedHandler,
 	ignore: ignoreHandler,
 };
 

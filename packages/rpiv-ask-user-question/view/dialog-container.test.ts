@@ -98,6 +98,7 @@ function makeConfig(over: MakeConfigOverrides = {}): DialogParts {
 		focusedOptionHasPreview: false,
 		submitChoiceIndex: 0,
 		notesDraft: "",
+		collapsed: false,
 	};
 	const previewPane = over.previewPane ?? stubPreviewPane(["<PREVIEW>"]);
 	const tabsByIndex: ReadonlyArray<TabComponents> =
@@ -223,6 +224,7 @@ describe("makeDialog — multi-question (question tab)", () => {
 			focusedOptionHasPreview: false,
 			submitChoiceIndex: 0,
 			notesDraft: "",
+			collapsed: false,
 		};
 		const mso = new MultiSelectView(theme, multiQ);
 		mso.setProps(msoPropsFromState(multiQ, initialState));
@@ -264,6 +266,7 @@ describe("makeDialog — multi-question (question tab)", () => {
 					focusedOptionHasPreview: true,
 					submitChoiceIndex: 0,
 					notesDraft: "",
+					collapsed: false,
 				},
 			}),
 		);
@@ -286,6 +289,7 @@ describe("makeDialog — multi-question (question tab)", () => {
 				focusedOptionHasPreview: false,
 				submitChoiceIndex: 0,
 				notesDraft: "",
+				collapsed: false,
 			},
 		});
 		const visible = makeDialog(visibleCfg).render(80);
@@ -316,6 +320,7 @@ describe("makeDialog — multi-question (question tab)", () => {
 			focusedOptionHasPreview: false,
 			submitChoiceIndex: 0,
 			notesDraft: "",
+			collapsed: false,
 		};
 		const mso = new MultiSelectView(theme, multiQ);
 		mso.setProps(msoPropsFromState(multiQ, state));
@@ -369,6 +374,7 @@ describe("makeDialog — Submit tab", () => {
 			focusedOptionHasPreview: false,
 			submitChoiceIndex: 0,
 			notesDraft: "",
+			collapsed: false,
 			...over,
 		};
 	}
@@ -579,6 +585,7 @@ describe("makeDialog — width safety", () => {
 							focusedOptionHasPreview: false,
 							submitChoiceIndex: 0,
 							notesDraft: "",
+							collapsed: false,
 						},
 					}),
 				);
@@ -649,6 +656,7 @@ describe("makeDialog — body residual padding", () => {
 			focusedOptionHasPreview: false,
 			submitChoiceIndex: 0,
 			notesDraft: "",
+			collapsed: false,
 		};
 		const stateTab1: DialogState = { ...stateTab0, currentTab: 1 };
 		const mso = new MultiSelectView(theme, multiQ);

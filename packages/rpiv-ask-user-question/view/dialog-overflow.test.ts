@@ -86,6 +86,7 @@ function makeConfig(over: MakeConfigOverrides = {}): DialogParts {
 		focusedOptionHasPreview: false,
 		submitChoiceIndex: 0,
 		notesDraft: "",
+		collapsed: false,
 	};
 	const previewPane = over.previewPane ?? stubPreviewPane(["<PREVIEW>"]);
 	const tabsByIndex: ReadonlyArray<TabComponents> =
@@ -275,6 +276,7 @@ describe("Dialog overflow — submit tab", () => {
 			focusedOptionHasPreview: false,
 			submitChoiceIndex: 0,
 			notesDraft: "",
+			collapsed: false,
 			...over,
 		};
 	}

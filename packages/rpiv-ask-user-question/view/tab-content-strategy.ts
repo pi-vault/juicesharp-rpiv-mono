@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { type Component, Container, type Input, Spacer, Text } from "@earendil-works/pi-tui";
+import { type Component, Container, type Input, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { t } from "../state/i18n-bridge.js";
 import { formatAnswerScalar } from "../tool/format-answer.js";
 import type { QuestionData } from "../tool/types.js";
@@ -8,6 +8,7 @@ import type { PreviewPane, PreviewPaneProps } from "./components/preview/preview
 import {
 	type DialogState,
 	HINT_PART_CANCEL,
+	HINT_PART_COLLAPSE,
 	HINT_PART_ENTER,
 	HINT_PART_NAV,
 	HINT_PART_NOTES,
@@ -21,6 +22,32 @@ import type { StatefulView } from "./stateful-view.js";
 import type { TabComponents } from "./tab-components.js";
 
 const NOTES_HEADER = "Notes:";
+
+/**
+ * Single-row, width-clipped chrome cell. The footer row count is invariant
+ * (`QuestionTabStrategy.footerRowCount = 4`) — pi-tui's `Text` word-wraps when
+ * the styled hint exceeds `width`, inflating that row count and desyncing the
+ * `bodyHeight + footerRowCount` math in `DialogView.render`. Clipping with
+ * `truncateToWidth` (ANSI-aware, matches `multi-select-view.ts` usage) keeps
+ * the hint on one line; the collapse affordance falls off the right edge with
+ * `…` on terminals too narrow to advertise it.
+ */
+class OneLineClippedText implements Component {
+	constructor(
+		private readonly text: string,
+		private readonly paddingLeft: number = 0,
+	) {}
+
+	render(width: number): string[] {
+		const pad = " ".repeat(this.paddingLeft);
+		const avail = Math.max(0, width - this.paddingLeft);
+		return [pad + truncateToWidth(this.text, avail, "…", false)];
+	}
+
+	invalidate(): void {}
+
+	handleInput(_data: string): void {}
+}
 
 /**
  * Per-tab content provider. Pure functional — closes over construction-time
@@ -104,11 +131,16 @@ export class QuestionTabStrategy implements TabContentStrategy {
 
 	footerRows(state: DialogState): Component[] {
 		const question = this.config.questions[state.currentTab];
+		// OneLineClippedText (not pi-tui `Text`) — `buildHintText` now includes the
+		// collapse affordance, pushing the rendered string past 80 columns; `Text` would
+		// wrap and break the strategy's `footerRowCount = 4` invariant. Clipping on
+		// narrow terminals drops the trailing parts (collapse hint first, then cancel)
+		// with `…`.
 		return [
 			new Spacer(1),
 			this.config.chatRow,
 			new Spacer(1),
-			new Text(this.config.theme.fg("dim", buildHintText(question, this.config.isMulti, state)), 1, 0),
+			new OneLineClippedText(this.config.theme.fg("dim", buildHintText(question, this.config.isMulti, state)), 1),
 		];
 	}
 
@@ -198,9 +230,14 @@ export class SubmitTabStrategy implements TabContentStrategy {
 }
 
 /**
- * Build the controls hint line. Order is fixed so `HINT_SINGLE` / `HINT_MULTI`
- * remain contiguous substrings of the result:
- *   Enter · ↑/↓ [· Space toggle] [· n notes] [· Tab switch] · Esc
+ * Build the controls hint line. Order:
+ *   Enter · ↑/↓ [· Space toggle] [· n notes] [· Tab switch] · Esc · Ctrl+] collapse
+ *
+ * `HINT_SINGLE` / `HINT_MULTI` are the CORE prefix that must always render — the
+ * collapse affordance is appended last so the core stays a contiguous substring even
+ * when the trailing part is clipped by `OneLineClippedText` on terminals < ~95 cols.
+ * This is the trade we picked over wrapping (which would inflate `footerRowCount`
+ * and desync the height math in `DialogView.render`).
  */
 export function buildHintText(question: QuestionData | undefined, isMulti: boolean, state: DialogState): string {
 	const parts: string[] = [t("hint.enter", HINT_PART_ENTER), t("hint.navigate", HINT_PART_NAV)];
@@ -210,5 +247,6 @@ export function buildHintText(question: QuestionData | undefined, isMulti: boole
 	}
 	if (isMulti) parts.push(t("hint.tab", HINT_PART_TAB));
 	parts.push(t("hint.cancel", HINT_PART_CANCEL));
+	parts.push(t("hint.collapse", HINT_PART_COLLAPSE));
 	return parts.join(" · ");
 }

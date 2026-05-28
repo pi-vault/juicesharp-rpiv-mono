@@ -54,6 +54,7 @@ function makeState(over: Partial<QuestionnaireState> = {}): QuestionnaireState {
 		focusedOptionHasPreview: false,
 		submitChoiceIndex: 0,
 		notesDraft: "",
+		collapsed: false,
 		...over,
 	};
 }
@@ -707,5 +708,67 @@ describe("routeKey — chat-inclusive cycle", () => {
 			kind: "focus_options",
 			optionIndex: runtime.items.length - 1,
 		});
+	});
+});
+
+describe("routeKey — collapse/expand (Ctrl+] toggle + collapsed-mode lockout)", () => {
+	// Raw control byte for Ctrl+] (GS, 0x1d). matchesKey recognises this directly on
+	// every terminal that delivers raw control bytes in TUI mode — macOS Terminal.app,
+	// iTerm2, Warp, Ghostty, tmux, zellij. The legacy telnet/ssh escape role does NOT
+	// apply because the questionnaire runs in-process.
+	const BYTE_CTRL_RBRACKET = "\x1d";
+
+	it("Ctrl+] emits toggle_collapsed from the default question state", () => {
+		expect(routeKey(BYTE_CTRL_RBRACKET, makeState(), makeRuntime())).toEqual({ kind: "toggle_collapsed" });
+	});
+
+	it("Ctrl+] emits toggle_collapsed even while notesVisible (the notes branch never sees the key)", () => {
+		// Notes mode normally forwards every keystroke to the notes input via `notes_forward`.
+		// The collapse intercept sits ABOVE all state branches so the user can shrink the
+		// dialog to read the transcript mid-notes-edit without dirtying the draft.
+		expect(routeKey(BYTE_CTRL_RBRACKET, makeState({ notesVisible: true }), makeRuntime())).toEqual({
+			kind: "toggle_collapsed",
+		});
+	});
+
+	it("Ctrl+] emits toggle_collapsed even when already collapsed (expand round-trip)", () => {
+		// Symmetric: pressing Ctrl+] a second time returns to the full questionnaire.
+		// The reducer flips the boolean; the router stays oblivious to which way we're going.
+		expect(routeKey(BYTE_CTRL_RBRACKET, makeState({ collapsed: true }), makeRuntime())).toEqual({
+			kind: "toggle_collapsed",
+		});
+	});
+
+	it("while collapsed, Esc maps to cancel (the documented escape hatch in the one-line footer)", () => {
+		expect(routeKey(sentinel(KEY.CANCEL), makeState({ collapsed: true }), makeRuntime())).toEqual({ kind: "cancel" });
+	});
+
+	it("while collapsed, navigation keys are swallowed as ignore (no state mutation behind the one-line footer)", () => {
+		// Arrow keys would otherwise navigate options or wrap to chat; collapsed mode is
+		// a read-the-transcript pause, so non-cancel keys must not advance any focus.
+		expect(routeKey(sentinel(KEY.UP), makeState({ collapsed: true, optionIndex: 2 }), makeRuntime())).toEqual({
+			kind: "ignore",
+		});
+		expect(routeKey(sentinel(KEY.DOWN), makeState({ collapsed: true }), makeRuntime())).toEqual({ kind: "ignore" });
+		expect(routeKey(sentinel(KEY.CONFIRM), makeState({ collapsed: true }), makeRuntime())).toEqual({
+			kind: "ignore",
+		});
+		expect(routeKey(BYTE_TAB, makeState({ collapsed: true }), makeRuntime())).toEqual({ kind: "ignore" });
+	});
+
+	it("while collapsed, the notes-forward and toggle branches are unreachable (lockout precedes them)", () => {
+		// Regression guard: without the lockout, a collapsed + notesVisible state would forward
+		// keystrokes into the notes input, and a collapsed + multiSelect state would let Space
+		// flip checkboxes. Both paths must be dead-ended at the collapsed branch.
+		expect(routeKey("x", makeState({ collapsed: true, notesVisible: true }), makeRuntime())).toEqual({
+			kind: "ignore",
+		});
+		expect(
+			routeKey(
+				BYTE_SPACE,
+				makeState({ collapsed: true }),
+				makeRuntime({ questions: [makeQuestion({ multiSelect: true })] }),
+			),
+		).toEqual({ kind: "ignore" });
 	});
 });

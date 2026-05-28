@@ -25,6 +25,15 @@ export interface QuestionnaireState {
 	submitChoiceIndex: number;
 	/** Canonical mirror of the in-flight notes editor; runtime mirrors after `forward_notes_keystroke`. */
 	notesDraft: string;
+	/**
+	 * Collapsed mode: the questionnaire shrinks to a single hint row so the agent transcript
+	 * behind the bottom-anchored overlay becomes readable. Toggled by `Ctrl+]` from any state;
+	 * while true, every keystroke except cancel is swallowed (see `routeKey`). The overlay
+	 * stays focused so the expand key never falls through to an underlying overlay (e.g.
+	 * `/btw`) — that focus-restore property is the entire reason we render a collapsed row
+	 * instead of calling `OverlayHandle.setHidden(true)`.
+	 */
+	collapsed: boolean;
 }
 
 /**

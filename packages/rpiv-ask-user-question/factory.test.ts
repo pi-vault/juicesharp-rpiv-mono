@@ -146,6 +146,52 @@ describe("ask_user_question — factory driver (real pi-tui keybindings)", () =>
 		const ctx = { hasUI: true, ui: { custom } } as never;
 		await tool.execute?.("tc", threeOptionParams as never, undefined as never, undefined as never, ctx);
 	});
+
+	it("Ctrl+] collapses the questionnaire to a one-line footer; Ctrl+] again expands to the full render", async () => {
+		// Raw control byte for Ctrl+] (GS, 0x1d) — the form every macOS terminal
+		// (Terminal.app, iTerm2, Warp), every multiplexer (tmux, zellij), and Ghostty
+		// deliver in raw TUI mode. Ctrl+] is the chosen collapse key because Alt+Tab is
+		// OS-reserved, Ctrl+P collides with pi-coding-agent + the user's virtual
+		// terminal, and F2 is intercepted by macOS function-key handling.
+		const CTRL_RBRACKET = "\x1d";
+		const tool = register();
+		let expandedLineCount = 0;
+		let collapsedLines: string[] = [];
+		let reExpandedLineCount = 0;
+		const { custom } = driveCustom((c, done) => {
+			expandedLineCount = c.render(120).length;
+			c.handleInput(CTRL_RBRACKET);
+			collapsedLines = c.render(120);
+			c.handleInput(CTRL_RBRACKET);
+			reExpandedLineCount = c.render(120).length;
+			done({ answers: [], cancelled: true });
+		});
+		const ctx = { hasUI: true, ui: { custom } } as never;
+		await tool.execute?.("tc", threeOptionParams as never, undefined as never, undefined as never, ctx);
+
+		// Collapse shrinks the entire dialog to one row — pi-tui sizes the overlay to
+		// `min(lines.length, maxHeight)`, so a 1-line render frees the transcript above.
+		expect(collapsedLines).toHaveLength(1);
+		expect(collapsedLines[0]).toContain("Ctrl+] to expand");
+		expect(collapsedLines[0]).toContain("Esc to cancel");
+		// Expand returns the same multi-row shape as before the round-trip (idempotent toggle).
+		expect(expandedLineCount).toBeGreaterThan(1);
+		expect(reExpandedLineCount).toBe(expandedLineCount);
+	});
+
+	it("Esc while collapsed cancels (the only key honoured behind the one-line footer)", async () => {
+		const CTRL_RBRACKET = "\x1d";
+		const tool = register();
+		const { custom } = driveCustom((c) => {
+			c.handleInput(CTRL_RBRACKET);
+			c.handleInput(KEY.ESC);
+		});
+		const ctx = { hasUI: true, ui: { custom } } as never;
+		const r = (await tool.execute?.("tc", threeOptionParams as never, undefined as never, undefined as never, ctx)) as
+			| ToolResult
+			| undefined;
+		expect(r?.details).toMatchObject({ cancelled: true });
+	});
 });
 
 describe("ask_user_question — single-question navigation", () => {
