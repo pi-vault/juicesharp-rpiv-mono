@@ -89,6 +89,18 @@ revise: produces({ outcome: planOutcome, reads: ["plans", "reviews"] })
 
 The runner replaces the default prompt with a labelled-flag form — `/skill:revise --plans <plan-path> --reviews <review-path>` — and repeats flags when a slot holds more than one artifact (`--plans <a> --plans <b>`), matching how `argparse` / `clap` / shell utilities collect repeated flags. The registry persists every `produces` stage's `Output` across the run, so two stages can converge on the same name (both publish the canonical plan), iteration history survives backward-jump loops, and the load-time validator catches `reads:` typos before the workflow ever runs.
 
+### Per-stage session policy
+
+Every stage runs in a **fresh Pi session by default** (`sessionPolicy: "fresh"`). That's the foundation of how the chain manages context pressure — `research`'s sprawling reading list doesn't follow `blueprint` into its session, `blueprint`'s vertical-slice scratch work doesn't follow `implement` into its session, and so on. Each stage starts from the artifact on disk, not from whatever the previous stage was carrying in its head.
+
+When a stage genuinely needs the prior conversation — typically because the reasoning isn't capturable in an artifact, or you want a clarifying second turn on the same context — opt into `sessionPolicy: "continue"`:
+
+```ts
+"clarify-plan": produces({ outcome: planOutcome, sessionPolicy: "continue" })
+```
+
+`continue` reuses the previous stage's session via `host.sendUserMessage()` rather than opening a new one. Two costs: context grows monotonically (every continued stage stacks on top of the last), and `continue` is incompatible with `fanout` and with script stages (load-time validation rejects the combination). Reach for it only when the alternative — materializing reasoning into an artifact the next fresh stage can read — would lose something important.
+
 ## When hand-driving still wins
 
 Pick the runner when the shape of the work matches one of the four bundled chains and you've walked that chain enough times to trust it. Otherwise stay in the loop:
