@@ -77,7 +77,7 @@ beforeEach(async () => {
 	const warpIndex = await import("../packages/rpiv-warp/index.js");
 	warpIndex.__resetState();
 
-	const telemetry = await import("../packages/rpiv-telemetry/instrumentation.js");
+	const telemetry = await import("../packages/rpiv-telemetry/instrumentation/index.js");
 	telemetry.teardownTelemetry();
 
 	const i18n = await import("../packages/rpiv-i18n/i18n.js");

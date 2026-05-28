@@ -36,7 +36,7 @@ vi.mocked(config.loadTelemetryConfig).mockReturnValue({
 });
 
 import { dispatchTelemetryEvent } from "./dispatcher.js";
-import { initInstrumentation, teardownTelemetry } from "./instrumentation.js";
+import { initInstrumentation, teardownTelemetry } from "./instrumentation/index.js";
 
 describe("instrumentation", () => {
 	beforeEach(() => {

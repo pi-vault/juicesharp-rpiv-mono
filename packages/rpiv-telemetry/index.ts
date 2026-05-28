@@ -10,7 +10,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { initInstrumentation } from "./instrumentation.js";
+import { initInstrumentation } from "./instrumentation/index.js";
 
 export {
 	type ConsoleConfig,
@@ -31,7 +31,7 @@ export {
 	resetTelemetryDispatcher,
 	shutdownTelemetryDispatcher,
 } from "./dispatcher.js";
-export { teardownTelemetry } from "./instrumentation.js";
+export { teardownTelemetry } from "./instrumentation/index.js";
 export {
 	BUILT_IN_PROVIDERS,
 	CONSOLE_PROVIDER_META,
