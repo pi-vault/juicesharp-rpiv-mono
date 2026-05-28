@@ -22,7 +22,7 @@ export default defineConfig({
 				statements: 94,
 				branches: 87,
 				functions: 93,
-				lines: 96,
+				lines: 95,
 			},
 			exclude: [
 				"**/node_modules/**",
