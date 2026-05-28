@@ -1,12 +1,14 @@
-import { flushTraces, init, type LiveSpan } from "@mlflow/core";
+import { flushTraces, init } from "@mlflow/core";
 import { type MlflowConfig, resolveMlflowConfig } from "../../config.js";
 import type { TelemetryEvent } from "../../types/events.js";
 import type { TelemetryProvider, TelemetryProviderMeta } from "../../types/provider.js";
+import { onAttributeEvent } from "./attribute-events.js";
 import { onLlmRequestEnd, onLlmRequestStart, onMessageEnd } from "./llm-spans.js";
 import { onSessionShutdown } from "./session-shutdown.js";
+import { MlflowSpanRegistry } from "./span-registry.js";
 import { onSubAgentEvent } from "./subagent-spans.js";
 import { onToolExecutionEnd, onToolExecutionStart } from "./tool-spans.js";
-import { onAgentEnd, onAgentStart, onAttributeEvent } from "./turn-spans.js";
+import { onAgentEnd, onAgentStart } from "./turn-spans.js";
 
 // ---------------------------------------------------------------------------
 // Provider metadata
@@ -28,67 +30,76 @@ export class MlflowProvider implements TelemetryProvider {
 	private initialized = false;
 	private initAttempted = false;
 	private readonly providerConfig: MlflowConfig;
-
-	/** Active agent-turn root spans keyed by sessionId. */
-	private readonly activeTurnSpans = new Map<string, LiveSpan>();
-
-	/** Active tool-execution child spans keyed by `${sessionId}\0${toolCallId}`. */
-	private readonly activeToolSpans = new Map<string, LiveSpan>();
-
-	/** Active LLM-request child spans keyed by `${sessionId}\0${requestSeq}`. */
-	private readonly activeLlmSpans = new Map<string, LiveSpan>();
-
-	/** Latest open LLM-request span per session — O(1) lookup target for message_end attribution. */
-	private readonly latestLlmSpanBySession = new Map<string, LiveSpan>();
+	private readonly registry = new MlflowSpanRegistry();
+	// Per-event-kind transition tracker. Mirrors the dispatcher's
+	// `failedProviders` posture: warn once on first failure of a kind, warn
+	// once on first success after a failure — never per-event noise.
+	private readonly failedKinds = new Set<TelemetryEvent["kind"]>();
 
 	constructor(providerConfig: MlflowConfig) {
 		this.providerConfig = providerConfig;
 	}
 
 	async trackEvent(event: TelemetryEvent): Promise<void> {
+		this.ensureInit();
+		if (!this.initialized) return;
 		try {
-			this.ensureInit();
-			if (!this.initialized) return;
-
-			switch (event.kind) {
-				case "agent_start":
-					return onAgentStart(this.activeTurnSpans, event);
-				case "agent_end":
-					return onAgentEnd(this.activeTurnSpans, event);
-				case "tool_execution_start":
-					return onToolExecutionStart(this.activeTurnSpans, this.activeToolSpans, event);
-				case "tool_execution_end":
-					return onToolExecutionEnd(this.activeToolSpans, event);
-				case "llm_request_start":
-					return onLlmRequestStart(this.activeTurnSpans, this.activeLlmSpans, this.latestLlmSpanBySession, event);
-				case "llm_request_end":
-					return onLlmRequestEnd(this.activeLlmSpans, this.latestLlmSpanBySession, event);
-				case "message_end":
-					return onMessageEnd(this.activeTurnSpans, this.latestLlmSpanBySession, event);
-				case "session_shutdown":
-					return onSessionShutdown(
-						this.activeTurnSpans,
-						this.activeToolSpans,
-						this.activeLlmSpans,
-						this.latestLlmSpanBySession,
-						event,
-					);
-				case "turn_start":
-				case "turn_end":
-				case "session_compact":
-				case "before_agent_start":
-				case "model_select":
-					return onAttributeEvent(this.activeTurnSpans, event);
-				case "subagent_created":
-				case "subagent_started":
-				case "subagent_completed":
-				case "subagent_failed":
-				case "subagent_compacted":
-				case "subagent_steered":
-					return onSubAgentEvent(event);
+			this.dispatch(event);
+			if (this.failedKinds.has(event.kind)) {
+				this.failedKinds.delete(event.kind);
+				console.warn(`[rpiv-telemetry] mlflow provider recovered for kind=${event.kind}`);
 			}
 		} catch (err) {
-			console.debug("[rpiv-telemetry] provider error:", err instanceof Error ? err.message : String(err));
+			if (!this.failedKinds.has(event.kind)) {
+				this.failedKinds.add(event.kind);
+				console.warn(
+					`[rpiv-telemetry] mlflow provider error on kind=${event.kind}: ${err instanceof Error ? err.message : String(err)}`,
+				);
+			}
+		}
+	}
+
+	private dispatch(event: TelemetryEvent): void {
+		switch (event.kind) {
+			case "agent_start":
+				onAgentStart(this.registry, event);
+				return;
+			case "agent_end":
+				onAgentEnd(this.registry, event);
+				return;
+			case "tool_execution_start":
+				onToolExecutionStart(this.registry, event);
+				return;
+			case "tool_execution_end":
+				onToolExecutionEnd(this.registry, event);
+				return;
+			case "llm_request_start":
+				onLlmRequestStart(this.registry, event);
+				return;
+			case "llm_request_end":
+				onLlmRequestEnd(this.registry, event);
+				return;
+			case "message_end":
+				onMessageEnd(this.registry, event);
+				return;
+			case "session_shutdown":
+				onSessionShutdown(this.registry, event);
+				return;
+			case "turn_start":
+			case "turn_end":
+			case "session_compact":
+			case "before_agent_start":
+			case "model_select":
+				onAttributeEvent(this.registry, event);
+				return;
+			case "subagent_created":
+			case "subagent_started":
+			case "subagent_completed":
+			case "subagent_failed":
+			case "subagent_compacted":
+			case "subagent_steered":
+				onSubAgentEvent(event);
+				return;
 		}
 	}
 
@@ -98,16 +109,14 @@ export class MlflowProvider implements TelemetryProvider {
 				await flushTraces();
 			}
 		} catch (err) {
-			console.debug("[rpiv-telemetry] flush error:", err instanceof Error ? err.message : String(err));
+			console.warn(`[rpiv-telemetry] mlflow flush error: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 
 	async shutdown(): Promise<void> {
 		await this.flush();
-		this.activeTurnSpans.clear();
-		this.activeToolSpans.clear();
-		this.activeLlmSpans.clear();
-		this.latestLlmSpanBySession.clear();
+		this.registry.clear();
+		this.failedKinds.clear();
 	}
 
 	private ensureInit(): void {
@@ -121,11 +130,17 @@ export class MlflowProvider implements TelemetryProvider {
 			return;
 		}
 
-		init({
-			trackingUri: resolved.trackingUri,
-			experimentId: resolved.experimentId ?? "0",
-			...(resolved.trackingToken ? { trackingServerToken: resolved.trackingToken } : {}),
-		});
-		this.initialized = true;
+		try {
+			init({
+				trackingUri: resolved.trackingUri,
+				experimentId: resolved.experimentId ?? "0",
+				...(resolved.trackingToken ? { trackingServerToken: resolved.trackingToken } : {}),
+			});
+			this.initialized = true;
+		} catch (err) {
+			console.warn(
+				`[rpiv-telemetry] mlflow init failed; events will be dropped: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
 	}
 }

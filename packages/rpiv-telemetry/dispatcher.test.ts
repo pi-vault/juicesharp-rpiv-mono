@@ -418,8 +418,9 @@ describe("dispatcher", () => {
 		expect(events).toHaveLength(6);
 	});
 
-	// Q3 fix: backpressure drop counting and warning
-	it("warns on every 10th backpressure drop (Q3)", async () => {
+	// Backpressure warns once on entering saturation (transition-based), not
+	// periodically per N drops.
+	it("warns once on first backpressure saturation", async () => {
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 		registerTelemetryProvider(
 			makeProvider({
@@ -441,9 +442,48 @@ describe("dispatcher", () => {
 		}
 
 		await new Promise((r) => setTimeout(r, 200));
-		// dropCount reaches 20 → warn at 10th and 20th drop
-		const backpressureWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("dropped"));
-		expect(backpressureWarns.length).toBeGreaterThanOrEqual(1);
-		expect(backpressureWarns[0][0]).toContain("dropped 10 events due to backpressure");
+		const saturationWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("backpressure: queue saturated"));
+		// Leading-edge warn fires exactly once even though 20 events drop.
+		expect(saturationWarns).toHaveLength(1);
+	});
+
+	// Shutdown preserves FIFO ordering across the in-flight + remaining
+	// boundary when shutdown lands mid-drain.
+	it("shutdown preserves FIFO ordering across in-flight + remaining", async () => {
+		const events: TelemetryEvent[] = [];
+		let inflightResolve: (() => void) | undefined;
+		const inflightGate = new Promise<void>((resolve) => {
+			inflightResolve = resolve;
+		});
+		let firstCall = true;
+		registerTelemetryProvider(
+			makeProvider({
+				trackEvent: vi.fn(async (e) => {
+					if (firstCall) {
+						firstCall = false;
+						// First event blocks until we release it — simulates an
+						// in-flight batch being held up while more events queue.
+						await inflightGate;
+					}
+					events.push(e);
+				}),
+			}),
+		);
+
+		// First event triggers the initial drain — its trackEvent will block.
+		dispatchTelemetryEvent({ kind: "turn_start", sessionId: "s1", turnIndex: 0, timestamp: 0 });
+		await new Promise((r) => setTimeout(r, 10));
+		// Newer event lands while in-flight batch is still awaiting.
+		dispatchTelemetryEvent({ kind: "turn_start", sessionId: "s1", turnIndex: 1, timestamp: 1 });
+
+		// Kick off shutdown without releasing the gate yet.
+		const shutdownPromise = shutdownTelemetryDispatcher();
+		// Release the in-flight batch — it should land before the remaining tail.
+		setTimeout(() => inflightResolve?.(), 10);
+		await shutdownPromise;
+
+		expect(events).toHaveLength(2);
+		expect((events[0] as { turnIndex: number }).turnIndex).toBe(0);
+		expect((events[1] as { turnIndex: number }).turnIndex).toBe(1);
 	});
 });

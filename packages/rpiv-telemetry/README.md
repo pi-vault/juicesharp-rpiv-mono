@@ -50,7 +50,9 @@ Env-first, file-second.
 
 ### `providers`
 
-Only the built-in keys `mlflow` and `console` are accepted. Unknown keys (typos like `mflow`) are reported on stderr and ignored. Custom providers register at runtime via `registerTelemetryProvider`, not through the config file.
+Only the built-in keys `mlflow` and `console` are accepted. Unknown keys (typos like `mflow`) are rejected at config-load time with a precise schema error — no silent ignore. Custom providers register at runtime via `registerTelemetryProvider`, not through the config file.
+
+> **Lifecycle contract.** Events emitted before any provider is registered are dropped at the dispatcher boundary (no buffer). The built-in extension flow registers providers inside `initInstrumentation` before attaching Pi handlers, so the drop window is empty. If you call `registerTelemetryProvider` from a host that emits events asynchronously, register first.
 
 ### `events`
 

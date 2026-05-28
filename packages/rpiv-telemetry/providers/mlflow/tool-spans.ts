@@ -1,13 +1,11 @@
-import { type LiveSpan, SpanStatusCode, SpanType, startSpan } from "@mlflow/core";
+import { SpanStatusCode, SpanType, startSpan } from "@mlflow/core";
 import type { ToolExecutionEndEvent, ToolExecutionStartEvent } from "../../types/events.js";
-import { msToNs, toolSpanKey } from "./keys.js";
+import { msToNs } from "./keys.js";
+import { AGENT_TOOL_NAME, extractAgentToolDetails } from "./pi-subagents-tool-bridge.js";
+import type { MlflowSpanRegistry } from "./span-registry.js";
 
-export function onToolExecutionStart(
-	activeTurnSpans: Map<string, LiveSpan>,
-	activeToolSpans: Map<string, LiveSpan>,
-	event: ToolExecutionStartEvent,
-): void {
-	const parentSpan = activeTurnSpans.get(event.sessionId);
+export function onToolExecutionStart(registry: MlflowSpanRegistry, event: ToolExecutionStartEvent): void {
+	const parentSpan = registry.getTurnSpan(event.sessionId);
 	const span = startSpan({
 		name: event.toolName,
 		parent: parentSpan,
@@ -15,25 +13,22 @@ export function onToolExecutionStart(
 		inputs: { toolCallId: event.toolCallId, args: event.args },
 		startTimeNs: msToNs(event.timestamp),
 	});
-	activeToolSpans.set(toolSpanKey(event.sessionId, event.toolCallId), span);
+	registry.setToolSpan(event.sessionId, event.toolCallId, span);
 }
 
-export function onToolExecutionEnd(activeToolSpans: Map<string, LiveSpan>, event: ToolExecutionEndEvent): void {
-	const key = toolSpanKey(event.sessionId, event.toolCallId);
-	const span = activeToolSpans.get(key);
+export function onToolExecutionEnd(registry: MlflowSpanRegistry, event: ToolExecutionEndEvent): void {
+	const span = registry.getToolSpan(event.sessionId, event.toolCallId);
 	if (!span) return;
 
-	// For the pi-subagents `Agent` tool: lift sub-agent identity out of the
-	// AgentToolResult details onto span attributes so MLflow's trace list
-	// surfaces them without expanding `outputs`. agentId is the link key for
-	// navigating from this parent span to the sub-agent's own agent-turn trace.
-	if (event.toolName === "Agent") {
-		const details = (
-			event.result as { details?: { agentId?: unknown; type?: unknown; status?: unknown } } | undefined
-		)?.details;
-		if (details?.agentId !== undefined) span.setAttribute("subagent.agent_id", String(details.agentId));
-		if (details?.type !== undefined) span.setAttribute("subagent.type", String(details.type));
-		if (details?.status !== undefined) span.setAttribute("subagent.status", String(details.status));
+	// pi-subagents `Agent` tool: lift sub-agent identity onto span attributes
+	// so MLflow's trace list surfaces them without expanding `outputs`.
+	// agentId is the link key from this parent tool span to the sub-agent's
+	// own agent-turn trace.
+	if (event.toolName === AGENT_TOOL_NAME) {
+		const details = extractAgentToolDetails(event.result);
+		if (details?.agentId !== undefined) span.setAttribute("subagent.agent_id", details.agentId);
+		if (details?.type !== undefined) span.setAttribute("subagent.type", details.type);
+		if (details?.status !== undefined) span.setAttribute("subagent.status", details.status);
 	}
 
 	span.end({
@@ -41,5 +36,5 @@ export function onToolExecutionEnd(activeToolSpans: Map<string, LiveSpan>, event
 		status: event.isError ? SpanStatusCode.ERROR : undefined,
 		endTimeNs: msToNs(event.timestamp),
 	});
-	activeToolSpans.delete(key);
+	registry.deleteToolSpan(event.sessionId, event.toolCallId);
 }

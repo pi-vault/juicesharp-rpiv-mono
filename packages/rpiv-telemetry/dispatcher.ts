@@ -19,12 +19,15 @@ export class Dispatcher {
 	private flushing = false;
 	private inFlight: Promise<void> = Promise.resolve();
 	private shuttingDown = false;
-	private dropCount = 0;
 	// Lazy-loaded on first dispatch — keeps module import side-effect-free.
 	private cachedConfig: TelemetryConfig | null = null;
 	// Names of providers whose last trackEvent rejected. Used to warn once on
 	// first failure and once on recovery, instead of flooding logs every event.
 	private readonly failedProviders = new Set<string>();
+	// Transition tracker for the backpressure drop path — warns once when the
+	// queue first reaches capacity and again when it drains below capacity.
+	// Mirrors the `failedProviders` posture: no periodic spam.
+	private backpressureActive = false;
 
 	registerProvider(provider: TelemetryProvider): () => void {
 		this.providers.push(provider);
@@ -38,6 +41,11 @@ export class Dispatcher {
 		return [...this.providers];
 	}
 
+	/**
+	 * Enqueue an event for fan-out. Events emitted before any provider is
+	 * registered are silently dropped — register providers before Pi handlers
+	 * begin firing (see README's "lifecycle" section).
+	 */
 	dispatch(event: TelemetryEvent): void {
 		if (this.shuttingDown) return;
 		if (this.providers.length === 0) return;
@@ -47,10 +55,14 @@ export class Dispatcher {
 		const maxQueueSize = this.cachedConfig.dispatcher.maxQueueSize;
 		if (this.queue.length >= maxQueueSize) {
 			this.queue.shift();
-			this.dropCount++;
-			if (this.dropCount % 10 === 0) {
-				console.warn(`[rpiv-telemetry] dropped ${this.dropCount} events due to backpressure`);
+			if (!this.backpressureActive) {
+				this.backpressureActive = true;
+				console.warn(`[rpiv-telemetry] backpressure: queue saturated at ${maxQueueSize}; dropping oldest events`);
 			}
+		} else if (this.backpressureActive && this.queue.length < maxQueueSize - 1) {
+			// Hysteresis: only clear once we're back well under cap.
+			this.backpressureActive = false;
+			console.warn("[rpiv-telemetry] backpressure recovered: queue back under capacity");
 		}
 		this.queue.push(event);
 		this.scheduleFlush();
@@ -59,9 +71,16 @@ export class Dispatcher {
 	async shutdown(): Promise<void> {
 		this.shuttingDown = true;
 
+		// Snapshot the queue *before* awaiting inFlight so any drain currently
+		// running owns its captured batch and our `remaining` here owns the
+		// post-batch tail. Preserves FIFO at the provider boundary.
 		const remaining = this.queue;
 		this.queue = [];
 		this.flushing = false;
+
+		// Drain the in-flight batch first so providers see older events
+		// before the post-batch tail — preserves FIFO under shutdown-mid-drain.
+		await this.inFlight;
 
 		if (remaining.length > 0) {
 			const providers = this.getProviders();
@@ -69,8 +88,6 @@ export class Dispatcher {
 				await this.broadcastEvent(providers, evt);
 			}
 		}
-
-		await this.inFlight;
 
 		const providers = this.getProviders();
 		await Promise.allSettled(providers.map((p) => p.flush()));
@@ -82,7 +99,7 @@ export class Dispatcher {
 		this.queue = [];
 		this.flushing = false;
 		this.shuttingDown = false;
-		this.dropCount = 0;
+		this.backpressureActive = false;
 		this.inFlight = Promise.resolve();
 		this.cachedConfig = null;
 		this.failedProviders.clear();
@@ -130,7 +147,8 @@ export class Dispatcher {
 			if (result.status === "rejected") {
 				if (!this.failedProviders.has(name)) {
 					this.failedProviders.add(name);
-					console.warn(`[rpiv-telemetry] provider ${name} rejected event: ${formatReason(result.reason)}`);
+					const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+					console.warn(`[rpiv-telemetry] provider ${name} rejected event: ${reason}`);
 				}
 			} else if (this.failedProviders.has(name)) {
 				this.failedProviders.delete(name);
@@ -140,18 +158,19 @@ export class Dispatcher {
 	}
 }
 
-function formatReason(reason: unknown): string {
-	if (reason instanceof Error) return reason.message;
-	return String(reason);
-}
-
 // ---------------------------------------------------------------------------
 // Module singleton + thin function delegates (historical functional API)
 // ---------------------------------------------------------------------------
 
 const singleton = new Dispatcher();
 
-/** Dispatch a telemetry event to all registered providers (non-blocking). */
+/**
+ * Dispatch a telemetry event to all registered providers (non-blocking).
+ *
+ * Events emitted before any provider is registered are silently dropped.
+ * Hosts that build custom provider registrations should call
+ * `registerTelemetryProvider` before Pi's lifecycle handlers begin firing.
+ */
 export function dispatchTelemetryEvent(event: TelemetryEvent): void {
 	singleton.dispatch(event);
 }
@@ -166,7 +185,15 @@ export function resetTelemetryDispatcher(): void {
 	singleton.reset();
 }
 
-/** Register a telemetry provider. Returns a disposer that removes it. */
+/**
+ * Register a telemetry provider. Returns a disposer that removes it.
+ *
+ * **Lifecycle contract:** call this before Pi handlers fan out their first
+ * event. Events that land before any provider is registered are dropped at the
+ * dispatcher boundary (no buffer). In the built-in flow, `initInstrumentation`
+ * registers configured providers before attaching `pi.on(...)` handlers, so
+ * the drop window is empty.
+ */
 export function registerTelemetryProvider(provider: TelemetryProvider): () => void {
 	return singleton.registerProvider(provider);
 }

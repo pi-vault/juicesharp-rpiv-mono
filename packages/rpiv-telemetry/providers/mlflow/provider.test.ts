@@ -206,14 +206,20 @@ describe("MlflowProvider", () => {
 		expect(warnSpy).toHaveBeenCalledOnce();
 	});
 
-	// Q12 fix: errors logged at debug level
-	it("logs errors at debug level (Q12)", async () => {
-		const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+	// Errors surface as a transition-based warning: first failure per event.kind
+	// logs once; subsequent failures of the same kind stay silent until recovery.
+	it("warns once per event-kind failure transition", async () => {
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 		vi.mocked(startSpan).mockImplementation(() => {
 			throw new Error("mlflow unavailable");
 		});
 		const provider = new MlflowProvider({ trackingUri: "http://localhost:5000" });
 		await provider.trackEvent({ kind: "agent_start", sessionId: "s1", timestamp: 1 });
-		expect(debugSpy).toHaveBeenCalledWith("[rpiv-telemetry] provider error:", "mlflow unavailable");
+		await provider.trackEvent({ kind: "agent_start", sessionId: "s1", timestamp: 2 });
+		const kindWarns = warnSpy.mock.calls.filter((c) =>
+			String(c[0]).includes("mlflow provider error on kind=agent_start"),
+		);
+		expect(kindWarns).toHaveLength(1);
+		expect(kindWarns[0][0]).toContain("mlflow unavailable");
 	});
 });

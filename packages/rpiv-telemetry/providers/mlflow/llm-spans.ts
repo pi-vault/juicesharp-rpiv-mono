@@ -1,14 +1,10 @@
-import { type LiveSpan, SpanStatusCode, SpanType, startSpan } from "@mlflow/core";
+import { SpanStatusCode, SpanType, startSpan } from "@mlflow/core";
 import type { LlmRequestEndEvent, LlmRequestStartEvent, MessageEndEvent } from "../../types/events.js";
-import { llmSpanKey, msToNs } from "./keys.js";
+import { msToNs } from "./keys.js";
+import type { MlflowSpanRegistry } from "./span-registry.js";
 
-export function onLlmRequestStart(
-	activeTurnSpans: Map<string, LiveSpan>,
-	activeLlmSpans: Map<string, LiveSpan>,
-	latestLlmSpanBySession: Map<string, LiveSpan>,
-	event: LlmRequestStartEvent,
-): void {
-	const parent = activeTurnSpans.get(event.sessionId);
+export function onLlmRequestStart(registry: MlflowSpanRegistry, event: LlmRequestStartEvent): void {
+	const parent = registry.getTurnSpan(event.sessionId);
 	const span = startSpan({
 		name: "llm-request",
 		parent,
@@ -17,17 +13,12 @@ export function onLlmRequestStart(
 		startTimeNs: msToNs(event.timestamp),
 	});
 	if (event.summarized) span.setAttribute("llm.payload_mode", "summary");
-	activeLlmSpans.set(llmSpanKey(event.sessionId, event.requestSeq), span);
-	latestLlmSpanBySession.set(event.sessionId, span);
+	registry.setLlmSpan(event.sessionId, event.requestSeq, span);
+	registry.setLatestLlmSpan(event.sessionId, span);
 }
 
-export function onLlmRequestEnd(
-	activeLlmSpans: Map<string, LiveSpan>,
-	latestLlmSpanBySession: Map<string, LiveSpan>,
-	event: LlmRequestEndEvent,
-): void {
-	const key = llmSpanKey(event.sessionId, event.requestSeq);
-	const span = activeLlmSpans.get(key);
+export function onLlmRequestEnd(registry: MlflowSpanRegistry, event: LlmRequestEndEvent): void {
+	const span = registry.getLlmSpan(event.sessionId, event.requestSeq);
 	if (!span) return;
 	span.setAttribute("http.status_code", event.status);
 	const requestId = event.headers["request-id"] ?? event.headers["x-request-id"];
@@ -37,21 +28,13 @@ export function onLlmRequestEnd(
 		status: event.status >= 400 ? SpanStatusCode.ERROR : undefined,
 		endTimeNs: msToNs(event.timestamp),
 	});
-	activeLlmSpans.delete(key);
-	// Only clear the latest tracker when it currently points at the span we just ended —
-	// preserves attribution to other still-open spans in the unlikely concurrent case.
-	if (latestLlmSpanBySession.get(event.sessionId) === span) {
-		latestLlmSpanBySession.delete(event.sessionId);
-	}
+	registry.deleteLlmSpan(event.sessionId, event.requestSeq);
+	registry.clearLatestLlmSpanIfMatches(event.sessionId, span);
 }
 
-export function onMessageEnd(
-	activeTurnSpans: Map<string, LiveSpan>,
-	latestLlmSpanBySession: Map<string, LiveSpan>,
-	event: MessageEndEvent,
-): void {
+export function onMessageEnd(registry: MlflowSpanRegistry, event: MessageEndEvent): void {
 	if (!event.usage) return;
-	const target = latestLlmSpanBySession.get(event.sessionId) ?? activeTurnSpans.get(event.sessionId);
+	const target = registry.getLatestLlmSpan(event.sessionId) ?? registry.getTurnSpan(event.sessionId);
 	if (!target) return;
 	target.setAttribute("llm.usage.input_tokens", event.usage.input);
 	target.setAttribute("llm.usage.output_tokens", event.usage.output);

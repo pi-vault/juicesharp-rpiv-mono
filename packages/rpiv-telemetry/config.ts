@@ -38,9 +38,6 @@ const ProvidersConfigSchema = Type.Object(
 	{ additionalProperties: false },
 );
 
-/** Built-in provider keys — derived from `ProvidersConfigSchema` so the two stay in lockstep without manual sync. */
-const BUILT_IN_PROVIDER_KEYS = Object.keys(ProvidersConfigSchema.properties);
-
 const DispatcherConfigSchema = Type.Object(
 	{
 		maxQueueSize: Type.Optional(
@@ -105,7 +102,9 @@ export interface TelemetryConfig {
 
 export function loadTelemetryConfig(): TelemetryConfig {
 	const raw = loadJsonConfig<TelemetryConfigSchema>(CONFIG_PATH);
-	warnOnUnknownProviderKeys(raw);
+	// `additionalProperties: false` on `ProvidersConfigSchema` rejects unknown
+	// provider keys with a precise TypeBox error — no separate warn-and-throw
+	// double-act.
 	const validated = validateConfig(TelemetryConfigSchema, raw);
 
 	return {
@@ -164,22 +163,4 @@ export function validateEventAllowlist(events: "*" | string[] | undefined): "*" 
 export function isEventEnabled(kind: TelemetryEventKind, allowedEvents: "*" | TelemetryEventKind[]): boolean {
 	if (allowedEvents === "*") return true;
 	return allowedEvents.includes(kind);
-}
-
-// ---------------------------------------------------------------------------
-// Provider-key warning (Value.Clean would silently strip unknown keys)
-// ---------------------------------------------------------------------------
-
-function warnOnUnknownProviderKeys(raw: unknown): void {
-	if (!raw || typeof raw !== "object") return;
-	const providers = (raw as { providers?: unknown }).providers;
-	if (!providers || typeof providers !== "object" || Array.isArray(providers)) return;
-	const known = new Set<string>(BUILT_IN_PROVIDER_KEYS);
-	const rejected = Object.keys(providers as Record<string, unknown>).filter((k) => !known.has(k));
-	if (rejected.length > 0) {
-		console.warn(
-			`[rpiv-telemetry] unknown provider keys in config (ignored): ${rejected.join(", ")}. ` +
-				`Built-in providers: ${BUILT_IN_PROVIDER_KEYS.join(", ")}.`,
-		);
-	}
 }
