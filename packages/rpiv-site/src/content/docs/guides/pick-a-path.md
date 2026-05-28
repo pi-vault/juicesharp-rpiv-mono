@@ -20,7 +20,21 @@ The chain proper starts at `/skill:research`. How you get there depends on what 
 | A spec, ticket, or sharp description | `/skill:research <free-text>`. No pre-phase needed. |
 | A fuzzy idea | `/skill:discover` first. It interviews you one question at a time and writes a Feature Requirements Document that `/skill:research` then reads. |
 | A clear feature, unsure of the technical approach | `/skill:explore` first. Compares valid technical approaches side-by-side. The solutions document feeds `/skill:design` or `/skill:blueprint` directly, or routes through `/skill:research` first for codebase grounding. |
-## Four paths by scope
+
+## Hand-drive, or hand it to `/wf`
+
+The recipes below run the same skills in the same order whether you invoke them yourself or hand them to the workflow runner. `rpiv-workflow` ships four bundled workflows:
+
+- **`/wf ship`** — `blueprint → implement → validate → commit`. Fast path with no research and no review. Suits small+ through midsize features where the approach is already obvious and you don't need a codebase research pass.
+- **`/wf build`** — `research → blueprint → implement → validate → code-review → (revise → implement → loop) → commit`. Research-backed, with a review-and-revise loop bounded by the runner's `maxBackwardJumps` (default 2, so at most 3 review iterations).
+- **`/wf arch`** — `research → design → plan → implement → validate → code-review → (back to design → loop) → commit`. Design-led. The loop returns to `design` directly — there's no `revise` stage in this chain.
+- **`/wf vet`** — `code-review → (blueprint → implement → validate → loop) → commit`. Orthogonal to scope: point it at an existing diff (yours or a teammate's) for a structured review with an optional fix cycle.
+
+The runner writes artifacts under `.rpiv/artifacts/` exactly as the hand-driven chain does, plus an audited JSONL trail per run under `.rpiv/workflows/<run-id>.jsonl` you can resume from. Routing is typed — `code-review` declares an output schema (`blockers_count` for build/arch, `status` for vet) and the runner picks the next stage from the value, no eyeballing required. Both build and arch fan out `implement` into one Pi session per `## Phase N:` heading in the inherited plan.
+
+Hand-drive when you want the pause between every artifact — for exploratory work, mid-flow pivots, or your first pass through a codebase. Use `/wf` once the chain's rhythm is muscle memory. → [Run a workflow](/docs/guides/run-a-workflow).
+
+## Five paths by scope
 
 ### Trivial: mechanical change
 
@@ -56,6 +70,28 @@ Three flavors in practice:
 
 The sweep flavor is the one most people get wrong. It _looks_ mechanical, so the temptation is to skip research and execute, and that's where per-site quirks bite. Research isn't a substitute for a plan. It's the task-scoped codebase snapshot the fix reads from, and on any non-trivial repo it's what keeps relevant code in the model's window and noise out.
 
+For small fixes where research is the actual deliverable (the bug-fix and perf flavors above), stay hand-driven: there's no bundled workflow that starts at `research` and stops short of `implement`.
+
+### Small+ to midsize, approach obvious
+
+```
+[discover?] → blueprint → implement → validate → commit
+```
+
+The gap between "fix in chat" and a full research-first chain. When the change is bigger than a single diff you'd apply in conversation but the approach is settled — you already know which files, which patterns, which seams — skip `research` entirely and start at `blueprint`. `blueprint` collapses design and planning into one pass; `implement` does the work; `validate` confirms the deliverable; commit.
+
+No `code-review` either. This shape works precisely because there's nothing for review to surface that you wouldn't catch in `validate` or the diff itself.
+
+Good fits:
+
+- A new endpoint following an existing route pattern (controller + service + test mirror sibling routes)
+- A second integration following an existing one (you've already shipped Stripe; PayPal is structurally identical)
+- A UI screen built on a component library you've used end-to-end (form + list + detail, no novel layout work)
+- A scheduled job that mirrors an existing one (different cron + different payload, same plumbing)
+- A migration on a model whose shape you understand (add column, backfill, deploy)
+
+**Workflow shortcut:** `/wf ship <input>` runs this chain end-to-end. The hand-driven form earns its keep when you want a checkpoint between `blueprint` and `implement` to sanity-check the phases; the workflow form earns its keep when you've internalized that rhythm and trust the plan to be implement-ready first time.
+
 ### Mid-size feature
 
 ```
@@ -67,6 +103,8 @@ The sweep flavor is the one most people get wrong. It _looks_ mechanical, so the
 ```
 
 `blueprint` collapses design and planning into one pass via vertical-slice decomposition. You get an implement-ready plan with developer checkpoints between phases.
+
+**Workflow shortcut:** `/wf build <input>` runs this chain end-to-end with the `code-review → revise → implement` loop wired in (bounded at 3 review iterations by the runner's `maxBackwardJumps` guard).
 
 Good fits:
 
@@ -92,6 +130,8 @@ Two signals you've outgrown blueprint. **Revision count**: if you find yourself 
 ```
 
 Split design and plan when the architecture is the hard part. `design` locks decisions and slices; `plan` sequences them into atomic phases with success criteria. `revise` (see below) is the feedback loop when implement, validate, or code-review surfaces a real flaw.
+
+**Workflow shortcut:** `/wf arch <input>` runs this chain end-to-end. The bundled `arch` workflow has no `revise` stage — when `code-review` reports blockers, the loop returns to `design` directly (bounded at 3 review iterations by `maxBackwardJumps`). If you want `revise` between iterations rather than re-entering design, stay hand-driven or author a custom workflow.
 
 Good fits:
 
@@ -125,5 +165,6 @@ The recipe is enough on day one. The rest is what compounds.
 ## Next steps
 
 - [Walk the chain](/docs/guides/first-skill-chain): the mid-size path demonstrated on a real example
+- [Run a workflow](/docs/guides/run-a-workflow): hand the chain to `/wf` once the rhythm is muscle memory
 - [Reset between skills](/docs/guides/reset-between-skills): the fresh-context rule for every transition
 - [Onboard a project](/docs/guides/onboard-a-project): annotate a brownfield codebase before the first run
