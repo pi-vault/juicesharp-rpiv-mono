@@ -27,7 +27,7 @@
 import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { createMockSessionChain, mockAssistantMessage } from "@juicesharp/rpiv-test-utils";
+import { createMockPi, createMockSessionChain, mockAssistantMessage } from "@juicesharp/rpiv-test-utils";
 import {
 	acts,
 	defineRoute,
@@ -781,5 +781,47 @@ describe("design-to-code example (prompt dispatch)", () => {
 		expect(typeof designToCode.stages.implement?.prompt).toBe("string");
 		expect(designToCode.stages.implement?.sessionPolicy).toBe("continue");
 		expect(designToCode.stages.implement?.skill).toBeUndefined();
+	});
+
+	it("runs the skill → continue-skill → continue-prompt chain end-to-end in one session", async () => {
+		const tmpDir = mkdtempSync(join(tmpdir(), "rpiv-d2c-"));
+		try {
+			// discover's spec must exist on disk (rpivArtifactMdOutcome reads frontmatter).
+			mkdirSync(join(tmpDir, ".rpiv", "artifacts", "research"), { recursive: true });
+			writeFileSync(join(tmpDir, ".rpiv/artifacts/research/spec.md"), "");
+
+			// Shared mutable branch: discover reads it; each continue send grows it.
+			const sharedBranch: unknown[] = [mockAssistantMessage("wrote .rpiv/artifacts/research/spec.md")];
+			const chain = createMockSessionChain({
+				cwd: tmpDir,
+				steps: [{ branch: sharedBranch }],
+				pi: createMockPi({ skills: ["discover", "frontend-design"] }).pi,
+			});
+			chain.sendUserMessageFn.mockImplementation((content: unknown) => {
+				const text = typeof content === "string" ? content : JSON.stringify(content);
+				chain.sentMessages.push(text);
+				if (text.startsWith("/skill:frontend-design")) sharedBranch.push(mockAssistantMessage("design reasoning"));
+				else if (text === "Implement the design spec discussed above.")
+					sharedBranch.push(mockAssistantMessage("implemented"));
+			});
+
+			const result = await runWorkflow(chain.ctx, {
+				workflow: designToCode,
+				input: "build a dashboard",
+				host: chain.pi,
+			});
+
+			expect(result.success).toBe(true);
+			// discover (fresh) + design (continue) + implement (continue prompt)
+			expect(result.stagesCompleted).toBe(3);
+			expect(chain.ctx.newSession).toHaveBeenCalledTimes(1);
+			expect(chain.sentMessages).toEqual([
+				"/skill:discover build a dashboard",
+				"/skill:frontend-design .rpiv/artifacts/research/spec.md",
+				"Implement the design spec discussed above.",
+			]);
+		} finally {
+			rmSync(tmpDir, { recursive: true, force: true });
+		}
 	});
 });
