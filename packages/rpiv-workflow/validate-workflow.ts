@@ -182,6 +182,7 @@ function checkStageSemantics(w: Workflow, issues: WorkflowValidationIssue[]): vo
 		checkTimeoutBounds(w, name, stage, issues);
 		checkStageEnums(w, name, stage, issues);
 		checkFanoutContinueInvariant(w, name, stage, issues);
+		checkIterateInvariants(w, name, stage, issues);
 		checkInheritsArtifactsKind(w, name, stage, issues);
 		checkScriptStageInvariants(w, name, stage, issues);
 	}
@@ -273,6 +274,56 @@ function checkFanoutContinueInvariant(
 }
 
 /**
+ * `iterate` is the sequential, accumulating dual of `fanout`. Its invariants
+ * are stricter because each unit runs the stage's collector and publishes to a
+ * single named slot:
+ *
+ *   - mutually exclusive with `fanout` (push vs pull — a stage is one or the
+ *     other) and with `run` (a script stage writes its own loop);
+ *   - incompatible with `sessionPolicy: "continue"` — like fanout, each unit
+ *     needs an isolated session (also mirrored at preflight);
+ *   - requires `kind: "produces"` — units run an `outcome` collector;
+ *   - requires `outcome.name` — every unit publishes to the SAME
+ *     `state.named` slot via `resolvePublishName`, and the per-unit audit row
+ *     is decorated, so without an explicit name the decoration would split the
+ *     slot across units.
+ *
+ * The `fanout`/`run`/`kind`/`outcome.name` rules are authoring-time-knowable,
+ * so load validation is the primary gate; only the `continue` rule needs a
+ * runtime mirror (embedders may bypass load validation).
+ */
+function checkIterateInvariants(w: Workflow, name: string, stage: StageDef, issues: WorkflowValidationIssue[]): void {
+	if (!stage.iterate) return;
+	if (stage.fanout) {
+		issues.push(error(w.name, name, `stage "${name}": iterate and fanout are mutually exclusive (pull vs push)`));
+	}
+	// iterate + run is reported by checkScriptStageInvariants (mirrors fanout + run).
+	if (stage.sessionPolicy === "continue") {
+		issues.push(
+			error(
+				w.name,
+				name,
+				`stage "${name}" cannot combine iterate with sessionPolicy "continue" — each unit requires an isolated session`,
+			),
+		);
+	}
+	if (stage.kind !== "produces") {
+		issues.push(
+			error(w.name, name, `stage "${name}": iterate requires kind "produces" — each unit runs an outcome collector`),
+		);
+	}
+	if (!stage.outcome?.name) {
+		issues.push(
+			error(
+				w.name,
+				name,
+				`stage "${name}": iterate requires an \`outcome\` with a \`name\` so accumulated units publish to a stable named slot`,
+			),
+		);
+	}
+}
+
+/**
  * `inheritsArtifacts: false` is the `terminal()` factory's mechanism — it
  * tells the runner to bypass upstream-artifact inheritance for a
  * side-effect stage. Setting it on a `produces` stage is meaningless: a
@@ -349,6 +400,11 @@ function checkScriptStageInvariants(
 	if (stage.fanout) {
 		issues.push(
 			error(w.name, name, `stage "${name}": script stages cannot fanout — write a loop inside run() instead`),
+		);
+	}
+	if (stage.iterate) {
+		issues.push(
+			error(w.name, name, `stage "${name}": script stages cannot iterate — write a loop inside run() instead`),
 		);
 	}
 	if (stage.sessionPolicy === "continue") {
