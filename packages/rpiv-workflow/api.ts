@@ -449,6 +449,40 @@ interface ActsScriptOptions<TIn = unknown> {
 	reads?: ReadonlyArray<string>;
 }
 
+/**
+ * Options accepted by `produces.prompt({ prompt, outcome, ... })` — the typed
+ * builder for a raw-prompt `produces` stage. The dispatch-conflicting fields
+ * (`skill`, `run`, `fanout`, `iterate`, `reads`) are STRUCTURALLY ABSENT, so an
+ * object-literal call site that sets one fails TypeScript's excess-property
+ * check — the load-time exclusion becomes compile-time for the idiomatic path.
+ * `outcome` is required (a `produces` stage always needs one).
+ */
+interface ProducesPromptOptions<TIn = unknown, TOut = unknown> {
+	prompt: string | PromptFn;
+	outcome: OutputSpec;
+	outputSchema?: StageSchema<unknown, TOut>;
+	inputSchema?: StageSchema<unknown, TIn>;
+	onInvalid?: OnInvalid;
+	maxRetries?: number;
+	validateTimeoutMs?: number;
+	/** `"continue"` makes this a follow-up turn on a session a prior stage populated. */
+	sessionPolicy?: SessionPolicy;
+}
+
+/**
+ * Options accepted by `acts.prompt({ prompt, ... })` — the typed builder for a
+ * raw-prompt side-effect stage (a pure chat turn). Narrower than the produces
+ * variant: no `outcome` (nothing collected). Dispatch-conflicting fields are
+ * structurally absent. For a collecting side-effect prompt stage, use the bare
+ * `acts({ prompt, outcome })` field form instead.
+ */
+interface ActsPromptOptions<TIn = unknown> {
+	prompt: string | PromptFn;
+	inputSchema?: StageSchema<unknown, TIn>;
+	/** `"continue"` makes this a follow-up turn on a session a prior stage populated. */
+	sessionPolicy?: SessionPolicy;
+}
+
 function producesFn(overrides: Partial<StageDef> = {}): StageDef {
 	return {
 		kind: "produces",
@@ -472,11 +506,34 @@ function producesScript<TIn = unknown, TOut = unknown>(opts: ProducesScriptOptio
 	};
 }
 
+function producesPrompt<TIn = unknown, TOut = unknown>(opts: ProducesPromptOptions<TIn, TOut>): StageDef<TIn, TOut> {
+	return {
+		kind: "produces",
+		sessionPolicy: opts.sessionPolicy ?? "fresh",
+		prompt: opts.prompt,
+		outcome: opts.outcome,
+		outputSchema: opts.outputSchema,
+		inputSchema: opts.inputSchema,
+		onInvalid: opts.onInvalid,
+		maxRetries: opts.maxRetries,
+		validateTimeoutMs: opts.validateTimeoutMs,
+	};
+}
+
 function actsFn(overrides: Partial<StageDef> = {}): StageDef {
 	return {
 		kind: "side-effect",
 		sessionPolicy: "fresh",
 		...overrides,
+	};
+}
+
+function actsPrompt<TIn = unknown>(opts: ActsPromptOptions<TIn>): StageDef<TIn, void> {
+	return {
+		kind: "side-effect",
+		sessionPolicy: opts.sessionPolicy ?? "fresh",
+		prompt: opts.prompt,
+		inputSchema: opts.inputSchema,
 	};
 }
 
@@ -510,8 +567,13 @@ function terminalScript<TIn = unknown>(opts: ActsScriptOptions<TIn>): StageDef<T
  * Skillless variant: `produces.script({ run, outputSchema?, ... })` runs
  * a pure TS function in place of a Pi skill body. The function returns
  * the `Output<K, D>` envelope directly.
+ *
+ * Raw-prompt variant: `produces.prompt({ prompt, outcome, ... })` dispatches
+ * author-owned text (no `/skill:` prefix) and collects the reply via `outcome`.
+ * The typed options omit the dispatch-conflicting fields so invalid combos are
+ * un-typable on a literal call site.
  */
-export const produces = Object.assign(producesFn, { script: producesScript });
+export const produces = Object.assign(producesFn, { script: producesScript, prompt: producesPrompt });
 
 /**
  * Side-effect stage: invokes a Pi skill whose side effect IS the work
@@ -521,8 +583,12 @@ export const produces = Object.assign(producesFn, { script: producesScript });
  * Skillless variant: `acts.script({ run, ... })` runs a pure TS
  * function in place of a Pi skill body; the runner synthesises a
  * `SideEffectOutput` envelope so the chain stays uniform.
+ *
+ * Raw-prompt variant: `acts.prompt({ prompt, sessionPolicy? })` dispatches
+ * author-owned text as a pure chat turn (no artifact collected) — the typed
+ * builder for the continue follow-up shape.
  */
-export const acts = Object.assign(actsFn, { script: actsScript });
+export const acts = Object.assign(actsFn, { script: actsScript, prompt: actsPrompt });
 
 /**
  * Terminal side-effect stage: an `acts`-shaped stage that does NOT inherit
