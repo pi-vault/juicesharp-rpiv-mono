@@ -135,6 +135,51 @@ export interface FanoutUnit {
 	id?: string;
 }
 
+/**
+ * Opt-in iteration — the sequential, accumulating counterpart to `FanoutFn`.
+ * Where `fanout` computes all units up front and runs them blind to one
+ * another, `iterate` is invoked once per unit (pull model), each call
+ * receiving the validated `Output`s of every prior unit in this stage. Return
+ * the next unit, or `null`/`undefined` to terminate the stage.
+ *
+ * Each unit runs the stage's `outcome` collector like a one-shot `produces`
+ * stage: it validates against `outputSchema`, appends its `Output` to
+ * `state.named[outcome.name]`, and rolls the primary artifact forward.
+ *
+ * Invariants enforced by the runner:
+ * - First call returns null  ⇒ stage completes as a zero-unit no-op (advances).
+ * - Throws                   ⇒ stage halts, attributed to this stage.
+ * - `accumulated.length` reaching the run-wide `maxIterations` cap ⇒ stage
+ *   halts with a terminal failure (the backstop for a generator that never
+ *   returns null).
+ * - Requires `kind: "produces"` + an `outcome` with a `name`; incompatible
+ *   with `sessionPolicy: "continue"` and with `fanout`/`run` (validated at
+ *   load + at preflight).
+ */
+export type IterateFn = (ctx: IterateContext) => IterateUnit | null | Promise<IterateUnit | null>;
+
+export interface IterateContext {
+	cwd: string;
+	/**
+	 * Stage-entry primary artifact, FROZEN across every unit. Does not roll
+	 * forward to the prior unit's output — use `accumulated` (or `state.named`)
+	 * for that. Undefined when the iterate stage is the entry point.
+	 *
+	 * On a corrective back-edge re-entry the rolling primary may be a
+	 * downstream doc; generators that must re-read their true source should
+	 * read it from `state.named` rather than relying on this slot.
+	 */
+	artifact: import("./handle.js").Artifact | undefined;
+	state: Readonly<RunState>;
+	/** Validated Outputs of this stage's already-completed units, in order. */
+	accumulated: readonly import("./output.js").Output[];
+	/** 0-based index of the unit about to run (== accumulated.length). */
+	index: number;
+}
+
+/** Same shape as `FanoutUnit` (prompt + label + optional stable id). */
+export type IterateUnit = FanoutUnit;
+
 // ===========================================================================
 // Script-stage primitives — skillless TS functions in place of `/skill:<x>`
 // ===========================================================================
@@ -261,6 +306,17 @@ export interface StageDef<TIn = unknown, TOut = unknown> {
 	 * isolation.
 	 */
 	fanout?: FanoutFn;
+	/**
+	 * Opt-in sequential accumulation — the dual of `fanout`. When set, the
+	 * runner pulls units one at a time, feeding each generator call the prior
+	 * units' `Output`s; every unit runs the stage's `outcome` like a one-shot
+	 * `produces` stage and accumulates into `state.named[outcome.name]`.
+	 *
+	 * Mutually exclusive with `fanout` and `run`. Requires `kind: "produces"`,
+	 * an `outcome` with a `name`, and `sessionPolicy` other than `"continue"`.
+	 * (validated at load + at preflight.)
+	 */
+	iterate?: IterateFn;
 	/**
 	 * Whether the stage inherits the chain's primary artifact from
 	 * upstream `produces` stages. Default `true`. Set to `false` on a
