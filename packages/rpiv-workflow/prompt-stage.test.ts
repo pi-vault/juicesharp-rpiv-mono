@@ -167,3 +167,75 @@ describe("prompt dispatch", () => {
 		expect(chain.sentMessages).toEqual(["Just answer."]);
 	});
 });
+
+describe("prompt builders (produces.prompt / acts.prompt)", () => {
+	let tmpDir: string;
+	beforeEach(() => {
+		tmpDir = mkdtempSync(join(tmpdir(), "rpiv-prompt-build-"));
+	});
+	afterEach(() => {
+		rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("set the right dispatch fields and defaults", () => {
+		const p = produces.prompt({ prompt: "x", outcome: makeOutcome("p"), sessionPolicy: "continue" });
+		expect(p).toMatchObject({ kind: "produces", sessionPolicy: "continue", prompt: "x" });
+		expect(p.outcome?.name).toBe("p");
+		expect(p.skill).toBeUndefined();
+		expect(p.run).toBeUndefined();
+
+		const a = acts.prompt({ prompt: "y" });
+		expect(a).toMatchObject({ kind: "side-effect", sessionPolicy: "fresh", prompt: "y" });
+		expect(a.outcome).toBeUndefined();
+	});
+
+	it("produces.prompt builds a working raw-prompt produces stage end-to-end", async () => {
+		const chain = createMockSessionChain({
+			cwd: tmpDir,
+			steps: [
+				{ branch: [mockAssistantMessage("wrote .rpiv/artifacts/summary/s.md")] },
+				{ branch: [mockAssistantMessage("consumed")] },
+			],
+		});
+
+		const result = await runWorkflow(chain.ctx, {
+			workflow: defineWorkflow({
+				name: "built",
+				start: "produce",
+				stages: {
+					produce: produces.prompt({
+						prompt: "Write to .rpiv/artifacts/summary/s.md",
+						outcome: makeOutcome("summary"),
+					}),
+					consume: acts({ reads: ["summary"] }),
+				},
+				edges: { produce: "consume", consume: "stop" },
+			}),
+			input: "x",
+		});
+
+		expect(result.success).toBe(true);
+		expect(chain.sentMessages).toEqual([
+			"Write to .rpiv/artifacts/summary/s.md",
+			"/skill:consume --summary .rpiv/artifacts/summary/s.md",
+		]);
+	});
+
+	it("reject dispatch-conflicting options at compile time", () => {
+		// Each `@ts-expect-error` asserts the narrowed options type rejects the
+		// combo — `tsc` (via `npm run check`) fails if any line stops erroring.
+		// At runtime the builders ignore the excess field and still return a
+		// valid StageDef, so the expectations pass.
+
+		// @ts-expect-error — a prompt builder cannot also name a skill
+		expect(produces.prompt({ prompt: "x", outcome: makeOutcome("p"), skill: "implement" })).toBeDefined();
+		// @ts-expect-error — a prompt builder cannot fanout
+		expect(acts.prompt({ prompt: "x", fanout: () => [] })).toBeDefined();
+		// @ts-expect-error — a prompt builder cannot iterate
+		expect(produces.prompt({ prompt: "x", outcome: makeOutcome("p"), iterate: () => null })).toBeDefined();
+		// @ts-expect-error — a prompt builder cannot read named slots (use the PromptFn)
+		expect(acts.prompt({ prompt: "x", reads: ["plans"] })).toBeDefined();
+		// @ts-expect-error — produces.prompt requires an outcome
+		expect(produces.prompt({ prompt: "x" })).toBeDefined();
+	});
+});

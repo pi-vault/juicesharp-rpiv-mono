@@ -268,21 +268,32 @@ A stage has three **dispatch** options — orthogonal to its `kind`:
 
 A `prompt` stage sends author-owned text as the user message — no `/skill:`
 prefix, no implicit upstream-artifact arg appended. Use it for a focused,
-one-off instruction that doesn't warrant a whole skill:
+one-off instruction that doesn't warrant a whole skill.
+
+**Prefer the typed builders** `produces.prompt({ … })` / `acts.prompt({ … })`
+(mirroring `.script`). Their options structurally omit `skill`/`run`/`fanout`/
+`iterate`/`reads`, so an invalid combo fails to compile instead of only failing
+load validation:
 
 ```typescript
 // side-effect chat turn (no artifact collected)
-acts({ prompt: "Implement the design spec discussed above.", sessionPolicy: "continue" })
+acts.prompt({ prompt: "Implement the design spec discussed above.", sessionPolicy: "continue" })
 
 // produces chat turn — its reply runs the outcome collector like any produces stage
-produces({ prompt: "Write a one-paragraph summary to .rpiv/artifacts/summary/s.md", outcome: myOutcome })
+produces.prompt({ prompt: "Write a one-paragraph summary to .rpiv/artifacts/summary/s.md", outcome: myOutcome })
 
 // dynamic — weave in the upstream Output (same ScriptContext script stages get)
-produces({
+produces.prompt({
   prompt: ({ input }) => `Refine ${handleToString(input!.artifacts[0]!.handle)} for clarity.`,
   outcome: myOutcome,
 })
+
+// acts.prompt({ prompt, skill: "x" }) — does NOT compile; the builder omits `skill`.
 ```
+
+The bare-field form (`acts({ prompt })` / `produces({ prompt })`) still works —
+it's what the runner reads and what programmatic embedders construct — but the
+builders are the recommended authoring surface.
 
 **The killer use — the continue follow-up turn.** With `sessionPolicy: "continue"`,
 a prompt stage sends a follow-up into a session a prior stage already populated,
@@ -294,7 +305,7 @@ artifact): the downstream `implement` step leans on the shared context.
 stages: {
   discover:  produces({ outcome: rpivBucketOutcome("research") }),          // fresh, writes a spec
   design:    acts({ skill: "frontend-design", sessionPolicy: "continue" }), // same session, no artifact
-  implement: acts({ prompt: "Implement the design spec.", sessionPolicy: "continue" }),
+  implement: acts.prompt({ prompt: "Implement the design spec.", sessionPolicy: "continue" }),
 }
 ```
 
