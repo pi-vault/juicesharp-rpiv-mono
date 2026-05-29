@@ -7,6 +7,7 @@ Complete reference for the `@juicesharp/rpiv-workflow` authoring DSL. A workflow
 - [defineWorkflow](#defineworkflow)
 - [Stage factories](#stage-factories)
   - [produces](#produces)
+  - [iterate (sequential accumulation)](#iterate-sequential-accumulation)
   - [acts](#acts)
   - [terminal](#terminal)
   - [Script stages](#script-stages)
@@ -63,10 +64,16 @@ produces({
   outputSchema: typeboxSchema(Type.Object({ blockers_count: Type.Integer() })),
 })
 
-// With fanout (one Pi session per unit)
+// With fanout (one Pi session per unit, all units known up front)
 produces({
   outcome: myOutcome,
   fanout: myFanoutFn,
+})
+
+// With iterate (sequential, accumulating — see below)
+produces({
+  outcome: myOutcome,  // outcome MUST carry a `name`
+  iterate: myIterateFn,
 })
 
 // With validation retry
@@ -90,8 +97,63 @@ produces({
 | `onInvalid` | `"retry"` | `"retry"` (re-invoke up to `maxRetries`) or `"halt"` (fail fast). |
 | `maxRetries` | — | Max retries on schema rejection. |
 | `validateTimeoutMs` | — | Timeout for async schemas. |
-| `fanout` | none | `FanoutFn` — decomposes work into N units, one Pi session per unit. |
+| `fanout` | none | `FanoutFn` — decomposes work into N units, one Pi session per unit. All units computed up front. |
+| `iterate` | none | `IterateFn` — sequential, accumulating units pulled one at a time, each seeing prior units' outputs. Requires `outcome.name`. See [iterate](#iterate-sequential-accumulation). |
 | `sessionPolicy` | `"fresh"` | `"fresh"` (new session) or `"continue"` (reuse prior session). |
+
+### iterate (sequential accumulation)
+
+`iterate` is a field on a `produces` stage — the **sequential, accumulating** dual of `fanout`. Where `fanout` computes every unit up front and runs them blind to one another, `iterate` pulls one unit at a time: the runner calls your `IterateFn` per unit, feeding it the validated outputs of every prior unit in the same stage. Return the next unit, or `null`/`undefined` to terminate.
+
+Each unit runs the stage's `outcome` collector exactly like a one-shot `produces` pass — it validates against `outputSchema`, appends its `Output` to `state.named[outcome.name]`, and rolls the primary artifact forward. So a downstream stage (or a downstream `fanout`) can read every accumulated output straight from `state`.
+
+```typescript
+import type { IterateFn } from "@juicesharp/rpiv-workflow";
+
+// One blueprint pass per review phase, each building on the plans already produced.
+const perPhase: IterateFn = ({ artifact, accumulated, index, cwd, state }) => {
+  if (artifact?.handle.kind !== "fs") return null;
+  const phases = readPhases(artifact.handle.path, cwd);
+  if (index >= phases.length) return null;            // terminator
+  const prior = accumulated.flatMap((o) => o.artifacts).map((a) => pathOf(a));
+  return {
+    prompt: `${artifact.handle.path} Phase ${phases[index].n}` +
+            (prior.length ? `\nPrior plans (build on them): ${prior.join(", ")}` : ""),
+    label: `phase ${index + 1}/${phases.length}`,
+    id: `phase-${phases[index].n}`,                   // stable audit key
+  };
+};
+
+produces({ outcome: rpivBucketOutcome("plans"), iterate: perPhase })
+```
+
+**`IterateContext` (what each call receives):**
+
+| Field | Meaning |
+|-------|---------|
+| `cwd` | Run working directory. |
+| `artifact` | Stage-entry primary, **FROZEN** across every unit (does NOT roll to the prior unit's output). Undefined when iterate is the entry stage. On a corrective back-edge re-entry the rolling primary may be a downstream doc — source your true input from `state.named` in that case. |
+| `state` | Read-only `RunState`. `state.named[outcome.name]` is the global accumulation channel. |
+| `accumulated` | This stage's already-completed units' validated `Output`s, in order. The primary accumulation channel. |
+| `index` | 0-based index of the unit about to run (`== accumulated.length`). |
+
+**Invariants (enforced at load + preflight):**
+
+- Requires `kind: "produces"` and an `outcome` with a `name` (every unit publishes to the same named slot; the per-unit audit row is decorated, so a name is mandatory to keep the slot from splitting).
+- Mutually exclusive with `fanout` (push vs pull) and with `run` (script stages write their own loop).
+- Incompatible with `sessionPolicy: "continue"` (each unit needs an isolated session).
+- Generator `null` on the first call → zero-unit no-op: nothing published, primary unchanged, chain advances (with a warning).
+- A run-wide `maxIterations` cap (default 32, configurable via `RunWorkflowOptions.maxIterations`) backstops a generator that never returns `null` — the stage halts with a terminal failure.
+
+**iterate vs fanout** — duals, not substitutes:
+
+| | `fanout` | `iterate` |
+|---|---|---|
+| Generation | push (once, all units) | pull (per unit, sees prior) |
+| Stage kind | any (often `acts`) | requires `produces` + named `outcome` |
+| Collector per unit | no (bare audit row) | yes (full produces path) |
+| Count known up front | yes | no (generator-terminated) |
+| Use when | independent side-effect units (e.g. `implement` per plan phase) | each unit must build on the last (e.g. `blueprint` per review phase) |
 
 ### acts
 
@@ -189,7 +251,7 @@ const notifySlack = terminal.script({
 ```
 
 **Constraints on script stages:**
-- Cannot declare `skill`, `outcome`, `fanout`, or `sessionPolicy: "continue"` — load-time validation rejects the combination.
+- Cannot declare `skill`, `outcome`, `fanout`, `iterate`, or `sessionPolicy: "continue"` — load-time validation rejects the combination.
 - `produces.script` may declare `outputSchema`, `maxRetries`, `onInvalid`.
 - `acts.script` / `terminal.script` may declare `inputSchema`.
 
@@ -624,6 +686,7 @@ Generated workflows must pass `validateWorkflow()` before writing. The validator
 - `gate` / data-reading `defineRoute` source stages have `outputSchema`
 - Every `reads:` name is published by some `produces` stage in the workflow (publish key = `outcome.name ?? stage.<record-key>`)
 - Fanout is incompatible with `sessionPolicy: "continue"`
-- Script stages cannot declare `skill`, `outcome`, `fanout`, or `sessionPolicy: "continue"`
+- Iterate requires `kind: "produces"` + an `outcome` with a `name`; it is mutually exclusive with `fanout` and `run`, and incompatible with `sessionPolicy: "continue"`
+- Script stages cannot declare `skill`, `outcome`, `fanout`, `iterate`, or `sessionPolicy: "continue"`
 
 > **Important:** The `/wf` command blocks execution on any `severity: "error"` issue. Always validate before writing.
