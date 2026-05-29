@@ -559,6 +559,75 @@ describe("validateWorkflow — iterate invariants", () => {
 	});
 });
 
+describe("validateWorkflow — prompt invariants", () => {
+	const noopActsScript: ActsScriptFn = (_ctx: ScriptContext) => {};
+	const wf = (stage: StageDef, start = "s"): Workflow => ({
+		name: "prompting",
+		start,
+		stages: { s: stage },
+		edges: { s: "stop" },
+	});
+
+	it("accepts a side-effect prompt stage", () => {
+		expect(errors(wf({ kind: "side-effect", sessionPolicy: "fresh", prompt: "do the thing" }))).toEqual([]);
+	});
+
+	it("accepts a produces prompt stage with an outcome", () => {
+		const e = errors(
+			wf({ kind: "produces", sessionPolicy: "fresh", prompt: "write it", outcome: { collector: noopCollector } }),
+		);
+		expect(e).toEqual([]);
+	});
+
+	it("rejects a prompt stage that also sets an explicit skill", () => {
+		const e = errors(wf({ kind: "side-effect", sessionPolicy: "fresh", prompt: "x", skill: "implement" }));
+		expect(e.some((i) => /a prompt stage cannot also set `skill`/.test(i.message))).toBe(true);
+	});
+
+	it("rejects prompt + fanout", () => {
+		const e = errors(wf({ kind: "side-effect", sessionPolicy: "fresh", prompt: "x", fanout: () => [] }));
+		expect(e.some((i) => /prompt and fanout are mutually exclusive/.test(i.message))).toBe(true);
+	});
+
+	it("rejects prompt + iterate", () => {
+		const e = errors(
+			wf({
+				kind: "produces",
+				sessionPolicy: "fresh",
+				prompt: "x",
+				outcome: { name: "p", collector: noopCollector },
+				iterate: () => null,
+			}),
+		);
+		expect(e.some((i) => /prompt and iterate are mutually exclusive/.test(i.message))).toBe(true);
+	});
+
+	it("rejects prompt + reads", () => {
+		const e = errors(wf({ kind: "side-effect", sessionPolicy: "fresh", prompt: "x", reads: ["plans"] }));
+		expect(e.some((i) => /a prompt stage cannot set `reads`/.test(i.message))).toBe(true);
+	});
+
+	it("rejects prompt + run (a script stage cannot set a raw prompt)", () => {
+		const e = errors(wf({ kind: "side-effect", sessionPolicy: "fresh", prompt: "x", run: noopActsScript }));
+		expect(e.some((i) => /script stages cannot set a raw prompt/.test(i.message))).toBe(true);
+	});
+
+	it("rejects an empty-string prompt", () => {
+		const e = errors(wf({ kind: "side-effect", sessionPolicy: "fresh", prompt: "   " }));
+		expect(e.some((i) => /prompt is an empty string/.test(i.message))).toBe(true);
+	});
+
+	it("requires an outcome on a produces prompt stage (no run carve-out)", () => {
+		const e = errors(wf({ kind: "produces", sessionPolicy: "fresh", prompt: "write it" }));
+		expect(e.some((i) => /has kind "produces" but no `outcome`/.test(i.message))).toBe(true);
+	});
+
+	it("warns when a continue prompt stage is the workflow start", () => {
+		const w = wf({ kind: "side-effect", sessionPolicy: "continue", prompt: "follow up" });
+		expect(warnings(w).some((i) => /continue prompt stage is the workflow start/.test(i.message))).toBe(true);
+	});
+});
+
 // ---------------------------------------------------------------------------
 // issue payload shape
 // ---------------------------------------------------------------------------
