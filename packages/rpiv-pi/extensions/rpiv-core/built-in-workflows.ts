@@ -14,17 +14,19 @@
  */
 
 import { readFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import {
 	acts,
 	defineRoute,
 	defineWorkflow,
 	eq,
 	type FanoutFn,
+	type FanoutUnit,
 	gate,
 	gitCommitOutcome,
 	gt,
 	handleToString,
+	type IterateFn,
 	produces,
 	typeboxSchema,
 	type Workflow,
@@ -226,7 +228,124 @@ const vetWorkflow = defineWorkflow({
 });
 
 // ===========================================================================
+// polish — architecture-review → blueprint (iterate, per review phase) →
+//          implement → validate → code-review → (blueprint loop) | commit
+//          For a large architecture review that can't be planned in one pass:
+//          plan each review phase sequentially, each plan building on the
+//          ones before it, then implement/validate/review the lot.
+// ===========================================================================
+
+/** `### Phase N — name` headings define the review's dependency-ordered phases. */
+const REVIEW_PHASE_RE = /^### Phase (\d+) — (.+)$/gm;
+
+/**
+ * Per-review-phase blueprint generator (the `iterate` dual of PHASE_FANOUT).
+ * One blueprint pass per review phase, each seeing the plans already produced
+ * so it builds on them instead of duplicating. blueprint writes its own
+ * natural `.rpiv/artifacts/plans/<slug>_<topic>.md` file — the iterate stage's
+ * `plans` collector captures whatever path it announces, so no output-path
+ * plumbing is needed (this is exactly the per-phase invocation the
+ * architecture-review skill documents as its next step).
+ */
+const REVIEW_PHASE_ITERATE: IterateFn = ({ artifact, state, accumulated, cwd }) => {
+	// Source the review from the named registry — robust to corrective re-entry,
+	// where the rolling primary is the latest code-review doc, not the review.
+	const review =
+		state.named["architecture-reviews"]?.at(-1)?.artifacts.find((a) => a.handle.kind === "fs") ?? artifact;
+	if (review?.handle.kind !== "fs") return null;
+	const abs = isAbsolute(review.handle.path) ? review.handle.path : join(cwd, review.handle.path);
+	const phases = [...readFileSync(abs, "utf-8").matchAll(REVIEW_PHASE_RE)];
+	const i = accumulated.length;
+	if (i >= phases.length) return null; // every phase planned → terminate
+	const phaseName = phases[i]![2]!.trim();
+
+	const prior = accumulated
+		.flatMap((o) => o.artifacts)
+		.filter((a) => a.handle.kind === "fs")
+		.map((a) => handleToString(a.handle));
+	// On a corrective pass the latest code-review is in `reviews`; fold its blockers in.
+	const feedback = state.named.reviews?.at(-1)?.artifacts.find((a) => a.handle.kind === "fs");
+
+	let prompt = `${handleToString(review.handle)} Implement Phase ${phases[i]![1]}: ${phaseName}`;
+	if (prior.length) prompt += `\nPrior phase plans (read first; build on them, don't duplicate): ${prior.join(", ")}`;
+	if (feedback?.handle.kind === "fs")
+		prompt += `\nAddress the blockers in the latest code review: ${handleToString(feedback.handle)}`;
+	return { prompt, label: `phase ${i + 1}/${phases.length} — ${phaseName}`, id: `phase-${phases[i]![1]}` };
+};
+
+/**
+ * Fan implement out over the `## Phase N:` headings of EVERY plan the iterate
+ * stage produced. On a corrective loop the iterate stage re-plans all review
+ * phases, so `state.named["plans"]` accumulates one plan per review phase PER
+ * pass; we take only the latest pass (the most recent `phaseCount` plans) so a
+ * re-plan supersedes the stale generation rather than double-implementing it.
+ * This is the dedup the design's deterministic-filename scheme bought — done
+ * here in the fanout instead, so blueprint keeps its natural timestamped
+ * filenames and needs no change.
+ */
+const PLANS_PHASE_FANOUT: FanoutFn = ({ state, cwd }) => {
+	const plans = state.named.plans ?? [];
+	const review = state.named["architecture-reviews"]?.at(-1)?.artifacts.find((a) => a.handle.kind === "fs");
+	let latest = plans;
+	if (review?.handle.kind === "fs") {
+		const abs = isAbsolute(review.handle.path) ? review.handle.path : join(cwd, review.handle.path);
+		const phaseCount = [...readFileSync(abs, "utf-8").matchAll(REVIEW_PHASE_RE)].length;
+		if (phaseCount > 0 && plans.length > phaseCount) latest = plans.slice(-phaseCount);
+	}
+
+	const units: FanoutUnit[] = [];
+	for (const out of latest) {
+		for (const a of out.artifacts) {
+			if (a.handle.kind !== "fs") continue;
+			const abs = isAbsolute(a.handle.path) ? a.handle.path : join(cwd, a.handle.path);
+			for (const m of readFileSync(abs, "utf-8").matchAll(/^## Phase (\d+):/gm)) {
+				units.push({
+					prompt: `${handleToString(a.handle)} Phase ${m[1]}`,
+					label: `${basename(a.handle.path)} P${m[1]}`,
+				});
+			}
+		}
+	}
+	if (units.length > MAX_PHASES) {
+		throw new Error(`PLANS_PHASE_FANOUT: ${units.length} phases exceeds MAX_PHASES (${MAX_PHASES})`);
+	}
+	return units;
+};
+
+const polishWorkflow = defineWorkflow({
+	name: "polish",
+	description:
+		"Architecture-review-driven polish: review → per-phase blueprint (sequential, accumulating) → implement → validate → code-review → commit. Best when a large architecture review can't be planned in one pass and each phase's plan must build on the ones before it.",
+	start: "architecture-review",
+	stages: {
+		"architecture-review": produces({ outcome: rpivBucketOutcome("architecture-reviews") }),
+		blueprint: produces({ outcome: rpivBucketOutcome("plans"), iterate: REVIEW_PHASE_ITERATE }),
+		implement: acts({ fanout: PLANS_PHASE_FANOUT }),
+		validate: produces({ outcome: rpivBucketOutcome("validation") }),
+		"code-review": produces({ outcome: rpivBucketOutcome("reviews"), outputSchema: CODE_REVIEW_SCHEMA }),
+		commit: acts({ outcome: gitCommitOutcome }),
+	},
+	edges: {
+		"architecture-review": "blueprint",
+		blueprint: "implement",
+		implement: "validate",
+		validate: "code-review",
+		// Backward edge: code-review → blueprint re-plans (implement needs a plan).
+		// The iterate stage re-runs over every review phase; bounded by the
+		// runner's default maxBackwardJumps (2 → up to 3 review iterations).
+		"code-review": gate("blockers_count", { commit: eq(0), blueprint: gt(0) }),
+		commit: "stop",
+	},
+});
+
+// ===========================================================================
 // Exports
 // ===========================================================================
 
-export const builtInWorkflows: readonly Workflow[] = [shipWorkflow, buildWorkflow, archWorkflow, vetWorkflow];
+export const builtInWorkflows: readonly Workflow[] = [
+	shipWorkflow,
+	buildWorkflow,
+	archWorkflow,
+	vetWorkflow,
+	polishWorkflow,
+];

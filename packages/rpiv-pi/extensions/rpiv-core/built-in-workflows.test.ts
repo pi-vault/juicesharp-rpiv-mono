@@ -599,3 +599,142 @@ describe("[Q4] vet workflow", () => {
 		});
 	});
 });
+
+// ---------------------------------------------------------------------------
+// polish — iterate-driven per-review-phase blueprint + latest-pass implement.
+// ---------------------------------------------------------------------------
+
+describe("polish workflow", () => {
+	describe("structural validation", () => {
+		it("validates with zero errors", () => {
+			expect(validateWorkflow(findWorkflow("polish")).filter((i) => i.severity === "error")).toEqual([]);
+		});
+
+		it("all stages are reachable from start", () => {
+			const issues = validateWorkflow(findWorkflow("polish"));
+			expect(
+				issues.filter((i) => /unreachable/.test(i.message)),
+				"polish has unreachable stages",
+			).toEqual([]);
+		});
+
+		it("blueprint is an iterate stage and implement is a fanout stage (the two co-exist)", () => {
+			const wf = findWorkflow("polish");
+			expect(typeof wf.stages.blueprint?.iterate).toBe("function");
+			expect(wf.stages.blueprint?.kind).toBe("produces");
+			expect(typeof wf.stages.implement?.fanout).toBe("function");
+		});
+
+		it("code-review carries CODE_REVIEW_SCHEMA and gates to commit | blueprint", () => {
+			const wf = findWorkflow("polish");
+			expect(wf.stages["code-review"]?.outputSchema).toBeDefined();
+			const edge = wf.edges["code-review"];
+			if (typeof edge !== "function") throw new Error("code-review edge is not an EdgeFn");
+			expect([...(edge.targets ?? [])].sort()).toEqual(["blueprint", "commit"]);
+		});
+	});
+
+	describe("integration", () => {
+		let tmpDir: string;
+		beforeEach(() => {
+			tmpDir = mkdtempSync(join(tmpdir(), "rpiv-polish-"));
+		});
+		afterEach(() => {
+			rmSync(tmpDir, { recursive: true, force: true });
+		});
+
+		const write = (relPath: string, content: string) => {
+			const parts = relPath.split("/");
+			mkdirSync(join(tmpDir, ...parts.slice(0, -1)), { recursive: true });
+			writeFileSync(join(tmpDir, relPath), content);
+		};
+		const plan = (phase = 1) => `---\ntopic: t\n---\n## Phase ${phase}: do the thing\nbody\n`;
+		const review2 = "# Arch Review\n\n### Phase 1 — Alpha\nbody\n### Phase 2 — Beta\nbody\n";
+		const review1 = "# Arch Review\n\n### Phase 1 — Alpha\nbody\n";
+		const cr = (blockers: number) => `---\nblockers_count: ${blockers}\n---\n`;
+		const impl = (m: string) => ({ branch: [mockAssistantMessage(m)] });
+
+		it("happy path: one blueprint pass per review phase, each fed the prior plans; implement fans out the plans", async () => {
+			write(".rpiv/artifacts/architecture-reviews/rev.md", review2);
+			write(".rpiv/artifacts/plans/plan-1.md", plan());
+			write(".rpiv/artifacts/plans/plan-2.md", plan());
+			write(".rpiv/artifacts/validation/val.md", "");
+			write(".rpiv/artifacts/reviews/cr.md", cr(0));
+
+			const chain = createMockSessionChain({
+				cwd: tmpDir,
+				steps: [
+					impl("wrote .rpiv/artifacts/architecture-reviews/rev.md"),
+					impl("wrote .rpiv/artifacts/plans/plan-1.md"),
+					impl("wrote .rpiv/artifacts/plans/plan-2.md"),
+					impl("phase done"),
+					impl("phase done"),
+					impl("wrote .rpiv/artifacts/validation/val.md"),
+					impl("wrote .rpiv/artifacts/reviews/cr.md"),
+					impl("committed"),
+				],
+			});
+
+			const result = await runWorkflow(chain.ctx, { workflow: findWorkflow("polish"), input: "x" });
+
+			expect(result.success).toBe(true);
+			// arch-review + blueprint×2 + implement×2 + validate + code-review + commit
+			expect(result.stagesCompleted).toBe(8);
+			// blueprint pulled one unit per review phase; phase 2 saw phase 1's plan.
+			expect(chain.sentMessages[1]).toBe(
+				"/skill:blueprint .rpiv/artifacts/architecture-reviews/rev.md Implement Phase 1: Alpha",
+			);
+			expect(chain.sentMessages[2]).toBe(
+				"/skill:blueprint .rpiv/artifacts/architecture-reviews/rev.md Implement Phase 2: Beta\n" +
+					"Prior phase plans (read first; build on them, don't duplicate): .rpiv/artifacts/plans/plan-1.md",
+			);
+			// implement fanned out the `## Phase N:` heading of each accumulated plan.
+			expect(chain.sentMessages.filter((m) => m.startsWith("/skill:implement"))).toEqual([
+				"/skill:implement .rpiv/artifacts/plans/plan-1.md Phase 1",
+				"/skill:implement .rpiv/artifacts/plans/plan-2.md Phase 1",
+			]);
+		});
+
+		it("corrective loop: implement consumes only the LATEST blueprint pass, never re-implementing a stale plan", async () => {
+			write(".rpiv/artifacts/architecture-reviews/rev.md", review1);
+			for (const n of [1, 2, 3]) write(`.rpiv/artifacts/plans/plan-${n}.md`, plan());
+			for (const n of [1, 2, 3]) write(`.rpiv/artifacts/validation/val-${n}.md`, "");
+			for (const n of [1, 2, 3]) write(`.rpiv/artifacts/reviews/cr-${n}.md`, cr(1)); // always blockers → loop
+
+			const chain = createMockSessionChain({
+				cwd: tmpDir,
+				steps: [
+					impl("wrote .rpiv/artifacts/architecture-reviews/rev.md"),
+					// pass 0
+					impl("wrote .rpiv/artifacts/plans/plan-1.md"),
+					impl("phase done"),
+					impl("wrote .rpiv/artifacts/validation/val-1.md"),
+					impl("wrote .rpiv/artifacts/reviews/cr-1.md"),
+					// pass 1 (backward jump 1)
+					impl("wrote .rpiv/artifacts/plans/plan-2.md"),
+					impl("phase done"),
+					impl("wrote .rpiv/artifacts/validation/val-2.md"),
+					impl("wrote .rpiv/artifacts/reviews/cr-2.md"),
+					// pass 2 (backward jump 2)
+					impl("wrote .rpiv/artifacts/plans/plan-3.md"),
+					impl("phase done"),
+					impl("wrote .rpiv/artifacts/validation/val-3.md"),
+					impl("wrote .rpiv/artifacts/reviews/cr-3.md"),
+					// 3rd code-review's gate → blueprint = backward jump 3 > 2 → halt
+				],
+			});
+
+			const result = await runWorkflow(chain.ctx, { workflow: findWorkflow("polish"), input: "x" });
+
+			expect(result.success).toBe(false);
+			expect(result.error).toMatch(/backward-jump limit exceeded/i);
+			// Each implement round saw ONLY that pass's plan — the latest-pass slice
+			// dropped the stale generations, so no plan is implemented twice.
+			expect(chain.sentMessages.filter((m) => m.startsWith("/skill:implement"))).toEqual([
+				"/skill:implement .rpiv/artifacts/plans/plan-1.md Phase 1",
+				"/skill:implement .rpiv/artifacts/plans/plan-2.md Phase 1",
+				"/skill:implement .rpiv/artifacts/plans/plan-3.md Phase 1",
+			]);
+		});
+	});
+});
