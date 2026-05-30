@@ -8,7 +8,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
-- Type-to-filter fuzzy search in the `/advisor` model and reasoning-level pickers — start typing to narrow a long model list, with contiguous-run and word-boundary ranking; matches both the model name and the `provider:id` key. ([#50](https://github.com/juicesharp/rpiv-mono/issues/50))
+- Fuzzy type-to-filter in `/advisor` model and reasoning-level pickers — start typing to narrow a long model list, with contiguous-run and word-boundary ranking; matches both the model name and the `provider:id` key.
+
+### Fixed
+- Effort level is now captured once at invocation, preventing desync between reported and actual effort after concurrent `/advisor` commands.
 
 ## [1.15.0] - 2026-05-28
 

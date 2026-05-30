@@ -7,6 +7,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Add release notes blog post for v1.15.0.
+
 ## [1.15.0] - 2026-05-28
 
 ## [1.14.7] - 2026-05-28

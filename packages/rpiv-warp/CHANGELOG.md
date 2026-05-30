@@ -8,7 +8,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
-- Pressing ESC to refuse a blocking-tool prompt (e.g. `ask_user_question`) no longer leaves the Warp tab stuck on a stale "Waiting for your answer" badge. An aborted blocking call never fires `tool_execution_end`, so `agent_end` now drains any outstanding blocking calls (emitting `tool_complete`) to clear the badge before announcing the stop.
+- Pressing ESC to refuse a blocking-tool prompt no longer leaves the Warp tab stuck on a stale "Waiting for your answer" badge. Aborted blocking calls now drain at `agent_end` to clear the badge before announcing the stop.
 
 ## [1.15.0] - 2026-05-28
 

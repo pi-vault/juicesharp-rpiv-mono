@@ -8,7 +8,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
-- New built-in `polish` workflow: `architecture-review → blueprint (iterate, one pass per review phase) → implement → validate → code-review → commit`. Built on rpiv-workflow's new `iterate` mode — each per-phase blueprint pass sees the plans already produced and builds on them. The implement fanout consumes only the latest blueprint pass, so a corrective re-plan (code-review blockers → blueprint loop) supersedes the stale generation instead of double-implementing it. No change to the `blueprint` skill — it writes its natural timestamped plan and the `plans` collector captures it.
+- New built-in `polish` workflow: `architecture-review → blueprint (iterate, one pass per review phase) → implement → validate → code-review → commit`. Built on rpiv-workflow's new `iterate` mode — each per-phase blueprint pass sees the plans already produced and builds on them. The implement fanout consumes only the latest blueprint pass, so a corrective re-plan supersedes the stale generation instead of double-implementing it.
+
+### Fixed
+- `polish` validate stage now validates every plan from the latest blueprint pass, not just the last one.
 
 ## [1.15.0] - 2026-05-28
 
