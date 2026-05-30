@@ -1,6 +1,6 @@
 ---
 title: "Hello, rpiv-pi"
-description: "Introducing the blog — changelogs, deep dives, and release notes for the rpiv-pi pipeline."
+description: "Introducing the blog: changelogs, deep dives, and release notes for the rpiv-pi pipeline."
 pubDate: 2026-05-12
 author: juicesharp
 tags: ["announcement"]

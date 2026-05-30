@@ -1,6 +1,6 @@
 ---
 title: "Release notes: v1.14.0"
-description: "rpiv-workflow ships as a sibling — typed multi-stage workflows with the new /wf command and four bundled chains. Plus a top-down architecture-review skill, an Ollama search provider, and a four-patch install-hardening tail."
+description: "rpiv-workflow ships as a sibling: typed multi-stage workflows with the new /wf command and four bundled chains. Plus a top-down architecture-review skill, an Ollama search provider, and a four-patch install-hardening tail."
 pubDate: 2026-05-28T15:00:00Z
 author: juicesharp
 tags: ["release", "rpiv-workflow", "rpiv-pi", "rpiv-web-tools", "rpiv-ask-user-question"]

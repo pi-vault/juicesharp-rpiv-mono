@@ -1,6 +1,6 @@
 ---
 title: "Bake the evidence into the prompt"
-description: "Two probing turns at the start of every commit was the wrong default. rpiv-args 1.10 lets Pi skills inline shell output and runtime variables — the same primitive Claude Code ships, ported to Pi."
+description: "Two probing turns at the start of every commit was the wrong default. rpiv-args 1.10 lets Pi skills inline shell output and runtime variables: the same primitive Claude Code ships, ported to Pi."
 pubDate: 2026-05-19T17:30:00Z
 tags: ["release", "rpiv-args", "skills"]
 draft: false

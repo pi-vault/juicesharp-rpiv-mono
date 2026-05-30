@@ -1,6 +1,6 @@
 ---
 title: "Release notes: v1.15.0"
-description: "rpiv-web-tools learns to read GitHub repositories — opt-in by default. Plus a SearchProvider / FetchProvider role split, a fetchViaGenericHtml DRY refactor, and a TypeBox-validated single config reader. One feature, three architectural cleanups."
+description: "rpiv-web-tools learns to read GitHub repositories, opt-in by default. Plus a SearchProvider / FetchProvider role split, a fetchViaGenericHtml DRY refactor, and a TypeBox-validated single config reader. One feature, three architectural cleanups."
 pubDate: 2026-05-28T16:30:00Z
 author: juicesharp
 tags: ["release", "rpiv-web-tools", "rpiv-config"]

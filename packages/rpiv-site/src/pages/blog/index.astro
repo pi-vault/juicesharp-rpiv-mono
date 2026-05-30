@@ -137,8 +137,10 @@ const count = String(posts.length).padStart(2, "0");
 	}
 
 	.post-item {
+		position: relative;
 		padding: var(--space-6) 0;
 		border-bottom: 1px solid var(--rule);
+		transition: border-color var(--dur-ink) var(--ease-ink);
 	}
 
 	.post-item__title {
@@ -149,7 +151,18 @@ const count = String(posts.length).padStart(2, "0");
 		margin-bottom: var(--space-2);
 		transition: color var(--dur-ink) var(--ease-ink);
 	}
-	.post-item__title:hover {
+	/* Stretched link: the title is the only real anchor, but its hit area
+	   covers the whole row so the meta and excerpt are clickable too. */
+	.post-item__title::after {
+		content: "";
+		position: absolute;
+		inset: 0;
+	}
+	.post-item:hover {
+		border-color: var(--rule-strong);
+	}
+	.post-item:hover .post-item__title,
+	.post-item__title:focus-visible {
 		color: var(--sage);
 	}
 	.post-item__title h3 {
