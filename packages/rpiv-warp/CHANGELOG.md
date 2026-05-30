@@ -5,7 +5,7 @@ All notable changes to `@juicesharp/rpiv-warp` are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.16.0] - 2026-05-30
 
 ### Fixed
 - Pressing ESC to refuse a blocking-tool prompt no longer leaves the Warp tab stuck on a stale "Waiting for your answer" badge. Aborted blocking calls now drain at `agent_end` to clear the badge before announcing the stop.

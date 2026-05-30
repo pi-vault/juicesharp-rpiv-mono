@@ -5,7 +5,7 @@ All notable changes to `@juicesharp/rpiv-advisor` are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.16.0] - 2026-05-30
 
 ### Added
 - Fuzzy type-to-filter in `/advisor` model and reasoning-level pickers — start typing to narrow a long model list, with contiguous-run and word-boundary ranking; matches both the model name and the `provider:id` key.

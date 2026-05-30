@@ -1,6 +1,6 @@
 # @juicesharp/rpiv-workflow
 
-## [Unreleased]
+## [1.16.0] - 2026-05-30
 
 ### Added
 - Typed dispatch builders `produces.prompt({ … })` / `acts.prompt({ … })` (mirroring `produces.script`) — narrowed options that structurally omit `skill`/`run`/`fanout`/`iterate`/`reads`, so an invalid dispatch combo fails to compile instead of only failing load validation.

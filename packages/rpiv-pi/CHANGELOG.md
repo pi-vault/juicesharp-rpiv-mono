@@ -5,7 +5,7 @@ All notable changes to `@juicesharp/rpiv-pi` are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.16.0] - 2026-05-30
 
 ### Added
 - New built-in `polish` workflow: `architecture-review → blueprint (iterate, one pass per review phase) → implement → validate → code-review → commit`. Built on rpiv-workflow's new `iterate` mode — each per-phase blueprint pass sees the plans already produced and builds on them. The implement fanout consumes only the latest blueprint pass, so a corrective re-plan supersedes the stale generation instead of double-implementing it.
