@@ -20,14 +20,25 @@
  *     slot) is never mutated in place; a changed workflow is a new frozen copy.
  */
 
-import type { Workflow } from "../api.js";
+import type { StageDef, Workflow } from "../api.js";
+
+/**
+ * A stage dispatches a `/skill:<name>` exactly when it carries neither a `run`
+ * (script body) nor a `prompt` (raw-text body). `fanout`/`iterate` stages carry
+ * neither, so they ARE dispatching stages. Single source of truth shared by the
+ * alias remap below (which stages to rewrite) and the no-op-alias warning in
+ * `load/index.ts` (which skills count as "dispatched") — the two must agree.
+ */
+export function isDispatchingStage(stage: StageDef): boolean {
+	return stage.run == null && stage.prompt == null;
+}
 
 export function aliasSkills(w: Workflow, aliases: Record<string, string>): Workflow {
 	if (!aliases || Object.keys(aliases).length === 0) return w;
 	let changed = false;
 	const stages: typeof w.stages = {};
 	for (const [name, stage] of Object.entries(w.stages)) {
-		const dispatches = stage.run == null && stage.prompt == null; // only /skill: stages
+		const dispatches = isDispatchingStage(stage); // only /skill: stages
 		const effective = stage.skill ?? name;
 		const target = aliases[effective];
 		if (dispatches && target && target !== effective) {

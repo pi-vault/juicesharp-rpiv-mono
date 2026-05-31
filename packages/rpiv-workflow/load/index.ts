@@ -57,7 +57,7 @@ import { getBuiltIns } from "../built-ins.js";
 import type { ConfigLayer } from "../layers.js";
 import { LEGACY_OVERLAY_NOTICE } from "../messages.js";
 import { validateWorkflow, type WorkflowValidationIssue } from "../validate-workflow.js";
-import { aliasSkills } from "./alias.js";
+import { aliasSkills, isDispatchingStage } from "./alias.js";
 import { type LoadAccumulator, loadLayer } from "./merge.js";
 import { projectOverlayPaths, userOverlayPaths } from "./paths.js";
 import { resolveDefault } from "./resolve-default.js";
@@ -171,7 +171,7 @@ export async function loadWorkflows(cwd: string): Promise<LoadedWorkflows> {
 		const dispatchedBefore = new Set<string>();
 		for (const w of acc.workflowMap.values()) {
 			for (const [stageName, stage] of Object.entries(w.stages)) {
-				if (stage.run == null && stage.prompt == null) dispatchedBefore.add(stage.skill ?? stageName);
+				if (isDispatchingStage(stage)) dispatchedBefore.add(stage.skill ?? stageName);
 			}
 		}
 		for (const [name, w] of acc.workflowMap) acc.workflowMap.set(name, aliasSkills(w, skillAliases));
