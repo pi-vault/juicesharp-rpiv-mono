@@ -1,6 +1,6 @@
 # @juicesharp/rpiv-workflow
 
-## [Unreleased]
+## [1.17.0] - 2026-06-01
 
 ### BREAKING CHANGES
 - Project workflow config moved from `.rpiv-workflow/` to the unified `.rpiv/workflows/` tree, and the three concerns now each have their own subfolder:

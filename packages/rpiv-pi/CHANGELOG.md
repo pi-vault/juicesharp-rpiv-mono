@@ -5,7 +5,7 @@ All notable changes to `@juicesharp/rpiv-pi` are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.17.0] - 2026-06-01
 
 ### Added
 - `design` and `blueprint`: new directional-decision tier in the developer checkpoint. Directional findings (extend-vs-replace, propagate-a-pattern, spread-a-convention) get a single batched confirm at Step 4, separate from genuine ambiguities. "Follow the pattern" is offered without a Recommended badge; "move off" promotes the finding to a one-at-a-time genuine question.
