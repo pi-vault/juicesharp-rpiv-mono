@@ -220,6 +220,83 @@ describe("model-override", () => {
 		});
 	});
 
+	describe("stale-ctx resilience", () => {
+		// The exact phrase pi-core's ExtensionRunner throws from an invalidated
+		// proxy after the captured session was replaced/disposed mid-workflow.
+		const STALE_CTX_MESSAGE =
+			"This extension ctx is stale after session replacement or reload. " +
+			"Do not use a captured pi or command ctx after ctx.newSession().";
+
+		async function setupActive(
+			piOverrides: Partial<Record<"setModel" | "setThinkingLevel" | "getThinkingLevel", unknown>>,
+		) {
+			const fake = makePi({ baselineThinking: "medium" });
+			// Apply per-test pi method overrides (e.g. ones that throw).
+			Object.assign(fake.pi as unknown as Record<string, unknown>, piOverrides);
+			registerModelOverrideSessionStart(fake.pi);
+			await registerModelOverrideLifecycle(fake.pi);
+			const handler = fake.sessionStart()!;
+			const registry = { find: vi.fn((p: string, m: string) => ({ provider: p, id: m })) };
+			await handler({}, { modelRegistry: registry, model: BASELINE_MODEL });
+			return { ...fake, lc: lastListener() };
+		}
+
+		it("onStageStart swallows a stale-ctx error (session is being discarded)", async () => {
+			writeModels({ stages: { plan: { model: "openai:o3-pro", thinking: "high" } } });
+			const { lc } = await setupActive({
+				setModel: vi.fn(async () => {
+					throw new Error(STALE_CTX_MESSAGE);
+				}),
+			});
+			await lc.onWorkflowStart?.({});
+
+			await expect(lc.onStageStart?.({ name: "plan" }, {})).resolves.toBeUndefined();
+		});
+
+		it("onStageStart propagates a non-stale error", async () => {
+			writeModels({ stages: { plan: { model: "openai:o3-pro", thinking: "high" } } });
+			const { lc } = await setupActive({
+				setModel: vi.fn(async () => {
+					throw new Error("boom: real bug");
+				}),
+			});
+			await lc.onWorkflowStart?.({});
+
+			await expect(lc.onStageStart?.({ name: "plan" }, {})).rejects.toThrow("boom");
+		});
+
+		it("onWorkflowEnd swallows a stale-ctx error AND still resets state", async () => {
+			const { lc, setModel } = await setupActive({
+				setModel: vi.fn(async () => {
+					throw new Error(STALE_CTX_MESSAGE);
+				}),
+			});
+			await lc.onWorkflowStart?.({});
+
+			await expect(lc.onWorkflowEnd?.({}, {})).resolves.toBeUndefined();
+
+			// State must have reset despite the stale throw: a second end is a no-op.
+			setModel.mockClear();
+			await lc.onWorkflowEnd?.({}, {});
+			expect(setModel).not.toHaveBeenCalled();
+		});
+
+		it("onWorkflowStart swallows a stale-ctx error, leaving stages a no-op", async () => {
+			const { lc, setModel } = await setupActive({
+				getThinkingLevel: vi.fn(() => {
+					throw new Error(STALE_CTX_MESSAGE);
+				}),
+			});
+
+			await expect(lc.onWorkflowStart?.({})).resolves.toBeUndefined();
+
+			// baselineCaptured never flipped → onStageStart early-returns.
+			writeModels({ stages: { plan: { model: "openai:o3-pro" } } });
+			await lc.onStageStart?.({ name: "plan" }, {});
+			expect(setModel).not.toHaveBeenCalled();
+		});
+	});
+
 	describe("dynamic-import fallback", () => {
 		it("degrades gracefully (no throw, no registration) when rpiv-workflow is absent", async () => {
 			vi.resetModules();

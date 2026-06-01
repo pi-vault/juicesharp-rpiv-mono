@@ -115,6 +115,31 @@ async function applyBaseline(pi: ExtensionAPI, base: { thinking: string; model: 
 // ---------------------------------------------------------------------------
 
 /**
+ * pi-core's ExtensionRunner throws this exact phrase from an invalidated ctx
+ * proxy after session replacement/reload. Match the stable substring.
+ */
+function isStaleCtxError(e: unknown): boolean {
+	return /stale after session replacement/.test(String(e));
+}
+
+/**
+ * Run pi model/thinking mutations, swallowing ONLY the stale-ctx error pi-core
+ * throws when the captured session was replaced/disposed mid-run (e.g.
+ * auto-compaction disposing the runner while a stage is in flight). Once the
+ * session is gone the override is moot — the replacement session_start rebuilds
+ * state — so there is nothing to apply. Any OTHER error (bad model key,
+ * setModel rejected, real plumbing bug) is genuine and must propagate so the
+ * lifecycle dispatcher surfaces it to the user.
+ */
+async function applyOrSkipIfStale(fn: () => void | Promise<void>): Promise<void> {
+	try {
+		await fn();
+	} catch (e) {
+		if (!isStaleCtxError(e)) throw e;
+	}
+}
+
+/**
  * Check if an error is a module-not-found error.
  * Local copy to avoid circular import from register-built-in-workflows.js.
  */
@@ -144,11 +169,16 @@ export async function registerModelOverrideLifecycle(pi: ExtensionAPI): Promise<
 				// Snapshot baseline thinking + model. LifecycleContext lacks
 				// ctx.model, so model comes from capturedModel (set by the
 				// session_start handler while no workflow was active).
-				baseline = {
-					thinking: pi.getThinkingLevel(),
-					model: capturedModel,
-				};
-				baselineCaptured = true; // freezes capturedModel until onWorkflowEnd
+				// getThinkingLevel reads the captured pi, which can be stale if the
+				// session was already replaced — bail quietly if so, leaving
+				// baselineCaptured false so later stages early-return.
+				await applyOrSkipIfStale(() => {
+					baseline = {
+						thinking: pi.getThinkingLevel(),
+						model: capturedModel,
+					};
+					baselineCaptured = true; // freezes capturedModel until onWorkflowEnd
+				});
 			},
 
 			onStageStart: async (stage: { name: string }, _ctx: unknown) => {
@@ -167,6 +197,7 @@ export async function registerModelOverrideLifecycle(pi: ExtensionAPI): Promise<
 				//   - override.model is a "provider:modelId" string → resolve via registry
 				//   - baseline.model is an already-resolved Model object
 				let effectiveModel = baseline.model;
+				const baselineThinking = baseline.thinking;
 				if (override?.model !== undefined) {
 					const resolved = resolveModel(override.model);
 					if (resolved) {
@@ -177,24 +208,35 @@ export async function registerModelOverrideLifecycle(pi: ExtensionAPI): Promise<
 						);
 					}
 				}
-				if (effectiveModel !== undefined) {
-					const ok = await pi.setModel(effectiveModel as Parameters<ExtensionAPI["setModel"]>[0]);
-					if (!ok) {
-						console.warn(
-							`[rpiv-pi] setModel failed for stage "${stage.name}" (no API key?) — proceeding on current model`,
-						);
+				// Apply to the captured pi. If the session was replaced/disposed
+				// mid-workflow (e.g. auto-compaction), pi is a dead proxy and these
+				// throw the stale-ctx error — swallow it: the override is moot for a
+				// discarded session, and surfacing it as a lifecycle warning is pure
+				// noise the user can't act on.
+				await applyOrSkipIfStale(async () => {
+					if (effectiveModel !== undefined) {
+						const ok = await pi.setModel(effectiveModel as Parameters<ExtensionAPI["setModel"]>[0]);
+						if (!ok) {
+							console.warn(
+								`[rpiv-pi] setModel failed for stage "${stage.name}" (no API key?) — proceeding on current model`,
+							);
+						}
 					}
-				}
 
-				pi.setThinkingLevel((override?.thinking ?? baseline.thinking) as ThinkingLevel);
+					pi.setThinkingLevel((override?.thinking ?? baselineThinking) as ThinkingLevel);
+				});
 			},
 
 			onWorkflowEnd: async () => {
 				if (!baselineCaptured || !baseline) return;
 
 				// Restore baseline model + thinking. setModel persists to disk,
-				// so this is what keeps the user's global default intact.
-				await applyBaseline(pi, baseline);
+				// so this is what keeps the user's global default intact. If the
+				// session was replaced mid-run pi is stale and this throws — swallow
+				// it: a discarded session has nothing to restore, and the replacement
+				// session_start already rebuilt from the on-disk default. State MUST
+				// still reset regardless, so a future workflow starts clean.
+				await applyOrSkipIfStale(() => applyBaseline(pi, baseline as { thinking: string; model: unknown }));
 
 				// Reset state for next workflow
 				baseline = undefined;
