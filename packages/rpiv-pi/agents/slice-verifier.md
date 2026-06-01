@@ -48,7 +48,9 @@ Locate the artifact's commitments — architectural decisions, contracts, scoped
 
 ### Step 3: Cross-slice audit
 
-Walk every change/file in every locked prior slice (slice headings preceding `slice_id` in artifact order). For each: state what it produced, check the current slice for overlaps/collisions/redeclarations, verify every cross-slice symbol reference matches character-for-character, verify every claim the current slice makes about prior-slice behaviors against the projected intermediate state.
+Partition locked prior slices (headings preceding `slice_id` in artifact order) by overlap with the current slice: a prior slice OVERLAPS if it touches a `target_files` entry OR declares a symbol the current slice references. Non-overlapping slices cannot collide — collapse them to one aggregate note (`no overlap — <slice ids>`) and do not walk them.
+
+Walk every OVERLAPPING prior slice in full. For each: state what it produced, check the current slice for overlaps/collisions/redeclarations, verify every cross-slice symbol reference matches character-for-character, verify every claim the current slice makes about prior-slice behaviors against the projected intermediate state.
 
 The projected intermediate state is HEAD plus every locked prior slice's code fence applied in order — a symbol, file, or export declared NEW in an upstream slice exists in that pre-state even though it is absent from HEAD. Verify cross-slice references against the upstream slice's code fence in the artifact, not against the live working tree.
 
