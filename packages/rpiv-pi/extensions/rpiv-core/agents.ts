@@ -16,7 +16,6 @@
 
 import { createHash } from "node:crypto";
 import {
-	copyFileSync,
 	existsSync,
 	mkdirSync,
 	readdirSync,
@@ -28,6 +27,7 @@ import {
 } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getAgentModelConfig, loadModelsConfig, type ModelsConfig, parseModelKey } from "./models-config.js";
 import { BUNDLED_AGENTS_DIR } from "./paths.js";
 import { isPlainObject, toErrorMessage } from "./utils.js";
 
@@ -328,6 +328,85 @@ function enumerateSourceFiles(result: SyncResult): string[] | null {
 }
 
 /**
+ * Convert a models.json model string ("provider:modelId", colon) into the
+ * slash form ("provider/modelId") that @tintinweb/pi-subagents expects in
+ * agent frontmatter (agent-runner.js:141 parses on the first "/"). If the
+ * string isn't a valid provider:modelId, pass it through unchanged and let
+ * pi-subagents emit its own warning.
+ */
+function toAgentFrontmatterModel(model: string): string {
+	const parsed = parseModelKey(model);
+	return parsed ? `${parsed.provider}/${parsed.modelId}` : model;
+}
+
+/**
+ * Inject model/thinking frontmatter into agent .md content.
+ *
+ * Idempotent: re-injecting produces identical bytes. The function finds
+ * the closing `---` of the YAML frontmatter block and inserts or replaces
+ * `model:` and `thinking:` lines deterministically.
+ *
+ * If no override is configured for this agent, returns content unchanged.
+ *
+ * Exported so the idempotency invariant can be unit-tested directly:
+ * `inject(inject(x)) === inject(x)` (see Verification Notes).
+ */
+export function injectModelFrontmatter(content: string, agentName: string, config: ModelsConfig): string {
+	// Strip .md extension — source entries are filenames like "codebase-analyzer.md"
+	// but models.json keys are agent names like "codebase-analyzer".
+	const agentKey = agentName.replace(/\.md$/, "");
+	const override = getAgentModelConfig(config, agentKey);
+	if (!override || (override.model === undefined && override.thinking === undefined)) {
+		return content;
+	}
+
+	// Find the frontmatter block
+	const lines = content.split("\n");
+	if (lines.length === 0 || lines[0] !== "---") return content; // no frontmatter
+
+	let closingIdx = -1;
+	for (let i = 1; i < lines.length; i++) {
+		if (lines[i] === "---") {
+			closingIdx = i;
+			break;
+		}
+	}
+	if (closingIdx === -1) return content; // unclosed frontmatter
+
+	// Build lines to inject/replace
+	const result = [...lines];
+	const keysToSet: { key: string; value: string }[] = [];
+	// D9: agent frontmatter requires slash-delimited provider/modelId, NOT the
+	// colon form stored in models.json. The stage-override path keeps the colon.
+	if (override.model !== undefined) keysToSet.push({ key: "model", value: toAgentFrontmatterModel(override.model) });
+	if (override.thinking !== undefined) keysToSet.push({ key: "thinking", value: override.thinking });
+
+	// For each key, find existing line or mark for insertion
+	const insertLines: string[] = [];
+	for (const { key, value } of keysToSet) {
+		const prefix = `${key}: `;
+		const existingIdx = result.findIndex((line, i) => i > 0 && i < closingIdx && line.startsWith(prefix));
+		if (existingIdx !== -1) {
+			// Replace existing value
+			result[existingIdx] = `${prefix}${value}`;
+		} else {
+			insertLines.push(`${prefix}${value}`);
+		}
+	}
+
+	// Insert new lines before the closing --- (at closingIdx, which shifts)
+	if (insertLines.length > 0) {
+		// Re-find closingIdx in case replacements changed it (they don't in this impl,
+		// but be safe)
+		const newClosingIdx = result.indexOf("---", 1);
+		if (newClosingIdx === -1) return content; // shouldn't happen
+		result.splice(newClosingIdx, 0, ...insertLines);
+	}
+
+	return result.join("\n");
+}
+
+/**
  * Step 2: Process each source file — copy new, record unchanged, update or gate.
  * Returns the new manifest built from source entries.
  */
@@ -340,6 +419,10 @@ function processSourceEntries(
 	result: SyncResult,
 ): Manifest {
 	const newManifest: Manifest = {};
+
+	// Hoisted above the loop: loadModelsConfig() reads+parses JSON, so calling it
+	// per-entry would re-read the file once per agent (~15×) every session_start.
+	const config = loadModelsConfig();
 
 	for (const entry of sourceEntries) {
 		const src = join(BUNDLED_AGENTS_DIR, entry);
@@ -359,11 +442,16 @@ function processSourceEntries(
 			newManifest[entry] = knownHash;
 			continue;
 		}
-		const srcHash = sha256(srcContent);
+		// Inject configured model/thinking frontmatter BEFORE hashing so the
+		// manifest hash matches what actually lands on disk (D4: hash-after-transform).
+		// injectModelFrontmatter strips .md from entry for config lookup and is a
+		// no-op when no override is configured.
+		const injected = injectModelFrontmatter(srcContent.toString("utf-8"), entry, config);
+		const srcHash = sha256(injected);
 
 		if (!existsSync(dest)) {
 			try {
-				copyFileSync(src, dest);
+				writeFileSync(dest, injected, "utf-8");
 				result.added.push(entry);
 				newManifest[entry] = srcHash;
 			} catch (e) {
@@ -391,7 +479,7 @@ function processSourceEntries(
 
 		if (apply || isSafeDestructiveOp({ hasV2Data, knownHash, destHash })) {
 			try {
-				copyFileSync(src, dest);
+				writeFileSync(dest, injected, "utf-8");
 				result.updated.push(entry);
 				newManifest[entry] = srcHash;
 			} catch (e) {
@@ -581,7 +669,10 @@ export function cleanupPerCwdAgents(cwd: string): CleanupResult {
 		return result;
 	}
 
-	// Edge state 2: verify all managed files match current source content
+	// Edge state 2: verify all managed files match current source content.
+	// Hoisted config read (same reasoning as processSourceEntries): one JSON
+	// read for the whole cleanup pass, not one per managed file.
+	const cleanupConfig = loadModelsConfig();
 	for (const [name] of Object.entries(manifest)) {
 		const srcPath = safeJoin(BUNDLED_AGENTS_DIR, name);
 		const destPath = safeJoin(perCwdDir, name);
@@ -615,7 +706,11 @@ export function cleanupPerCwdAgents(cwd: string): CleanupResult {
 			return result;
 		}
 
-		if (sha256(destContent) !== sha256(srcContent)) {
+		// Compare against the injected form — the dest holds injected content
+		// (D4), so comparing raw source would falsely flag every configured agent
+		// as diverged. injectModelFrontmatter strips .md from name for lookup.
+		const cleanupInjected = injectModelFrontmatter(srcContent.toString("utf-8"), name, cleanupConfig);
+		if (sha256(destContent) !== sha256(cleanupInjected)) {
 			// User edited this file — conservative gate.
 			result.skipped.push({ dir: perCwdDir, reason: CLEANUP_SKIP_REASON.DIVERGED });
 			return result;

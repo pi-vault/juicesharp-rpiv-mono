@@ -14,6 +14,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { FLAG_DEBUG } from "./constants.js";
+import { registerModelOverrideLifecycle, registerModelOverrideSessionStart } from "./model-override.js";
 import { registerBuiltInWorkflows } from "./register-built-in-workflows.js";
 import { registerSessionHooks } from "./session-hooks.js";
 import { registerSetupCommand } from "./setup-command.js";
@@ -31,6 +32,14 @@ export default function (pi: ExtensionAPI) {
 	registerSessionHooks(pi);
 	registerUpdateAgentsCommand(pi);
 	registerSetupCommand(pi);
+	// Stage model/effort override: the session_start hook captures modelRegistry +
+	// current model UNCONDITIONALLY (independent of rpiv-workflow), and the
+	// lifecycle listener registration degrades gracefully when the sibling is
+	// absent (isModuleNotFound guard inside registerModelOverrideLifecycle).
+	registerModelOverrideSessionStart(pi);
+	registerModelOverrideLifecycle(pi).catch((err: unknown) => {
+		console.error("[rpiv-core] failed to register model override lifecycle:", err);
+	});
 	// Built-in workflows feed the sibling's `/wf` command. Deferred behind a
 	// dynamic import so a missing sibling degrades gracefully instead of taking
 	// the whole extension down (see register-built-in-workflows.ts). Fire-and-

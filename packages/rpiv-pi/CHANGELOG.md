@@ -7,6 +7,14 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Per-agent and per-stage model/effort configuration via `~/.config/rpiv-pi/models.json`.
+  Configured agents have `model`/`thinking` frontmatter injected at sync time;
+  workflow stages have `setModel`/`setThinkingLevel` applied via lifecycle listeners.
+  Supports `defaults` cascade into both agents and stages. 5-value ThinkingLevel
+  vocabulary (`minimal|low|medium|high|xhigh`); "off" is rejected with a warning.
+
 ## [1.17.1] - 2026-06-01
 
 ### Performance

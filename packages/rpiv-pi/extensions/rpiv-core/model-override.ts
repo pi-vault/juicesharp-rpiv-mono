@@ -1,0 +1,208 @@
+/**
+ * model-override — Stage-level model/effort override via rpiv-workflow lifecycle.
+ *
+ * Registers a lifecycle listener that resolves per-stage model/effort overrides
+ * from models.json and applies setModel/setThinkingLevel before each stage.
+ * Baseline { model, thinking } is snapshotted at onWorkflowStart and restored
+ * at onWorkflowEnd. Restoring the model is MANDATORY: setModel persists to the
+ * on-disk settings file (runtime-traced), so an unrestored override permanently
+ * rewrites the user's global default model.
+ *
+ * Uses pi (ExtensionAPI) from closure — not WorkflowContext/WorkflowHost —
+ * because pi persists across session replacements and is never invalidated.
+ *
+ * Both modelRegistry AND the current model are captured from session_start's
+ * ExtensionContext (which exposes them) and stored in module scope, because
+ * LifecycleContext (received by lifecycle listeners) exposes neither.
+ *
+ * Dynamic import of rpiv-workflow with isModuleNotFound guard — graceful
+ * degradation when the sibling is not installed.
+ */
+
+import type { ThinkingLevel } from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getStageModelConfig, loadModelsConfig, parseModelKey } from "./models-config.js";
+
+// ---------------------------------------------------------------------------
+// Module-level state — captured from session_start, used by lifecycle listeners.
+// Reset by __resetModelOverrideState() in test/setup.ts.
+// ---------------------------------------------------------------------------
+
+/** Captured modelRegistry from session_start ExtensionContext. */
+let capturedModelRegistry: { find(provider: string, modelId: string): unknown } | undefined;
+
+/**
+ * Current model captured from session_start ExtensionContext.model. Refreshed
+ * only while NO workflow is active (!baselineCaptured) so a stage's own
+ * newSession (which may re-fire session_start with the override model) can't
+ * pollute the baseline we restore at workflow end.
+ */
+let capturedModel: unknown;
+
+/**
+ * Baseline snapshot — set at workflow start, restored at workflow end.
+ * Captures BOTH thinking and model: setModel persists to the on-disk settings
+ * file (runtime-confirmed), so failing to restore the model permanently
+ * rewrites the user's global default.
+ */
+let baseline: { thinking: string; model: unknown } | undefined;
+let baselineCaptured = false;
+
+/** Test reset — wired into test/setup.ts beforeEach. */
+export function __resetModelOverrideState(): void {
+	capturedModelRegistry = undefined;
+	capturedModel = undefined;
+	baseline = undefined;
+	baselineCaptured = false;
+}
+
+// ---------------------------------------------------------------------------
+// session_start hook — capture modelRegistry from ExtensionContext.
+// ExtensionContext (unlike LifecycleContext) has modelRegistry.
+// This hook runs on every session_start, refreshing the captured reference.
+// ---------------------------------------------------------------------------
+
+export function registerModelOverrideSessionStart(pi: ExtensionAPI): void {
+	pi.on(
+		"session_start",
+		async (_event: unknown, ctx: { modelRegistry?: typeof capturedModelRegistry; model?: unknown }) => {
+			if (ctx.modelRegistry) {
+				capturedModelRegistry = ctx.modelRegistry;
+			}
+			// ExtensionContext.model is the current model (LifecycleContext lacks it).
+			// Only capture while no workflow is active — a stage's newSession can
+			// re-fire session_start with the override model, which must NOT become
+			// the restore baseline.
+			if (!baselineCaptured && ctx.model !== undefined) {
+				capturedModel = ctx.model;
+			}
+		},
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Model resolution — uses captured modelRegistry, not lifecycle context.
+// ---------------------------------------------------------------------------
+
+/** Resolve model string to Model object via captured modelRegistry. */
+function resolveModel(modelStr?: string): unknown {
+	if (!modelStr || !capturedModelRegistry) return undefined;
+	const parsed = parseModelKey(modelStr);
+	if (!parsed) return undefined;
+	return capturedModelRegistry.find(parsed.provider, parsed.modelId);
+}
+
+/**
+ * Re-assert the captured baseline (model + thinking). Used at workflow end to
+ * restore the user's on-disk default. baseline.model is already a Model object
+ * captured from session_start — no registry resolution needed. Soft-fails on
+ * setModel returning false. (Unconfigured stages compose against the baseline
+ * inline in onStageStart rather than calling this.)
+ */
+async function applyBaseline(pi: ExtensionAPI, base: { thinking: string; model: unknown }): Promise<void> {
+	if (base.model !== undefined) {
+		const ok = await pi.setModel(base.model as Parameters<ExtensionAPI["setModel"]>[0]);
+		if (!ok) {
+			console.warn("[rpiv-pi] failed to restore baseline model — proceeding on current model");
+		}
+	}
+	pi.setThinkingLevel(base.thinking as ThinkingLevel);
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle registration — registers onWorkflowStart/onStageStart/onWorkflowEnd.
+// Dynamic import of rpiv-workflow with isModuleNotFound guard.
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if an error is a module-not-found error.
+ * Local copy to avoid circular import from register-built-in-workflows.js.
+ */
+function isModuleNotFound(err: unknown): boolean {
+	for (
+		let cur: unknown = err, depth = 0;
+		cur != null && depth < 16;
+		cur = (cur as { cause?: unknown }).cause, depth++
+	) {
+		if (typeof cur === "object" && (cur as { code?: unknown }).code === "ERR_MODULE_NOT_FOUND") {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Register the stage model override lifecycle listener with rpiv-workflow.
+ * Call from index.ts with pi — NOT from registerBuiltInWorkflows.
+ */
+export async function registerModelOverrideLifecycle(pi: ExtensionAPI): Promise<void> {
+	try {
+		const { registerLifecycle } = await import("@juicesharp/rpiv-workflow");
+
+		registerLifecycle({
+			onWorkflowStart: async () => {
+				// Snapshot baseline thinking + model. LifecycleContext lacks
+				// ctx.model, so model comes from capturedModel (set by the
+				// session_start handler while no workflow was active).
+				baseline = {
+					thinking: pi.getThinkingLevel(),
+					model: capturedModel,
+				};
+				baselineCaptured = true; // freezes capturedModel until onWorkflowEnd
+			},
+
+			onStageStart: async (stage: { name: string }, _ctx: unknown) => {
+				// NOTE: parameter order is (stage: StageRef, ctx: LifecycleContext)
+				// stage.name is the workflow graph key ("research", "plan", etc.)
+				if (!baselineCaptured || !baseline) return;
+
+				const config = loadModelsConfig();
+				const override = getStageModelConfig(config, stage.name);
+
+				// Compose the EFFECTIVE config per-field against the baseline so a
+				// field the override doesn't set falls back to the captured
+				// baseline — NEVER to whatever the previous stage left active.
+				// This is what makes D7's "no bleedthrough" hold even for a
+				// thinking-only override with no `defaults` model.
+				//   - override.model is a "provider:modelId" string → resolve via registry
+				//   - baseline.model is an already-resolved Model object
+				let effectiveModel = baseline.model;
+				if (override?.model !== undefined) {
+					const resolved = resolveModel(override.model);
+					if (resolved) {
+						effectiveModel = resolved;
+					} else {
+						console.warn(
+							`[rpiv-pi] model not found: ${override.model} (stage "${stage.name}") — using baseline model`,
+						);
+					}
+				}
+				if (effectiveModel !== undefined) {
+					const ok = await pi.setModel(effectiveModel as Parameters<ExtensionAPI["setModel"]>[0]);
+					if (!ok) {
+						console.warn(
+							`[rpiv-pi] setModel failed for stage "${stage.name}" (no API key?) — proceeding on current model`,
+						);
+					}
+				}
+
+				pi.setThinkingLevel((override?.thinking ?? baseline.thinking) as ThinkingLevel);
+			},
+
+			onWorkflowEnd: async () => {
+				if (!baselineCaptured || !baseline) return;
+
+				// Restore baseline model + thinking. setModel persists to disk,
+				// so this is what keeps the user's global default intact.
+				await applyBaseline(pi, baseline);
+
+				// Reset state for next workflow
+				baseline = undefined;
+				baselineCaptured = false;
+			},
+		});
+	} catch (err) {
+		if (isModuleNotFound(err)) return; // sibling absent — /rpiv-setup guides the user
+		throw err;
+	}
+}

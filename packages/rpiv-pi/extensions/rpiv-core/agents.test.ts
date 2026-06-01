@@ -16,11 +16,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	CLEANUP_SKIP_REASON,
 	cleanupPerCwdAgents,
+	injectModelFrontmatter,
 	isSafeDestructiveOp,
 	SYNC_OP,
 	summarizeCleanupSkips,
 	syncBundledAgents,
 } from "./agents.js";
+import type { ModelsConfig } from "./models-config.js";
 import { BUNDLED_AGENTS_DIR } from "./paths.js";
 
 const sha256 = (s: string | Buffer) => createHash("sha256").update(s).digest("hex");
@@ -913,5 +915,108 @@ describe("isSafeDestructiveOp", () => {
 
 	it("rejects: v2 marker absent + known hash differs from dest → false (smart gate trumps legacy)", () => {
 		expect(isSafeDestructiveOp({ hasV2Data: false, knownHash: HASH_A, destHash: HASH_B })).toBe(false);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent frontmatter injection (Phase 2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("agent frontmatter injection", () => {
+	const agentContent = [
+		"---",
+		"name: test-agent",
+		"description: Test agent",
+		"tools: grep, find",
+		"isolated: true",
+		"---",
+		"",
+		"You are a test agent.",
+	].join("\n");
+
+	// --- Direct unit tests on the pure transform (the load-bearing invariants) ---
+
+	const cfg: ModelsConfig = {
+		agents: { "test-agent": { model: "anthropic:claude-sonnet-4-20250514", thinking: "high" } },
+	};
+
+	it("injects model (slash-converted) and thinking before the closing ---", () => {
+		const out = injectModelFrontmatter(agentContent, "test-agent.md", cfg);
+		// D9: colon form in models.json → slash form in agent frontmatter
+		expect(out).toContain("model: anthropic/claude-sonnet-4-20250514");
+		expect(out).not.toContain("model: anthropic:claude-sonnet-4-20250514");
+		expect(out).toContain("thinking: high");
+		// injected keys land inside the frontmatter block, before the body
+		const fmEnd = out.indexOf("\n---", 3);
+		expect(out.indexOf("model:")).toBeLessThan(fmEnd);
+		expect(out.indexOf("You are a test agent.")).toBeGreaterThan(fmEnd);
+	});
+
+	it("is idempotent — inject(inject(x)) === inject(x) (drift prevention)", () => {
+		const once = injectModelFrontmatter(agentContent, "test-agent.md", cfg);
+		const twice = injectModelFrontmatter(once, "test-agent.md", cfg);
+		expect(twice).toBe(once);
+	});
+
+	it("returns content unchanged when no override is configured", () => {
+		expect(injectModelFrontmatter(agentContent, "other-agent.md", cfg)).toBe(agentContent);
+		expect(injectModelFrontmatter(agentContent, "test-agent.md", {})).toBe(agentContent);
+	});
+
+	it("replaces an existing model key in place rather than duplicating it", () => {
+		const withModel = agentContent.replace("name: test-agent", "name: test-agent\nmodel: openai/gpt-5.5");
+		const out = injectModelFrontmatter(withModel, "test-agent.md", cfg);
+		expect(out.match(/^model:/gm)?.length).toBe(1);
+		expect(out).toContain("model: anthropic/claude-sonnet-4-20250514");
+	});
+
+	it("cascades a defaults model into an otherwise-unconfigured agent", () => {
+		const defaultsCfg: ModelsConfig = {
+			defaults: { model: "openai:o3-pro" },
+			agents: { "other-agent": { model: "openai:o3-pro" } },
+		};
+		const out = injectModelFrontmatter(agentContent, "test-agent.md", defaultsCfg);
+		expect(out).toContain("model: openai/o3-pro");
+	});
+
+	// --- End-to-end sync seam tests (real bundled agent) ---
+
+	const REAL_AGENT = "codebase-analyzer.md";
+	const writeModels = (config: unknown) => {
+		const dir = join(homedir(), ".config", "rpiv-pi");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "models.json"), JSON.stringify(config), "utf-8");
+	};
+	const destContent = (name: string) => readFileSync(join(homedir(), ".pi", "agent", "agents", name), "utf-8");
+
+	it("injects model and thinking into the synced agent .md file", () => {
+		writeModels({ agents: { "codebase-analyzer": { model: "openai:o3-pro", thinking: "high" } } });
+
+		const result = syncBundledAgents(true);
+		expect([...result.added, ...result.updated, ...result.unchanged]).toContain(REAL_AGENT);
+
+		const written = destContent(REAL_AGENT);
+		expect(written).toContain("model: openai/o3-pro");
+		expect(written).toContain("thinking: high");
+	});
+
+	it("produces no false pendingUpdate when re-synced (idempotent on disk)", () => {
+		writeModels({ agents: { "codebase-analyzer": { model: "openai:o3-pro", thinking: "high" } } });
+
+		syncBundledAgents(true);
+		const result2 = syncBundledAgents(false);
+
+		// Re-sync must see the injected agent as unchanged, never pendingUpdate.
+		expect(result2.pendingUpdate).not.toContain(REAL_AGENT);
+		expect(result2.unchanged).toContain(REAL_AGENT);
+	});
+
+	it("does not inject when no config exists for the agent", () => {
+		// No models.json — global test setup already removed it in beforeEach.
+		const result = syncBundledAgents(true);
+		expect([...result.added, ...result.updated, ...result.unchanged]).toContain(REAL_AGENT);
+
+		// Dest content must equal the raw bundled source — no frontmatter injected.
+		expect(destContent(REAL_AGENT)).toBe(bundledContent(REAL_AGENT));
 	});
 });

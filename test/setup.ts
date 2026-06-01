@@ -71,6 +71,8 @@ beforeEach(async () => {
 	gitContext.resetInjectedMarker();
 	const sessionHooks = await import("../packages/rpiv-pi/extensions/rpiv-core/session-hooks.js");
 	sessionHooks.__resetSessionHooksAnnounced();
+	const modelOverride = await import("../packages/rpiv-pi/extensions/rpiv-core/model-override.js");
+	modelOverride.__resetModelOverrideState();
 
 	const titleSpinner = await import("../packages/rpiv-warp/title-spinner.js");
 	titleSpinner.__resetState();
@@ -104,6 +106,7 @@ beforeEach(async () => {
 	const todoConfig = join(process.env.HOME!, ".config", "rpiv-todo", "config.json");
 	const askUserQuestionConfig = join(process.env.HOME!, ".config", "rpiv-ask-user-question", "config.json");
 	const webToolsConfig = configPath("rpiv-web-tools");
+	const modelsConfig = configPath("rpiv-pi", "models.json");
 	rmSync(piAgentSettings, { force: true });
 	rmSync(xdgPiAgentDir, { recursive: true, force: true });
 	rmSync(advisorConfig, { force: true });
@@ -113,6 +116,7 @@ beforeEach(async () => {
 	rmSync(todoConfig, { force: true });
 	rmSync(askUserQuestionConfig, { force: true });
 	rmSync(webToolsConfig, { force: true });
+	rmSync(modelsConfig, { force: true });
 
 	const telemetryConfig = join(process.env.HOME!, ".config", "rpiv-telemetry", "config.json");
 	rmSync(telemetryConfig, { force: true });
