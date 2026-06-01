@@ -34,7 +34,9 @@
  *   3. Loader (programmatic embedders) — `./load/index.js`
  *      Materialise the merged workflow registry: `loadWorkflows`,
  *      `LoadedWorkflows`, `Issue`, `LoadIssue`, `ConfigLayer`,
- *      `OverlayPaths`, `projectOverlayPaths`, `userOverlayPaths`.
+ *      `OverlayPaths`, `projectOverlayPaths`, `userOverlayPaths`,
+ *      `aliasSkills`. Siblings can apply the same remap to a built-in
+ *      workflow before handing it to `runWorkflow`.
  *
  *   4. Built-in registry (sibling packages) — `./built-ins.js`
  *      Contribute workflows to the lowest config layer:
@@ -166,7 +168,7 @@ export {
 export type { WorkflowContext, WorkflowHost } from "./host.js";
 export { type LifecycleContext, type LifecycleListeners, registerLifecycle, type StageRef } from "./lifecycle.js";
 export type { ConfigLayer, Issue, LoadedWorkflows, LoadIssue, OverlayPaths } from "./load/index.js";
-export { loadWorkflows, projectOverlayPaths, userOverlayPaths } from "./load/index.js";
+export { aliasSkills, loadWorkflows, projectOverlayPaths, userOverlayPaths } from "./load/index.js";
 export {
 	type DirectoryPathCollectorOpts,
 	directoryPathCollector,
@@ -224,11 +226,17 @@ export type { RunState } from "./types.js";
 export { type SchemaValidationFailure, validateOutputData } from "./validate-output.js";
 export { validateWorkflow, type WorkflowValidationIssue } from "./validate-workflow.js";
 
-export default function (host: WorkflowHost): void {
+/**
+ * Local intersection of the two host ports this extension's `default`
+ * function needs. `WorkflowHost` covers the workflow-command surface;
+ * `DocsProtocolHost` covers the `on("before_agent_start", ...)` hook used
+ * to prepend the docs-protocol block. Pi's `ExtensionAPI` structurally
+ * satisfies both; programmatic embedders keep using the narrower
+ * `WorkflowHost` port, so this alias stays local — not re-exported.
+ */
+type ExtensionHost = WorkflowHost & DocsProtocolHost;
+
+export default function (host: ExtensionHost): void {
 	registerWorkflowCommand(host);
-	// Pi passes the full ExtensionAPI at runtime, which has on().
-	// WorkflowHost doesn't declare on() to keep the programmatic-embedder
-	// surface narrow. Cast to satisfy the type — Pi always provides the
-	// full API.
-	registerDocsProtocol(host as unknown as DocsProtocolHost);
+	registerDocsProtocol(host);
 }

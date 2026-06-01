@@ -50,16 +50,16 @@
  *   ./cache.ts            — mtime-keyed jiti import cache + __resetLoadCache
  */
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Workflow } from "../api.js";
 import { getBuiltIns } from "../built-ins.js";
 import type { ConfigLayer } from "../layers.js";
-import { LEGACY_OVERLAY_NOTICE } from "../messages.js";
+import { LEGACY_OVERLAY_NOTICE, LEGACY_RUNS_NOTICE, LEGACY_USER_CONFIG_NOTICE } from "../messages.js";
 import { validateWorkflow, type WorkflowValidationIssue } from "../validate-workflow.js";
-import { aliasSkills, isDispatchingStage } from "./alias.js";
+import { applySkillAliases } from "./alias.js";
 import { type LoadAccumulator, loadLayer } from "./merge.js";
-import { projectOverlayPaths, userOverlayPaths } from "./paths.js";
+import { type OverlayPaths, projectOverlayPaths, userOverlayPaths } from "./paths.js";
 import { resolveDefault } from "./resolve-default.js";
 
 // ===========================================================================
@@ -142,50 +142,27 @@ export async function loadWorkflows(cwd: string): Promise<LoadedWorkflows> {
 		acc.sourcePaths.set(w.name, undefined);
 	}
 
-	const userOutcome = await loadLayer(userOverlayPaths(), "user", acc);
+	const userPaths = userOverlayPaths();
+	const userOutcome = await loadLayer(userPaths, "user", acc);
 	if (userOutcome.contributed) layers.push("user");
 
 	const projectOutcome = await loadLayer(projectOverlayPaths(cwd), "project", acc);
 	if (projectOutcome.contributed) layers.push("project");
 
-	// Mandatory one-time legacy-overlay notice. The dashed `.rpiv-workflow/`
-	// directory is no longer read; surface an advisory warning pointing at the
-	// new `.rpiv/workflows/` location so a silent config-ignored never happens.
-	// Never blocks the run (warning, not error).
-	if (existsSync(join(cwd, ".rpiv-workflow"))) {
-		acc.issues.push({ kind: "load", layer: "project", severity: "warning", message: LEGACY_OVERLAY_NOTICE(cwd) });
-	}
+	// One-time legacy migration advisories — each independent, each a warning
+	// (advisory, never blocks the run). The new `.rpiv/workflows/` (project) and
+	// `~/.config/rpiv-workflow/config.ts` (user) locations are the only ones
+	// read; these probes point the user at each move so nothing is silently
+	// ignored / stranded.
+	pushLegacyNotices(cwd, userPaths, acc);
 
-	// Merge skill aliases (project overrides user, per-key) and apply them to
-	// every workflow — built-ins included — BEFORE the validation loop, so the
+	// Merge + apply skill aliases (project overrides user per key) to every
+	// workflow — built-ins included — BEFORE the validation loop, so the
 	// aliased workflows are validated and preview / JSONL / the runtime
-	// skill-registry preflight all observe the final skill. The runner is untouched.
-	const skillAliases: Record<string, string> = {
-		...(userOutcome.skillAliases ?? {}),
-		...(projectOutcome.skillAliases ?? {}),
-	};
-	if (Object.keys(skillAliases).length > 0) {
-		// Snapshot the pre-remap dispatched-skill set so the "no-op alias" warning
-		// compares against the skills authors actually wrote — not alias targets
-		// freshly introduced by this very remap.
-		const dispatchedBefore = new Set<string>();
-		for (const w of acc.workflowMap.values()) {
-			for (const [stageName, stage] of Object.entries(w.stages)) {
-				if (isDispatchingStage(stage)) dispatchedBefore.add(stage.skill ?? stageName);
-			}
-		}
-		for (const [name, w] of acc.workflowMap) acc.workflowMap.set(name, aliasSkills(w, skillAliases));
-		for (const key of Object.keys(skillAliases)) {
-			if (!dispatchedBefore.has(key)) {
-				acc.issues.push({
-					kind: "load",
-					layer: "project",
-					severity: "warning",
-					message: `skillAliases: "${key}" matches no dispatched skill in any workflow (no-op).`,
-				});
-			}
-		}
-	}
+	// skill-registry preflight all observe the final skill. The runner is
+	// untouched. No-op warnings attribute to the source layer that actually
+	// declared the key — see `applySkillAliases` in `./alias.ts`.
+	const skillAliases = applySkillAliases(acc, userOutcome, projectOutcome);
 
 	// Validate every merged workflow once. Validation runs even on built-in so
 	// that a future built-in regression surfaces in the same channel as user
@@ -208,4 +185,45 @@ export async function loadWorkflows(cwd: string): Promise<LoadedWorkflows> {
 		issues: acc.issues,
 		skillAliases,
 	};
+}
+
+/**
+ * Push the three independent legacy-migration advisories. Each is a `"warning"`
+ * (never blocks the run) and each probes a distinct stale layout the unified
+ * `.rpiv/workflows/` move left behind:
+ *   - project dashed dir   `<cwd>/.rpiv-workflow/`           → config.ts + packs/
+ *   - orphaned run JSONLs   `<cwd>/.rpiv/workflows/*.jsonl`   → runs/
+ *   - user-layer rename     `~/.config/rpiv-workflow/workflows.config.ts` → config.ts
+ */
+function pushLegacyNotices(cwd: string, userPaths: OverlayPaths, acc: LoadAccumulator): void {
+	if (existsSync(join(cwd, ".rpiv-workflow"))) {
+		acc.issues.push({ kind: "load", layer: "project", severity: "warning", message: LEGACY_OVERLAY_NOTICE(cwd) });
+	}
+
+	if (hasOrphanedRunFiles(cwd)) {
+		acc.issues.push({ kind: "load", layer: "project", severity: "warning", message: LEGACY_RUNS_NOTICE(cwd) });
+	}
+
+	const userDir = dirname(userPaths.configFile);
+	if (existsSync(join(userDir, "workflows.config.ts"))) {
+		acc.issues.push({
+			kind: "load",
+			layer: "user",
+			severity: "warning",
+			message: LEGACY_USER_CONFIG_NOTICE(userDir),
+		});
+	}
+}
+
+/**
+ * True when `<cwd>/.rpiv/workflows/` holds top-level `*.jsonl` run files written
+ * before the `runs/` relocation. `readdirSync` lists only immediate entries, so
+ * files already inside `runs/` never match. A missing / unreadable dir → false.
+ */
+function hasOrphanedRunFiles(cwd: string): boolean {
+	try {
+		return readdirSync(join(cwd, ".rpiv", "workflows")).some((f) => f.endsWith(".jsonl"));
+	} catch {
+		return false;
+	}
 }

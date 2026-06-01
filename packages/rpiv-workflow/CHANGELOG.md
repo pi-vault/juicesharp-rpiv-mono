@@ -8,12 +8,14 @@
   - `.rpiv-workflow/workflows/*.ts` → `.rpiv/workflows/packs/*.ts`
   - run state `.rpiv/workflows/<run-id>.jsonl` → `.rpiv/workflows/runs/<run-id>.jsonl`
 
-  The user layer's inner names are aligned for symmetry: `~/.config/rpiv-workflow/{config.ts, packs/}`. The new paths are the **only** locations read — there is no legacy fallback. A one-time load-time warning fires when a legacy `.rpiv-workflow/` directory is detected, pointing at the new location (the old files are ignored, never loaded). Migrate:
+  The user layer's inner names are aligned for symmetry: `~/.config/rpiv-workflow/{config.ts, packs/}`. The new paths are the **only** locations read — there is no legacy fallback. One-time load-time warnings fire when a stale layout is detected (each advisory, never blocking): a legacy project `.rpiv-workflow/` directory, orphaned top-level `.rpiv/workflows/*.jsonl` run files written before the `runs/` relocation, and a legacy user-layer `~/.config/rpiv-workflow/workflows.config.ts`. Each points at the matching `mv`. Migrate:
 
   ```sh
   mv .rpiv-workflow/workflows.config.ts .rpiv/workflows/config.ts
   mv .rpiv-workflow/workflows .rpiv/workflows/packs
   ```
+
+- **`.rpiv/workflows/` is commonly gitignored** (it holds ephemeral run state), so the moved project `config.ts` + `packs/` may be **silently uncommittable** — `git add .rpiv/workflows/config.ts` is a no-op with no error. Teams that version-control their workflow config must un-ignore the config surface, e.g. add `!.rpiv/workflows/config.ts` and `!.rpiv/workflows/packs/` to `.gitignore`. The legacy-overlay load warning now carries this advisory inline.
 
 - The public `workflowsDir` export is renamed `runsDir` and now points at `.rpiv/workflows/runs` (was `.rpiv/workflows`). Update any direct importers.
 

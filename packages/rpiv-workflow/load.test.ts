@@ -685,6 +685,50 @@ export default defineWorkflow({ name: "legacy-wf", start: "x", stages: { x: prod
 		const loaded = await loadWorkflows(TEST_TMP);
 		expect(loaded.issues.some((i) => i.kind === "load" && /\.rpiv-workflow/.test(i.message))).toBe(false);
 	});
+
+	it("warns when orphaned run JSONLs sit directly under .rpiv/workflows/", async () => {
+		// Run files written before the `runs/` relocation. `listRuns` reads only
+		// `runs/`, so these are invisible — surface a one-time advisory.
+		const workflowsDir = join(TEST_TMP, ".rpiv", "workflows");
+		mkdirSync(workflowsDir, { recursive: true });
+		writeFileSync(join(workflowsDir, "2026-05-01_10-00-00-abcd.jsonl"), "{}\n", "utf-8");
+
+		const loaded = await loadWorkflows(TEST_TMP);
+
+		const notice = loaded.issues.find(
+			(i) => i.kind === "load" && i.severity === "warning" && /no longer\s+read by `\/wf`/.test(i.message),
+		);
+		expect(notice).toBeDefined();
+		expect(notice?.layer).toBe("project");
+	});
+
+	it("does NOT warn about orphaned runs when JSONLs already live in runs/", async () => {
+		// Files correctly under `runs/` must not trip the top-level probe.
+		const runsSubdir = join(TEST_TMP, ".rpiv", "workflows", "runs");
+		mkdirSync(runsSubdir, { recursive: true });
+		writeFileSync(join(runsSubdir, "2026-05-01_10-00-00-abcd.jsonl"), "{}\n", "utf-8");
+
+		const loaded = await loadWorkflows(TEST_TMP);
+		expect(loaded.issues.some((i) => i.kind === "load" && /no longer\s+read by `\/wf`/.test(i.message))).toBe(false);
+	});
+
+	it("warns when a legacy user-layer workflows.config.ts exists", async () => {
+		// The user overlay's inner name was aligned to `config.ts`; a stale
+		// `workflows.config.ts` is no longer read and must surface an advisory.
+		mkdirSync(USER_CONFIG_DIR, { recursive: true });
+		writeFileSync(join(USER_CONFIG_DIR, "workflows.config.ts"), "export default { skillAliases: {} };\n", "utf-8");
+
+		const loaded = await loadWorkflows(TEST_TMP);
+
+		const notice = loaded.issues.find(
+			(i) => i.kind === "load" && i.severity === "warning" && /user-layer config now lives/.test(i.message),
+		);
+		expect(notice).toBeDefined();
+		expect(notice?.layer).toBe("user");
+		// The stale file is NOT read — its (empty) aliases never apply, and the
+		// real `config.ts` name is the only one consulted.
+		expect(loaded.issues.some((i) => i.severity === "error")).toBe(false);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -761,6 +805,33 @@ export default {
 			),
 		).toBe(true);
 		expect(loaded.issues.filter((i) => i.severity === "error")).toEqual([]);
+	});
+
+	it("attributes a no-op alias warning to `user` when only the user config declares the key", async () => {
+		writeUserConfig("export default { skillAliases: { 'user-only-typo': 'x' } };\n");
+		const loaded = await loadWorkflows(TEST_TMP);
+		const warning = loaded.issues.find(
+			(i) =>
+				i.kind === "load" &&
+				i.severity === "warning" &&
+				/"user-only-typo".*matches no dispatched skill/.test(i.message),
+		);
+		expect(warning).toBeDefined();
+		expect(warning?.layer).toBe("user");
+		expect(loaded.issues.filter((i) => i.severity === "error")).toEqual([]);
+	});
+
+	it("emits two no-op alias warnings (one per layer) when the same key is no-op in both layers", async () => {
+		writeUserConfig("export default { skillAliases: { 'shared-typo': 'u' } };\n");
+		writeProjectConfig(TEST_TMP, "export default { skillAliases: { 'shared-typo': 'p' } };\n");
+		const loaded = await loadWorkflows(TEST_TMP);
+		const warnings = loaded.issues.filter(
+			(i) =>
+				i.kind === "load" &&
+				i.severity === "warning" &&
+				/"shared-typo".*matches no dispatched skill/.test(i.message),
+		);
+		expect(warnings.map((w) => w.layer).sort()).toEqual(["project", "user"]);
 	});
 
 	it("rejects a non-string alias value with a load error", async () => {

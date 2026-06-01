@@ -21,13 +21,14 @@
  */
 
 import type { StageDef, Workflow } from "../api.js";
+import type { LayerOutcome, LoadAccumulator } from "./merge.js";
 
 /**
  * A stage dispatches a `/skill:<name>` exactly when it carries neither a `run`
  * (script body) nor a `prompt` (raw-text body). `fanout`/`iterate` stages carry
  * neither, so they ARE dispatching stages. Single source of truth shared by the
  * alias remap below (which stages to rewrite) and the no-op-alias warning in
- * `load/index.ts` (which skills count as "dispatched") — the two must agree.
+ * `applySkillAliases` (which skills count as "dispatched") — the two must agree.
  */
 export function isDispatchingStage(stage: StageDef): boolean {
 	return stage.run == null && stage.prompt == null;
@@ -49,4 +50,67 @@ export function aliasSkills(w: Workflow, aliases: Record<string, string>): Workf
 		}
 	}
 	return changed ? Object.freeze({ ...w, stages }) : w; // never mutate shared built-ins
+}
+
+/**
+ * Apply skill-alias remapping to every workflow in the accumulator.
+ *
+ * Merges `userOutcome.skillAliases` and `projectOutcome.skillAliases` per-key
+ * (project wins), snapshots the pre-remap dispatched-skill set so no-op
+ * warnings compare against skills authors actually wrote (not alias targets
+ * freshly introduced by this very remap), then rewrites every workflow via
+ * `aliasSkills`. The runner is untouched — by the time `runWorkflow` runs
+ * every `stage.skill` already reflects the final target.
+ *
+ * No-op warnings attribute to the source layer: each layer's alias map is
+ * walked separately so a user-layer typo points at `~/.config/rpiv-workflow/`
+ * and a project-layer typo points at `<cwd>/.rpiv/workflows/`. A key declared
+ * in BOTH layers and no-op in both emits two warnings (one per layer) so the
+ * user fixes both files.
+ *
+ * Mutates `acc.workflowMap` and `acc.issues` in place (same precedent as
+ * `loadLayer`). Returns the merged alias map for the
+ * `LoadedWorkflows.skillAliases` envelope; `{}` when no layer declared any.
+ */
+export function applySkillAliases(
+	acc: LoadAccumulator,
+	userOutcome: LayerOutcome,
+	projectOutcome: LayerOutcome,
+): Record<string, string> {
+	const userAliases = userOutcome.skillAliases ?? {};
+	const projectAliases = projectOutcome.skillAliases ?? {};
+	const merged: Record<string, string> = { ...userAliases, ...projectAliases };
+	if (Object.keys(merged).length === 0) return merged;
+
+	// Snapshot the pre-remap dispatched-skill set so the "no-op alias" warning
+	// compares against the skills authors actually wrote — not alias targets
+	// freshly introduced by this very remap.
+	const dispatchedBefore = new Set<string>();
+	for (const w of acc.workflowMap.values()) {
+		for (const [stageName, stage] of Object.entries(w.stages)) {
+			if (isDispatchingStage(stage)) dispatchedBefore.add(stage.skill ?? stageName);
+		}
+	}
+	for (const [name, w] of acc.workflowMap) acc.workflowMap.set(name, aliasSkills(w, merged));
+
+	// Per-source-layer no-op attribution: walk each layer's map separately so
+	// each warning points at the file that actually declared the key. A key
+	// declared by BOTH layers and no-op in both emits two warnings — one per
+	// layer — so the user fixes both files.
+	for (const [layer, map] of [
+		["user", userAliases],
+		["project", projectAliases],
+	] as const) {
+		for (const key of Object.keys(map)) {
+			if (!dispatchedBefore.has(key)) {
+				acc.issues.push({
+					kind: "load",
+					layer,
+					severity: "warning",
+					message: `skillAliases: "${key}" matches no dispatched skill in any workflow (no-op).`,
+				});
+			}
+		}
+	}
+	return merged;
 }

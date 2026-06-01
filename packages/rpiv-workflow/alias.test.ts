@@ -8,7 +8,8 @@
 
 import { describe, expect, it } from "vitest";
 import type { StageDef, Workflow } from "./api.js";
-import { aliasSkills } from "./load/alias.js";
+import { aliasSkills, applySkillAliases } from "./load/alias.js";
+import type { LayerOutcome, LoadAccumulator } from "./load/merge.js";
 
 // Minimal stage builders — `aliasSkills` only reads `run`, `prompt`, `skill`.
 const skillStage = (skill?: string): StageDef => ({
@@ -92,5 +93,115 @@ describe("aliasSkills", () => {
 		const out = aliasSkills(w, { commit: "attributed-commit" });
 		expect(out.stages.research?.skill).toBeUndefined();
 		expect(out.stages.commit?.skill).toBe("attributed-commit");
+	});
+
+	it("is reachable from the package barrel (locks the L2-01 public-surface contract)", async () => {
+		// Reference identity ratifies (a) the export exists on the main barrel and
+		// (b) it points at the same function as the deep-path import — catches a
+		// future barrel-clean PR that silently drops the export. Workspaces resolve
+		// `@juicesharp/rpiv-workflow` via the `node_modules/@juicesharp/rpiv-workflow`
+		// symlink back to this package; Node deduplicates by realpath, so both
+		// imports land on the same module instance.
+		const { aliasSkills: fromBarrel } = await import("@juicesharp/rpiv-workflow");
+		expect(fromBarrel).toBe(aliasSkills);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// applySkillAliases — orchestrator helper: merge + snapshot + remap + warn,
+// with per-source-layer attribution on no-op warnings.
+// ---------------------------------------------------------------------------
+
+const makeAcc = (workflows: Workflow[]): LoadAccumulator => {
+	const workflowMap = new Map<string, Workflow>();
+	for (const w of workflows) workflowMap.set(w.name, w);
+	return {
+		issues: [],
+		workflowMap,
+		sources: new Map(),
+		sourcePaths: new Map(),
+	};
+};
+
+const layerOutcome = (skillAliases?: Record<string, string>): LayerOutcome => ({
+	contributed: skillAliases != null,
+	configDefault: undefined,
+	skillAliases,
+});
+
+describe("applySkillAliases", () => {
+	it("returns an empty merged map and emits no warnings when no layer declares aliases", () => {
+		const acc = makeAcc([wf({ commit: skillStage() })]);
+		const merged = applySkillAliases(acc, layerOutcome(), layerOutcome());
+		expect(merged).toEqual({});
+		expect(acc.issues).toEqual([]);
+		// Workflow untouched — early-exit before the rewrite loop.
+		expect(acc.workflowMap.get("w")?.stages.commit?.skill).toBeUndefined();
+	});
+
+	it("merges project over user per key", () => {
+		const acc = makeAcc([wf({ impl: skillStage("implement") })]);
+		const merged = applySkillAliases(
+			acc,
+			layerOutcome({ implement: "user-impl", extra: "user-extra" }),
+			layerOutcome({ implement: "proj-impl" }),
+		);
+		expect(merged).toEqual({ implement: "proj-impl", extra: "user-extra" });
+	});
+
+	it("rewrites every workflow in the accumulator to use aliased skills", () => {
+		const acc = makeAcc([wf({ commit: skillStage() })]);
+		applySkillAliases(acc, layerOutcome(), layerOutcome({ commit: "attributed-commit" }));
+		expect(acc.workflowMap.get("w")?.stages.commit?.skill).toBe("attributed-commit");
+	});
+
+	it("attributes a no-op warning to `user` when only the user layer declares the key", () => {
+		const acc = makeAcc([wf({ commit: skillStage() })]);
+		applySkillAliases(acc, layerOutcome({ nope: "x" }), layerOutcome());
+		expect(acc.issues).toEqual([
+			{
+				kind: "load",
+				layer: "user",
+				severity: "warning",
+				message: `skillAliases: "nope" matches no dispatched skill in any workflow (no-op).`,
+			},
+		]);
+	});
+
+	it("attributes a no-op warning to `project` when only the project layer declares the key", () => {
+		const acc = makeAcc([wf({ commit: skillStage() })]);
+		applySkillAliases(acc, layerOutcome(), layerOutcome({ nope: "x" }));
+		expect(acc.issues).toEqual([
+			{
+				kind: "load",
+				layer: "project",
+				severity: "warning",
+				message: `skillAliases: "nope" matches no dispatched skill in any workflow (no-op).`,
+			},
+		]);
+	});
+
+	it("emits TWO warnings — one per layer — when the same no-op key is declared by both layers", () => {
+		const acc = makeAcc([wf({ commit: skillStage() })]);
+		applySkillAliases(acc, layerOutcome({ nope: "u" }), layerOutcome({ nope: "p" }));
+		const layers = acc.issues
+			.filter((i) => i.kind === "load" && /matches no dispatched skill/.test(i.message))
+			.map((i) => i.layer)
+			.sort();
+		expect(layers).toEqual(["project", "user"]);
+	});
+
+	it("snapshots dispatched skills BEFORE remap — alias targets freshly introduced by this remap are no-ops", () => {
+		// Workflow dispatches `commit`. Alias `commit → fresh-target`. A second
+		// alias `fresh-target → x` must be a no-op because the snapshot was
+		// taken before the first remap took effect.
+		const acc = makeAcc([wf({ commit: skillStage() })]);
+		applySkillAliases(acc, layerOutcome(), layerOutcome({ commit: "fresh-target", "fresh-target": "x" }));
+		const noOps = acc.issues.filter((i) => i.kind === "load" && /matches no dispatched skill/.test(i.message));
+		expect(noOps).toHaveLength(1);
+		expect(noOps[0]).toMatchObject({
+			layer: "project",
+			message: expect.stringMatching(/"fresh-target"/),
+		});
 	});
 });

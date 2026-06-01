@@ -6,7 +6,10 @@
  *
  *   1. A single `Workflow`               — single-entry namespace
  *   2. `Workflow[]`                      — multi-entry, default required if > 1
- *   3. `{ workflows, default? }`         — full envelope, explicit default
+ *   3. `{ workflows?, default?, skillAliases? }`
+ *                                        — envelope; at least one of `workflows`,
+ *                                          `default`, `skillAliases` must be
+ *                                          present (alias-only is valid)
  *
  * Missing-field policy for `gate(...)` routes is documented at
  * `api.ts:gate`; loader-side, missing fields surface as `NaN` after
