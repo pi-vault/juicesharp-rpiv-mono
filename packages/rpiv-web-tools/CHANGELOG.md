@@ -7,6 +7,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Perplexity search provider** — search-only `SearchProvider` posting to `POST https://api.perplexity.ai/search` with `Authorization: Bearer $PERPLEXITY_API_KEY`. Configure via env var or `/web-tools` (paste the key from [docs.perplexity.ai](https://docs.perplexity.ai/)). `web_fetch` falls through to the shared raw-HTTP + htmlToText pipeline (same path as Brave/Serper/SearXNG). $5/1K requests, 50 RPS tier-independent rate limit. See README provider table.
+
 ## [1.17.0] - 2026-06-01
 
 ## [1.16.1] - 2026-05-30

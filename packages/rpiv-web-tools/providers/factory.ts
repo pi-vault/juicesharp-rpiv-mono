@@ -3,6 +3,7 @@ import { ExaProvider } from "./exa.js";
 import { FirecrawlProvider } from "./firecrawl.js";
 import { JinaProvider } from "./jina.js";
 import { OllamaProvider } from "./ollama.js";
+import { PerplexityProvider } from "./perplexity.js";
 import { SearxngProvider } from "./searxng.js";
 import { SerperProvider } from "./serper.js";
 import { TavilyProvider } from "./tavily.js";
@@ -32,6 +33,8 @@ export function createSearchProvider(name: string, creds: ProviderCredentials): 
 			return new JinaProvider(apiKey);
 		case "firecrawl":
 			return new FirecrawlProvider(apiKey);
+		case "perplexity":
+			return new PerplexityProvider(apiKey);
 		case "searxng":
 			return new SearxngProvider({ apiKey: creds.apiKey, baseUrl: creds.baseUrl ?? "" });
 		case "ollama":

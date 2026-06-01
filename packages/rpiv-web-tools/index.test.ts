@@ -33,6 +33,7 @@ beforeEach(() => {
 	delete process.env.EXA_API_KEY;
 	delete process.env.JINA_API_KEY;
 	delete process.env.FIRECRAWL_API_KEY;
+	delete process.env.PERPLEXITY_API_KEY;
 	delete process.env.SEARXNG_API_KEY;
 	delete process.env.SEARXNG_URL;
 	delete process.env.OLLAMA_API_KEY;
@@ -125,6 +126,14 @@ const PROVIDER_MATRIX = [
 		emptyResponse: () => JSON.stringify({ success: true, data: [] }),
 		authHeader: "Authorization" as string | null,
 	},
+	{
+		provider: "perplexity",
+		envVar: "PERPLEXITY_API_KEY",
+		urlMatcher: (u: string) => u.includes("api.perplexity.ai"),
+		buildResponse: () => JSON.stringify({ results: [{ title: "T", url: "https://x", snippet: "snip" }] }),
+		emptyResponse: () => JSON.stringify({ results: [] }),
+		authHeader: "Authorization" as string | null,
+	},
 ] as const;
 
 describe.each(PROVIDER_MATRIX)("web_search.execute — $provider", ({
@@ -152,7 +161,7 @@ describe.each(PROVIDER_MATRIX)("web_search.execute — $provider", ({
 		if (authHeader) {
 			const headers = stub.calls[0].init?.headers as Record<string, string>;
 			const headerVal = headers[authHeader];
-			if (provider === "jina" || provider === "firecrawl") {
+			if (provider === "jina" || provider === "firecrawl" || provider === "perplexity") {
 				expect(headerVal).toBe("Bearer env-key");
 			} else {
 				expect(headerVal).toBe("env-key");
@@ -178,7 +187,7 @@ describe.each(PROVIDER_MATRIX)("web_search.execute — $provider", ({
 		if (authHeader) {
 			const headers = stub.calls[0].init?.headers as Record<string, string>;
 			const headerVal = headers[authHeader];
-			if (provider === "jina" || provider === "firecrawl") {
+			if (provider === "jina" || provider === "firecrawl" || provider === "perplexity") {
 				expect(headerVal).toBe("Bearer config-key");
 			} else {
 				expect(headerVal).toBe("config-key");
@@ -609,6 +618,7 @@ describe.each([
 	{ provider: "brave", envVar: "BRAVE_SEARCH_API_KEY" },
 	{ provider: "serper", envVar: "SERPER_API_KEY" },
 	{ provider: "searxng", envVar: "SEARXNG_API_KEY" },
+	{ provider: "perplexity", envVar: "PERPLEXITY_API_KEY" },
 ])("web_fetch.execute — $provider falls back to generic HTML", ({ provider, envVar }) => {
 	it("does not throw on missing key (raw HTTP doesn't authenticate to the target)", async () => {
 		writeConfig({ provider });
@@ -1134,7 +1144,16 @@ describe("/web-tools command", () => {
 		const selectCall = (ctx.ui.select as ReturnType<typeof vi.fn>).mock.calls[0];
 		const labels = selectCall[1] as string[];
 		expect(labels[0]).toBe("Exa ✓ (configured)");
-		expect(labels.slice(1)).toEqual(["Brave", "Tavily", "Serper", "Jina", "Firecrawl", "SearXNG", "Ollama"]);
+		expect(labels.slice(1)).toEqual([
+			"Brave",
+			"Tavily",
+			"Serper",
+			"Jina",
+			"Firecrawl",
+			"Perplexity",
+			"SearXNG",
+			"Ollama",
+		]);
 		expect(labels.filter((l) => l.includes("✓"))).toHaveLength(1);
 
 		const saved = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
