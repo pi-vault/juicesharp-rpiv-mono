@@ -16,18 +16,18 @@ Let the model search the web and read pages. `rpiv-web-tools` adds `web_search` 
 
 Pick one as the active backend; switch any time without losing the others' keys.
 
-| Provider | Env var | Signup | Fetch mode | Notes |
-|---|---|---|---|---|
-| Brave | `BRAVE_SEARCH_API_KEY` | [brave.com/search/api](https://brave.com/search/api/) | raw HTTP → htmlToText, `raw: true` available | default |
-| Tavily | `TAVILY_API_KEY` | [tavily.com](https://tavily.com) | native extraction (plain text) | |
-| Serper | `SERPER_API_KEY` | [serper.dev](https://serper.dev) | raw HTTP → htmlToText, `raw: true` available | |
-| Exa | `EXA_API_KEY` | [exa.ai](https://exa.ai) | native extraction (plain text) | |
-| You.com | `YOUCOM_API_KEY` | [you.com](https://you.com) | native extraction (markdown) | $5/1K search + $1/1K fetch |
-| Jina | `JINA_API_KEY` | [jina.ai/reader](https://jina.ai/reader) | native extraction (markdown) | |
-| Firecrawl | `FIRECRAWL_API_KEY` | [firecrawl.dev](https://firecrawl.dev) | native extraction (markdown) | |
-| Perplexity | `PERPLEXITY_API_KEY` | [docs.perplexity.ai](https://docs.perplexity.ai/) | raw HTTP → htmlToText, `raw: true` available | |
-| SearXNG | `SEARXNG_URL` (+ optional `SEARXNG_API_KEY`) | self-hosted | raw HTTP → htmlToText, `raw: true` available | see [§SearXNG](#searxng-self-hosted) |
-| Ollama | `OLLAMA_HOST` / `OLLAMA_API_KEY` | local or [ollama.com](https://ollama.com) | native extraction | see [§Ollama](#ollama-local-or-cloud) |
+| Provider | Env var | Signup | Fetch mode |
+|---|---|---|---|
+| Brave | `BRAVE_SEARCH_API_KEY` | [brave.com/search/api](https://brave.com/search/api/) | raw HTTP → htmlToText, `raw: true` available |
+| Tavily | `TAVILY_API_KEY` | [tavily.com](https://tavily.com) | native extraction (plain text) |
+| Serper | `SERPER_API_KEY` | [serper.dev](https://serper.dev) | raw HTTP → htmlToText, `raw: true` available |
+| Exa | `EXA_API_KEY` | [exa.ai](https://exa.ai) | native extraction (plain text) |
+| You.com | `YOUCOM_API_KEY` | [you.com](https://you.com) | native extraction (markdown) |
+| Jina | `JINA_API_KEY` | [jina.ai/reader](https://jina.ai/reader) | native extraction (markdown) |
+| Firecrawl | `FIRECRAWL_API_KEY` | [firecrawl.dev](https://firecrawl.dev) | native extraction (markdown) |
+| Perplexity | `PERPLEXITY_API_KEY` | [docs.perplexity.ai](https://docs.perplexity.ai/) | raw HTTP → htmlToText, `raw: true` available |
+| SearXNG | `SEARXNG_URL` (+ optional `SEARXNG_API_KEY`) | self-hosted | raw HTTP → htmlToText, `raw: true` available |
+| Ollama | `OLLAMA_HOST` / `OLLAMA_API_KEY` | local or [ollama.com](https://ollama.com) | native extraction |
 
 ## Features
 
