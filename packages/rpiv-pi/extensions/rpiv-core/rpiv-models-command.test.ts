@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { SelectItem } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelsConfig } from "./models-config.js";
 import { registerRpivModelsCommand } from "./rpiv-models-command.js";
@@ -144,6 +145,85 @@ describe("/rpiv-models — cache invalidation", () => {
 
 		const after = loadModelsConfig();
 		expect(after.defaults?.model).toBe("zai/glm-4-7");
+	});
+});
+
+describe("/rpiv-models — checkmark display", () => {
+	it("passes currentKey to buildModelItems when defaults override exists", async () => {
+		rmSync(CONFIG_PATH, { force: true });
+		mkdirSync(dirname(CONFIG_PATH), { recursive: true });
+		writeFileSync(CONFIG_PATH, JSON.stringify({ defaults: "zai/glm-4-7" }), "utf-8");
+
+		vi.mocked(showFilterablePicker).mockResolvedValueOnce("defaults").mockResolvedValueOnce("zai/glm-4-7");
+		const { pi, handler } = makePi();
+		registerRpivModelsCommand(pi);
+		await handler()("", makeCtx());
+
+		const modelPickerCall = vi.mocked(showFilterablePicker).mock.calls[1];
+		const items = (modelPickerCall[1] as { items: SelectItem[] }).items;
+		const glmItem = items.find((i: SelectItem) => i.value === "zai/glm-4-7");
+		expect(glmItem?.label).toContain("✓");
+	});
+
+	it("does not show checkmark when no override is configured", async () => {
+		rmSync(CONFIG_PATH, { force: true });
+
+		vi.mocked(showFilterablePicker).mockResolvedValueOnce("defaults").mockResolvedValueOnce("zai/glm-4-7");
+		const { pi, handler } = makePi();
+		registerRpivModelsCommand(pi);
+		await handler()("", makeCtx());
+
+		const modelPickerCall = vi.mocked(showFilterablePicker).mock.calls[1];
+		const items = (modelPickerCall[1] as { items: SelectItem[] }).items;
+		const glmItem = items.find((i: SelectItem) => i.value === "zai/glm-4-7");
+		expect(glmItem?.label).not.toContain("✓");
+	});
+});
+
+describe("/rpiv-models — per-entry reset", () => {
+	it("removes agents entry when reset sentinel is chosen", async () => {
+		rmSync(CONFIG_PATH, { force: true });
+		mkdirSync(dirname(CONFIG_PATH), { recursive: true });
+		writeFileSync(CONFIG_PATH, JSON.stringify({ agents: { "codebase-analyst": "zai/glm-4-7" } }), "utf-8");
+
+		vi.mocked(showFilterablePicker)
+			.mockResolvedValueOnce("agents")
+			.mockResolvedValueOnce("codebase-analyst")
+			.mockResolvedValueOnce("__reset__");
+		const { pi, handler } = makePi();
+		registerRpivModelsCommand(pi);
+		const ctx = makeCtx();
+		await handler()("", ctx);
+
+		const stored = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+		expect(stored.agents).toBeUndefined();
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Removed"), "info");
+	});
+});
+
+describe("/rpiv-models — global reset", () => {
+	it("clears entire config when reset-all scope is chosen", async () => {
+		rmSync(CONFIG_PATH, { force: true });
+		mkdirSync(dirname(CONFIG_PATH), { recursive: true });
+		writeFileSync(
+			CONFIG_PATH,
+			JSON.stringify({
+				defaults: "zai/glm-4-7",
+				agents: { "codebase-analyst": "anthropic/opus" },
+				skills: { commit: "zai/glm-4-7" },
+			}),
+			"utf-8",
+		);
+
+		vi.mocked(showFilterablePicker).mockResolvedValueOnce("__reset_all__");
+		const { pi, handler } = makePi();
+		registerRpivModelsCommand(pi);
+		const ctx = makeCtx();
+		await handler()("", ctx);
+
+		const stored = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+		expect(stored).toEqual({});
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("cleared"), "info");
 	});
 });
 

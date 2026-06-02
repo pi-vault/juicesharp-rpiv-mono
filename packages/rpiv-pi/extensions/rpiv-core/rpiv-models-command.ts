@@ -29,6 +29,9 @@ const SCOPE_AGENTS = "agents";
 const SCOPE_STAGES = "stages";
 const SCOPE_SKILLS = "skills";
 const SCOPE_PRESETS = "presets";
+const SCOPE_RESET_ALL = "__reset_all__";
+const RESET_VALUE = "__reset__";
+const RESET_LABEL = "Reset to default";
 
 // `thinking` is narrowed to the 5-value `ThinkingLevelValue` union (vs. raw
 // `string`) so the picker's persisted output mirrors the schema's runtime
@@ -45,11 +48,12 @@ interface RawModelsConfig {
 
 function scopeItems(): SelectItem[] {
 	return [
-		{ value: SCOPE_DEFAULTS, label: "defaults — global fallback" },
-		{ value: SCOPE_AGENTS, label: "agents — per-bundled-agent override" },
-		{ value: SCOPE_STAGES, label: "stages — per-workflow-stage override (flat)" },
-		{ value: SCOPE_SKILLS, label: "skills — per-skill override (workflow + standalone)" },
-		{ value: SCOPE_PRESETS, label: "presets — per-workflow per-stage override" },
+		{ value: SCOPE_DEFAULTS, label: "defaults" },
+		{ value: SCOPE_AGENTS, label: "agents" },
+		{ value: SCOPE_STAGES, label: "stages" },
+		{ value: SCOPE_SKILLS, label: "skills" },
+		{ value: SCOPE_PRESETS, label: "presets" },
+		{ value: SCOPE_RESET_ALL, label: "reset all overrides" },
 	];
 }
 
@@ -66,6 +70,67 @@ function buildEffortItems(picked: Model<Api>): SelectItem[] {
 		THINKING_LEVEL_VALUES.includes(l as never),
 	);
 	return [{ value: "__off__", label: "off" }, ...levels.map((level) => ({ value: level, label: level }))];
+}
+
+function getCurrentOverrideKey(scope: string, keyPath: string[]): string | undefined {
+	const raw = loadJsonConfig<RawModelsConfig>(CONFIG_PATH);
+	if (scope === SCOPE_DEFAULTS) {
+		const entry = raw.defaults;
+		return typeof entry === "string" ? entry : entry?.model;
+	}
+	if (scope === SCOPE_AGENTS || scope === SCOPE_STAGES || scope === SCOPE_SKILLS) {
+		const map = (raw as Record<string, unknown>)[scope] as Record<string, unknown> | undefined;
+		if (!map) return undefined;
+		const entry = map[keyPath[0]];
+		return typeof entry === "string"
+			? entry
+			: ((entry as Record<string, unknown> | undefined)?.model as string | undefined);
+	}
+	if (scope === SCOPE_PRESETS) {
+		const [wf, stage] = keyPath;
+		const entry = raw.presets?.[wf]?.stages?.[stage];
+		return typeof entry === "string" ? entry : entry?.model;
+	}
+	return undefined;
+}
+
+function removeOverride(config: RawModelsConfig, scope: string, keyPath: string[]): RawModelsConfig {
+	const next: RawModelsConfig = { ...config };
+	if (scope === SCOPE_DEFAULTS) {
+		delete next.defaults;
+		return next;
+	}
+	if (scope === SCOPE_AGENTS || scope === SCOPE_STAGES || scope === SCOPE_SKILLS) {
+		const map = (next as Record<string, unknown>)[scope] as Record<string, unknown> | undefined;
+		if (map && keyPath[0] in map) {
+			const updated: Record<string, unknown> = { ...map };
+			delete updated[keyPath[0]];
+			if (!Object.keys(updated).length) delete (next as Record<string, unknown>)[scope];
+			else (next as Record<string, unknown>)[scope] = updated;
+		}
+		return next;
+	}
+	if (scope === SCOPE_PRESETS) {
+		const [wf, stage] = keyPath;
+		if (next.presets?.[wf]?.stages) {
+			const presets = { ...next.presets };
+			const presetBlock = { ...presets[wf] };
+			const stages = { ...presetBlock.stages };
+			delete stages[stage];
+			if (!Object.keys(stages).length) {
+				delete presetBlock.stages;
+				delete presets[wf];
+				if (!Object.keys(presets).length) delete next.presets;
+				else next.presets = presets;
+			} else {
+				presetBlock.stages = stages;
+				presets[wf] = presetBlock;
+				next.presets = presets;
+			}
+		}
+		return next;
+	}
+	return next;
 }
 
 function applyOverride(
@@ -104,6 +169,7 @@ const MSG_REQUIRES_INTERACTIVE = "/rpiv-models requires an interactive UI sessio
 const MSG_SAVE_FAILED = "Failed to save models.json (disk error or permissions).";
 const MSG_NO_SKILLS = "No skills registered; install or enable an extension that contributes skills.";
 const MSG_NO_WORKFLOWS = "No workflows discovered; install rpiv-workflow or define a workflow first.";
+const MSG_RESET_ALL = "All model overrides cleared.";
 
 export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("rpiv-models", {
@@ -115,11 +181,21 @@ export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 			}
 
 			const scope = await showFilterablePicker(ctx, {
-				title: "Models Config — scope",
-				proseLines: ["Pick which surface to override."],
+				title: "Model Overrides",
+				proseLines: ["Select scope."],
 				items: scopeItems(),
 			});
 			if (!scope) return;
+
+			if (scope === SCOPE_RESET_ALL) {
+				if (!saveJsonConfig(CONFIG_PATH, {})) {
+					ctx.ui.notify(MSG_SAVE_FAILED, "error");
+					return;
+				}
+				__resetModelsConfigCache();
+				ctx.ui.notify(MSG_RESET_ALL, "info");
+				return;
+			}
 
 			const keyPath: string[] = [];
 
@@ -130,8 +206,8 @@ export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 					return;
 				}
 				const picked = await showFilterablePicker(ctx, {
-					title: "Agents",
-					proseLines: ["Pick an agent."],
+					title: "Agent",
+					proseLines: ["Select agent."],
 					items,
 				});
 				if (!picked) return;
@@ -144,8 +220,8 @@ export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 					return;
 				}
 				const picked = await showFilterablePicker(ctx, {
-					title: "Stages",
-					proseLines: ["Pick a stage (flat — applies to this stage in every workflow that has it)."],
+					title: "Stage",
+					proseLines: ["Select stage."],
 					items: stages.map((s) => ({ value: s, label: s })),
 				});
 				if (!picked) return;
@@ -157,8 +233,8 @@ export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 					return;
 				}
 				const picked = await showFilterablePicker(ctx, {
-					title: "Skills",
-					proseLines: ["Pick a skill (applies to both /wf stages AND user-typed /skill:<name>)."],
+					title: "Skill",
+					proseLines: ["Select skill."],
 					items: names.map((n) => ({ value: n, label: n })),
 				});
 				if (!picked) return;
@@ -171,8 +247,8 @@ export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 					return;
 				}
 				const wf = await showFilterablePicker(ctx, {
-					title: "Presets — workflow",
-					proseLines: ["Pick a workflow to scope the override under."],
+					title: "Workflow",
+					proseLines: ["Select workflow."],
 					items: wfNames.map((n) => ({ value: n, label: n })),
 				});
 				if (!wf) return;
@@ -182,8 +258,8 @@ export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 					return;
 				}
 				const stage = await showFilterablePicker(ctx, {
-					title: `Presets — ${wf} stage`,
-					proseLines: [`Pick a stage within "${wf}".`],
+					title: `Stage — ${wf}`,
+					proseLines: ["Select stage."],
 					items: stages.map((s) => ({ value: s, label: s })),
 				});
 				if (!stage) return;
@@ -195,12 +271,31 @@ export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 				ctx.ui.notify("No models available (no API keys configured?).", "error");
 				return;
 			}
+			const currentKey = getCurrentOverrideKey(scope, keyPath);
+			const items = buildModelItems(available, currentKey);
+			if (scope !== SCOPE_DEFAULTS) {
+				items.push({ value: RESET_VALUE, label: RESET_LABEL });
+			}
 			const modelChoice = await showFilterablePicker(ctx, {
 				title: "Model",
-				proseLines: ["Pick a model. Esc to cancel without saving."],
-				items: buildModelItems(available),
+				proseLines: ["Select model."],
+				items,
+				preferredValue: currentKey ?? undefined,
 			});
 			if (!modelChoice) return;
+
+			if (modelChoice === RESET_VALUE) {
+				const fresh = loadJsonConfig<RawModelsConfig>(CONFIG_PATH);
+				const updated = removeOverride(fresh, scope, keyPath);
+				if (!saveJsonConfig(CONFIG_PATH, updated)) {
+					ctx.ui.notify(MSG_SAVE_FAILED, "error");
+					return;
+				}
+				__resetModelsConfigCache();
+				const label = `${scope}/${keyPath.join("/")}`;
+				ctx.ui.notify(`Removed ${label}.`, "info");
+				return;
+			}
 			const picked = available.find((m) => modelKey(m) === modelChoice);
 			if (!picked) {
 				ctx.ui.notify(`Model not found: ${modelChoice}`, "error");
@@ -210,8 +305,8 @@ export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 			let effort: ThinkingLevel | undefined;
 			if (picked.reasoning) {
 				const effortChoice = await showFilterablePicker(ctx, {
-					title: "Reasoning effort",
-					proseLines: [`Pick the thinking level for ${picked.name}.`],
+					title: "Reasoning Effort",
+					proseLines: [`Select effort level for ${picked.name}.`],
 					items: buildEffortItems(picked),
 				});
 				if (!effortChoice) return;
