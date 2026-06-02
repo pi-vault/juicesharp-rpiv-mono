@@ -4,6 +4,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { SelectItem } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelsConfig } from "./models-config.js";
+import { bundledAgentNames } from "./models-config-sources.js";
 import { registerRpivModelsCommand, removeOverride } from "./rpiv-models-command.js";
 
 vi.mock("./models-picker.js", () => ({
@@ -181,6 +182,62 @@ describe("/rpiv-models — checkmark display", () => {
 		const items = (modelPickerCall[1] as { items: SelectItem[] }).items;
 		const glmItem = items.find((i: SelectItem) => i.value === "zai/glm-4-7");
 		expect(glmItem?.label).not.toContain("✓");
+	});
+});
+
+describe("/rpiv-models — override checkmarks", () => {
+	it("marks scopes that hold overrides on the scope picker (not empty scopes, not reset-all)", async () => {
+		rmSync(CONFIG_PATH, { force: true });
+		mkdirSync(dirname(CONFIG_PATH), { recursive: true });
+		writeFileSync(CONFIG_PATH, JSON.stringify({ skills: { commit: "zai/glm-4-7" } }), "utf-8");
+
+		vi.mocked(showFilterablePicker).mockResolvedValueOnce(null); // cancel at scope picker
+		const { pi, handler } = makePi();
+		registerRpivModelsCommand(pi);
+		await handler()("", makeCtx());
+
+		const scopeListItems = (vi.mocked(showFilterablePicker).mock.calls[0][1] as { items: SelectItem[] }).items;
+		const byValue = Object.fromEntries(scopeListItems.map((i) => [i.value, i.label]));
+		expect(byValue.skills).toContain("✓");
+		expect(byValue.agents).not.toContain("✓");
+		expect(byValue.__reset_all__).not.toContain("✓");
+	});
+
+	it("marks only the overridden key on a key picker", async () => {
+		const agents = bundledAgentNames();
+		const target = agents[0]; // a real bundled agent so it appears in the list
+		rmSync(CONFIG_PATH, { force: true });
+		mkdirSync(dirname(CONFIG_PATH), { recursive: true });
+		writeFileSync(CONFIG_PATH, JSON.stringify({ agents: { [target]: "zai/glm-4-7" } }), "utf-8");
+
+		vi.mocked(showFilterablePicker).mockResolvedValueOnce("agents").mockResolvedValueOnce(null);
+		const { pi, handler } = makePi();
+		registerRpivModelsCommand(pi);
+		await handler()("", makeCtx());
+
+		const agentItems = (vi.mocked(showFilterablePicker).mock.calls[1][1] as { items: SelectItem[] }).items;
+		expect(agentItems.find((i) => i.value === target)?.label).toContain("✓");
+		expect(agentItems.find((i) => i.value !== target)?.label).not.toContain("✓");
+	});
+
+	it("floats the current model to the top of the model list and keeps its ✓", async () => {
+		rmSync(CONFIG_PATH, { force: true });
+		mkdirSync(dirname(CONFIG_PATH), { recursive: true });
+		// openai/gpt-5.5 is the SECOND model in the registry; make it the default.
+		writeFileSync(CONFIG_PATH, JSON.stringify({ defaults: "openai/gpt-5.5" }), "utf-8");
+
+		vi.mocked(showFilterablePicker).mockResolvedValueOnce("defaults").mockResolvedValueOnce(null);
+		const { pi, handler } = makePi();
+		registerRpivModelsCommand(pi);
+		await handler()("", makeCtx());
+
+		const modelItems = (vi.mocked(showFilterablePicker).mock.calls[1][1] as { items: SelectItem[] }).items;
+		expect(modelItems[0].value).toBe("openai/gpt-5.5"); // floated to index 0
+		expect(modelItems[0].label).toContain("✓");
+		// and it was passed as the preferred (preselected) value
+		expect((vi.mocked(showFilterablePicker).mock.calls[1][1] as { preferredValue?: string }).preferredValue).toBe(
+			"openai/gpt-5.5",
+		);
 	});
 });
 

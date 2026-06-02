@@ -33,6 +33,10 @@ const SCOPE_RESET_ALL = "__reset_all__";
 const RESET_VALUE = "__reset__";
 const RESET_LABEL = "Reset to default";
 
+/** Suffix appended to a picker label to mark "an override is set here". */
+const CHECK = " ✓";
+const withCheck = (label: string, has: boolean): string => (has ? `${label}${CHECK}` : label);
+
 // `thinking` is narrowed to the 5-value `ThinkingLevelValue` union (vs. raw
 // `string`) so the picker's persisted output mirrors the schema's runtime
 // validation surface (Plan Review row #concern-F).
@@ -46,23 +50,30 @@ interface RawModelsConfig {
 	presets?: Record<string, { stages?: Record<string, RawModelEntry> }>;
 }
 
-function scopeItems(): SelectItem[] {
+function scopeItems(raw: RawModelsConfig): SelectItem[] {
 	return [
-		{ value: SCOPE_DEFAULTS, label: "defaults" },
-		{ value: SCOPE_AGENTS, label: "agents" },
-		{ value: SCOPE_STAGES, label: "stages" },
-		{ value: SCOPE_SKILLS, label: "skills" },
-		{ value: SCOPE_PRESETS, label: "presets" },
+		{ value: SCOPE_DEFAULTS, label: withCheck("defaults", scopeHasOverride(raw, SCOPE_DEFAULTS)) },
+		{ value: SCOPE_AGENTS, label: withCheck("agents", scopeHasOverride(raw, SCOPE_AGENTS)) },
+		{ value: SCOPE_STAGES, label: withCheck("stages", scopeHasOverride(raw, SCOPE_STAGES)) },
+		{ value: SCOPE_SKILLS, label: withCheck("skills", scopeHasOverride(raw, SCOPE_SKILLS)) },
+		{ value: SCOPE_PRESETS, label: withCheck("presets", scopeHasOverride(raw, SCOPE_PRESETS)) },
 		{ value: SCOPE_RESET_ALL, label: "reset all overrides" },
 	];
 }
 
 function buildModelItems(models: Model<Api>[], currentKey?: string): SelectItem[] {
-	return models.map((m) => {
+	const items = models.map((m) => {
 		const key = modelKey(m);
-		const check = key === currentKey ? " ✓" : "";
+		const check = key === currentKey ? CHECK : "";
 		return { value: key, label: `${m.name}  (${m.provider})${check}` };
 	});
+	// Float the current selection to the top (keeps its ✓). RESET_VALUE is
+	// appended by the caller after this, so it stays last.
+	if (currentKey) {
+		const i = items.findIndex((it) => it.value === currentKey);
+		if (i > 0) items.unshift(items.splice(i, 1)[0]);
+	}
+	return items;
 }
 
 function buildEffortItems(picked: Model<Api>): SelectItem[] {
@@ -72,8 +83,38 @@ function buildEffortItems(picked: Model<Api>): SelectItem[] {
 	return [{ value: "__off__", label: "off" }, ...levels.map((level) => ({ value: level, label: level }))];
 }
 
+function loadRawConfig(): RawModelsConfig {
+	return loadJsonConfig<RawModelsConfig>(CONFIG_PATH);
+}
+
+/** True if the scope holds ≥1 override. (Post-prune ⇒ non-empty means real.) */
+function scopeHasOverride(raw: RawModelsConfig, scope: string): boolean {
+	if (scope === SCOPE_DEFAULTS) return raw.defaults !== undefined;
+	const map = (raw as Record<string, unknown>)[scope] as Record<string, unknown> | undefined;
+	return !!map && Object.keys(map).length > 0;
+}
+
+/**
+ * True if a specific key under a scope holds an override. For presets, `key` is
+ * a workflow name and "has override" means it carries ≥1 stage entry. Checks
+ * presence, not `model`, so a thinking-only entry still reads as overridden.
+ */
+function keyHasOverride(raw: RawModelsConfig, scope: string, key: string): boolean {
+	if (scope === SCOPE_PRESETS) {
+		const stages = raw.presets?.[key]?.stages;
+		return !!stages && Object.keys(stages).length > 0;
+	}
+	const map = (raw as Record<string, unknown>)[scope] as Record<string, unknown> | undefined;
+	return !!map && key in map;
+}
+
+/** True if a preset workflow's specific stage holds an override. */
+function presetStageHasOverride(raw: RawModelsConfig, wf: string, stage: string): boolean {
+	return raw.presets?.[wf]?.stages?.[stage] !== undefined;
+}
+
 function getCurrentOverrideKey(scope: string, keyPath: string[]): string | undefined {
-	const raw = loadJsonConfig<RawModelsConfig>(CONFIG_PATH);
+	const raw = loadRawConfig();
 	if (scope === SCOPE_DEFAULTS) {
 		const entry = raw.defaults;
 		return typeof entry === "string" ? entry : entry?.model;
@@ -197,10 +238,13 @@ export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 				return;
 			}
 
+			// Raw config snapshot for ✓ decoration across the scope + key pickers.
+			// Read once; no write happens during the interactive flow.
+			const raw = loadRawConfig();
 			const scope = await showFilterablePicker(ctx, {
 				title: "Model Overrides",
 				proseLines: ["Select scope."],
-				items: scopeItems(),
+				items: scopeItems(raw),
 			});
 			if (!scope) return;
 
@@ -224,7 +268,10 @@ export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 			const keyPath: string[] = [];
 
 			if (scope === SCOPE_AGENTS) {
-				const items = bundledAgentNames().map((n) => ({ value: n, label: n }));
+				const items = bundledAgentNames().map((n) => ({
+					value: n,
+					label: withCheck(n, keyHasOverride(raw, SCOPE_AGENTS, n)),
+				}));
 				if (items.length === 0) {
 					ctx.ui.notify("No bundled agents found.", "error");
 					return;
@@ -246,7 +293,7 @@ export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 				const picked = await showFilterablePicker(ctx, {
 					title: "Stage",
 					proseLines: ["Select stage."],
-					items: stages.map((s) => ({ value: s, label: s })),
+					items: stages.map((s) => ({ value: s, label: withCheck(s, keyHasOverride(raw, SCOPE_STAGES, s)) })),
 				});
 				if (!picked) return;
 				keyPath.push(picked);
@@ -259,7 +306,7 @@ export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 				const picked = await showFilterablePicker(ctx, {
 					title: "Skill",
 					proseLines: ["Select skill."],
-					items: names.map((n) => ({ value: n, label: n })),
+					items: names.map((n) => ({ value: n, label: withCheck(n, keyHasOverride(raw, SCOPE_SKILLS, n)) })),
 				});
 				if (!picked) return;
 				keyPath.push(picked);
@@ -273,7 +320,7 @@ export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 				const wf = await showFilterablePicker(ctx, {
 					title: "Workflow",
 					proseLines: ["Select workflow."],
-					items: wfNames.map((n) => ({ value: n, label: n })),
+					items: wfNames.map((n) => ({ value: n, label: withCheck(n, keyHasOverride(raw, SCOPE_PRESETS, n)) })),
 				});
 				if (!wf) return;
 				const stages = wfMap[wf] ?? [];
@@ -284,7 +331,7 @@ export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 				const stage = await showFilterablePicker(ctx, {
 					title: `Stage — ${wf}`,
 					proseLines: ["Select stage."],
-					items: stages.map((s) => ({ value: s, label: s })),
+					items: stages.map((s) => ({ value: s, label: withCheck(s, presetStageHasOverride(raw, wf, s)) })),
 				});
 				if (!stage) return;
 				keyPath.push(wf, stage);
