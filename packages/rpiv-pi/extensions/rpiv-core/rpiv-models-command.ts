@@ -94,43 +94,51 @@ function getCurrentOverrideKey(scope: string, keyPath: string[]): string | undef
 	return undefined;
 }
 
-function removeOverride(config: RawModelsConfig, scope: string, keyPath: string[]): RawModelsConfig {
+/**
+ * Strip one override with cascading empty-container cleanup. Returns the new
+ * config AND whether anything was actually removed — the handler branches its
+ * notification on `removed` so a reset chosen on a key with no existing
+ * override reports honestly instead of a misleading "Removed".
+ */
+export function removeOverride(
+	config: RawModelsConfig,
+	scope: string,
+	keyPath: string[],
+): { next: RawModelsConfig; removed: boolean } {
 	const next: RawModelsConfig = { ...config };
 	if (scope === SCOPE_DEFAULTS) {
+		if (next.defaults === undefined) return { next, removed: false };
 		delete next.defaults;
-		return next;
+		return { next, removed: true };
 	}
 	if (scope === SCOPE_AGENTS || scope === SCOPE_STAGES || scope === SCOPE_SKILLS) {
 		const map = (next as Record<string, unknown>)[scope] as Record<string, unknown> | undefined;
-		if (map && keyPath[0] in map) {
-			const updated: Record<string, unknown> = { ...map };
-			delete updated[keyPath[0]];
-			if (!Object.keys(updated).length) delete (next as Record<string, unknown>)[scope];
-			else (next as Record<string, unknown>)[scope] = updated;
-		}
-		return next;
+		if (!map || !(keyPath[0] in map)) return { next, removed: false };
+		const updated: Record<string, unknown> = { ...map };
+		delete updated[keyPath[0]];
+		if (!Object.keys(updated).length) delete (next as Record<string, unknown>)[scope];
+		else (next as Record<string, unknown>)[scope] = updated;
+		return { next, removed: true };
 	}
 	if (scope === SCOPE_PRESETS) {
 		const [wf, stage] = keyPath;
-		if (next.presets?.[wf]?.stages) {
-			const presets = { ...next.presets };
-			const presetBlock = { ...presets[wf] };
-			const stages = { ...presetBlock.stages };
-			delete stages[stage];
-			if (!Object.keys(stages).length) {
-				delete presetBlock.stages;
-				delete presets[wf];
-				if (!Object.keys(presets).length) delete next.presets;
-				else next.presets = presets;
-			} else {
-				presetBlock.stages = stages;
-				presets[wf] = presetBlock;
-				next.presets = presets;
-			}
+		if (next.presets?.[wf]?.stages?.[stage] === undefined) return { next, removed: false };
+		const presets = { ...next.presets };
+		const presetBlock = { ...presets[wf] };
+		const stages = { ...presetBlock.stages };
+		delete stages[stage];
+		if (!Object.keys(stages).length) {
+			delete presets[wf];
+			if (!Object.keys(presets).length) delete next.presets;
+			else next.presets = presets;
+		} else {
+			presetBlock.stages = stages;
+			presets[wf] = presetBlock;
+			next.presets = presets;
 		}
-		return next;
+		return { next, removed: true };
 	}
-	return next;
+	return { next, removed: false };
 }
 
 function applyOverride(
@@ -170,6 +178,15 @@ const MSG_SAVE_FAILED = "Failed to save models.json (disk error or permissions).
 const MSG_NO_SKILLS = "No skills registered; install or enable an extension that contributes skills.";
 const MSG_NO_WORKFLOWS = "No workflows discovered; install rpiv-workflow or define a workflow first.";
 const MSG_RESET_ALL = "All model overrides cleared.";
+const MSG_RESET_ALL_TITLE = "Reset ALL model overrides?";
+const MSG_RESET_ALL_BODY = [
+	"This clears every override in `~/.config/rpiv-pi/models.json` (defaults,",
+	"agents, stages, skills, presets). This cannot be undone.",
+	"",
+	"Per-agent overrides already written into agent frontmatter revert on the",
+	"next agent sync / session start, not immediately.",
+].join("\n");
+const MSG_RESET_ALL_CANCELLED = "Reset cancelled.";
 
 export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("rpiv-models", {
@@ -188,6 +205,13 @@ export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 			if (!scope) return;
 
 			if (scope === SCOPE_RESET_ALL) {
+				// Destructive + irreversible — gate behind a confirm dialog, mirroring
+				// /rpiv-setup's prune (the repo's established destructive-action pattern).
+				const confirmed = await ctx.ui.confirm(MSG_RESET_ALL_TITLE, MSG_RESET_ALL_BODY);
+				if (!confirmed) {
+					ctx.ui.notify(MSG_RESET_ALL_CANCELLED, "info");
+					return;
+				}
 				if (!saveJsonConfig(CONFIG_PATH, {})) {
 					ctx.ui.notify(MSG_SAVE_FAILED, "error");
 					return;
@@ -285,14 +309,19 @@ export function registerRpivModelsCommand(pi: ExtensionAPI): void {
 			if (!modelChoice) return;
 
 			if (modelChoice === RESET_VALUE) {
+				const label = `${scope}/${keyPath.join("/")}`;
 				const fresh = loadJsonConfig<RawModelsConfig>(CONFIG_PATH);
-				const updated = removeOverride(fresh, scope, keyPath);
+				const { next: updated, removed } = removeOverride(fresh, scope, keyPath);
+				if (!removed) {
+					// Nothing to remove — report honestly, skip the no-op write + cache reset.
+					ctx.ui.notify(`No override set for ${label}.`, "info");
+					return;
+				}
 				if (!saveJsonConfig(CONFIG_PATH, updated)) {
 					ctx.ui.notify(MSG_SAVE_FAILED, "error");
 					return;
 				}
 				__resetModelsConfigCache();
-				const label = `${scope}/${keyPath.join("/")}`;
 				ctx.ui.notify(`Removed ${label}.`, "info");
 				return;
 			}

@@ -4,7 +4,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { SelectItem } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelsConfig } from "./models-config.js";
-import { registerRpivModelsCommand } from "./rpiv-models-command.js";
+import { registerRpivModelsCommand, removeOverride } from "./rpiv-models-command.js";
 
 vi.mock("./models-picker.js", () => ({
 	showFilterablePicker: vi.fn(),
@@ -43,7 +43,7 @@ function makeCtx(hasUI = true) {
 	return {
 		hasUI,
 		cwd: process.cwd(),
-		ui: { notify: vi.fn() },
+		ui: { notify: vi.fn(), confirm: vi.fn(async () => true) },
 		modelRegistry: { getAvailable: () => models },
 	} as unknown as ExtensionContext;
 }
@@ -52,6 +52,10 @@ const CONFIG_PATH = join(process.env.HOME!, ".config", "rpiv-pi", "models.json")
 
 beforeEach(() => {
 	vi.restoreAllMocks();
+	// restoreAllMocks does not drain a module-mock's mockResolvedValueOnce queue;
+	// reset explicitly so a test that returns early can't bleed leftover picker
+	// answers into the next test.
+	vi.mocked(showFilterablePicker).mockReset();
 });
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -199,10 +203,86 @@ describe("/rpiv-models — per-entry reset", () => {
 		expect(stored.agents).toBeUndefined();
 		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Removed"), "info");
 	});
+
+	it("reports honestly (no misleading 'Removed') when the key has no override", async () => {
+		rmSync(CONFIG_PATH, { force: true });
+		mkdirSync(dirname(CONFIG_PATH), { recursive: true });
+		// Config has one agent override; reset a DIFFERENT agent that has none.
+		writeFileSync(CONFIG_PATH, JSON.stringify({ agents: { "codebase-locator": "zai/glm-4-7" } }), "utf-8");
+
+		vi.mocked(showFilterablePicker)
+			.mockResolvedValueOnce("agents")
+			.mockResolvedValueOnce("codebase-analyst")
+			.mockResolvedValueOnce("__reset__");
+		const { pi, handler } = makePi();
+		registerRpivModelsCommand(pi);
+		const ctx = makeCtx();
+		await handler()("", ctx);
+
+		const stored = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+		expect(stored.agents["codebase-locator"]).toBe("zai/glm-4-7"); // untouched
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("No override set"), "info");
+		expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Removed"), "info");
+	});
+});
+
+describe("removeOverride (cascade cleanup)", () => {
+	it("prunes the empty scope map when the last agent entry is removed", () => {
+		const { next, removed } = removeOverride({ agents: { commit: "zai/glm-4-7" } }, "agents", ["commit"]);
+		expect(removed).toBe(true);
+		expect(next.agents).toBeUndefined();
+	});
+
+	it("collapses the whole presets tree when the last stage is removed", () => {
+		const { next, removed } = removeOverride(
+			{ presets: { ship: { stages: { research: "zai/glm-4-7" } } } },
+			"presets",
+			["ship", "research"],
+		);
+		expect(removed).toBe(true);
+		expect(next.presets).toBeUndefined();
+	});
+
+	it("keeps sibling stages/workflows when removing one preset stage", () => {
+		const { next, removed } = removeOverride(
+			{
+				presets: {
+					ship: { stages: { research: "zai/glm-4-7", plan: "anthropic/opus" } },
+					polish: { stages: { review: "zai/glm-4-7" } },
+				},
+			},
+			"presets",
+			["ship", "research"],
+		);
+		expect(removed).toBe(true);
+		expect(next.presets).toEqual({
+			ship: { stages: { plan: "anthropic/opus" } },
+			polish: { stages: { review: "zai/glm-4-7" } },
+		});
+	});
+
+	it("removes a defaults override", () => {
+		const { next, removed } = removeOverride({ defaults: "zai/glm-4-7" }, "defaults", []);
+		expect(removed).toBe(true);
+		expect(next.defaults).toBeUndefined();
+	});
+
+	it("reports removed=false and leaves config untouched when the key is absent", () => {
+		const config = { agents: { commit: "zai/glm-4-7" } };
+		const { next, removed } = removeOverride(config, "agents", ["research"]);
+		expect(removed).toBe(false);
+		expect(next).toEqual(config);
+	});
+
+	it("reports removed=false for an absent preset stage", () => {
+		const config = { presets: { ship: { stages: { research: "zai/glm-4-7" } } } };
+		expect(removeOverride(config, "presets", ["ship", "plan"]).removed).toBe(false);
+		expect(removeOverride(config, "presets", ["polish", "review"]).removed).toBe(false);
+	});
 });
 
 describe("/rpiv-models — global reset", () => {
-	it("clears entire config when reset-all scope is chosen", async () => {
+	it("clears entire config when reset-all scope is chosen and confirmed", async () => {
 		rmSync(CONFIG_PATH, { force: true });
 		mkdirSync(dirname(CONFIG_PATH), { recursive: true });
 		writeFileSync(
@@ -221,9 +301,28 @@ describe("/rpiv-models — global reset", () => {
 		const ctx = makeCtx();
 		await handler()("", ctx);
 
+		expect(ctx.ui.confirm).toHaveBeenCalledTimes(1);
 		const stored = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
 		expect(stored).toEqual({});
 		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("cleared"), "info");
+	});
+
+	it("does NOT wipe config when the confirm dialog is cancelled", async () => {
+		rmSync(CONFIG_PATH, { force: true });
+		mkdirSync(dirname(CONFIG_PATH), { recursive: true });
+		const original = { defaults: "zai/glm-4-7", skills: { commit: "anthropic/opus" } };
+		writeFileSync(CONFIG_PATH, JSON.stringify(original), "utf-8");
+
+		vi.mocked(showFilterablePicker).mockResolvedValueOnce("__reset_all__");
+		const { pi, handler } = makePi();
+		registerRpivModelsCommand(pi);
+		const ctx = makeCtx();
+		vi.mocked(ctx.ui.confirm).mockResolvedValueOnce(false);
+		await handler()("", ctx);
+
+		const stored = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+		expect(stored).toEqual(original); // untouched
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("cancelled"), "info");
 	});
 });
 
