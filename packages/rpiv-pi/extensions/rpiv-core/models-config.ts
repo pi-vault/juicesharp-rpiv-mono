@@ -84,7 +84,8 @@ const PresetSchema = Type.Object(
  * `Type.Record(Type.String(), …)` wrappers are structurally dynamic and cannot
  * stamp `additionalProperties: false` — record-key typos (`presets.shipp`,
  * `skills.committ`) pass schema validation by design and fall through to the
- * defaults cascade at lookup. Runtime warn-on-miss is a deferred safety net.
+ * defaults cascade at lookup. `findUnknownModelKeys` (wired into session_start
+ * by models-config-validate.ts) is the runtime warn-on-miss safety net.
  */
 const ModelsConfigSchema = Type.Object(
 	{
@@ -285,4 +286,64 @@ export function resolveStageModel(
 		if (perSkill) return perSkill;
 	}
 	return config.defaults;
+}
+
+// ---------------------------------------------------------------------------
+// Warn-on-miss — surface record-key typos that schema validation can't catch.
+// ---------------------------------------------------------------------------
+
+/**
+ * Known valid keys per axis, supplied by the call site that can determine them
+ * (bundled-agent readdir, skill registry, workflow loader). An axis whose list
+ * is `undefined` is SKIPPED — its key universe couldn't be determined (e.g.
+ * rpiv-workflow absent → `stages`/`workflows` unknown), so its configured keys
+ * are never falsely reported as unknown.
+ */
+export interface KnownModelKeys {
+	agents?: readonly string[];
+	stages?: readonly string[];
+	skills?: readonly string[];
+	workflows?: readonly string[];
+	stagesByWorkflow?: Record<string, readonly string[]>;
+}
+
+/**
+ * Return dotted paths of configured models.json keys that match no known key —
+ * e.g. `skills.committ`, `agents.codebase-analzyer`, `presets.shipp`,
+ * `presets.ship.stages.plann`. Record-key typos pass TypeBox validation
+ * (records are structurally dynamic) and silently fall through to the defaults
+ * cascade; this surfaces them. Axes with an `undefined` known-list are skipped;
+ * an unknown preset workflow short-circuits (its inner stages aren't validated
+ * against an absent stage list).
+ */
+export function findUnknownModelKeys(config: ModelsConfig, known: KnownModelKeys): string[] {
+	const unknown: string[] = [];
+	const check = (
+		obj: Record<string, unknown> | undefined,
+		valid: readonly string[] | undefined,
+		prefix: string,
+	): void => {
+		if (!obj || !valid) return;
+		const set = new Set(valid);
+		for (const key of Object.keys(obj)) {
+			if (!set.has(key)) unknown.push(`${prefix}.${key}`);
+		}
+	};
+
+	check(config.agents, known.agents, "agents");
+	check(config.stages, known.stages, "stages");
+	check(config.skills, known.skills, "skills");
+
+	if (config.presets && known.workflows) {
+		const wfSet = new Set(known.workflows);
+		for (const [wf, block] of Object.entries(config.presets)) {
+			if (!wfSet.has(wf)) {
+				unknown.push(`presets.${wf}`);
+				continue; // unknown workflow — can't validate its inner stages
+			}
+			check(block.stages, known.stagesByWorkflow?.[wf], `presets.${wf}.stages`);
+		}
+	}
+
+	return unknown;
 }

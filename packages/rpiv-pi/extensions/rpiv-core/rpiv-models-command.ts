@@ -13,15 +13,14 @@
  *   - presets / <wf> / stages / <s>  (workflow picker → stage picker per-wf)
  */
 
-import { readdirSync } from "node:fs";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels, type ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import { configPath, loadJsonConfig, modelKey, saveJsonConfig } from "@juicesharp/rpiv-config";
 import { __resetModelsConfigCache, THINKING_LEVEL_VALUES, type ThinkingLevelValue } from "./models-config.js";
+import { bundledAgentNames, loadWorkflowMap, skillCommandNames } from "./models-config-sources.js";
 import { showFilterablePicker } from "./models-picker.js";
-import { BUNDLED_AGENTS_DIR } from "./paths.js";
 
 const CONFIG_PATH = configPath("rpiv-pi", "models.json");
 
@@ -52,40 +51,6 @@ function scopeItems(): SelectItem[] {
 		{ value: SCOPE_SKILLS, label: "skills — per-skill override (workflow + standalone)" },
 		{ value: SCOPE_PRESETS, label: "presets — per-workflow per-stage override" },
 	];
-}
-
-function bundledAgentNames(): string[] {
-	try {
-		return readdirSync(BUNDLED_AGENTS_DIR)
-			.filter((f) => f.endsWith(".md"))
-			.map((f) => f.slice(0, -3))
-			.sort();
-	} catch {
-		return [];
-	}
-}
-
-function skillCommandNames(pi: ExtensionAPI): string[] {
-	return pi
-		.getCommands()
-		.filter((c: { source?: string }) => c.source === "skill")
-		.map((c: { name: string }) => (c.name.startsWith("skill:") ? c.name.slice("skill:".length) : c.name))
-		.sort();
-}
-
-async function loadWorkflowMap(cwd: string): Promise<Record<string, string[]>> {
-	// rpiv-workflow's `loadWorkflows` returns `{ workflows: [] }` for the
-	// no-sibling case (does NOT throw), so an `isModuleNotFound` catch would
-	// be unreachable AND would silently swallow genuine load failures. Real
-	// errors propagate to the user via ctx.ui.notify in the caller (Plan
-	// Review row #concern-E).
-	const wf = await import("@juicesharp/rpiv-workflow");
-	const loaded = await wf.loadWorkflows(cwd);
-	const map: Record<string, string[]> = {};
-	for (const w of loaded.workflows) {
-		map[w.name] = Object.keys(w.stages ?? {}).sort();
-	}
-	return map;
 }
 
 function buildModelItems(models: Model<Api>[], currentKey?: string): SelectItem[] {

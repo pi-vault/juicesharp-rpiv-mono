@@ -15,6 +15,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { FLAG_DEBUG } from "./constants.js";
 import { registerModelOverrideLifecycle, registerModelOverrideSessionStart } from "./model-override.js";
+import { registerModelsConfigValidation } from "./models-config-validate.js";
 import { registerBuiltInWorkflows } from "./register-built-in-workflows.js";
 import { registerRpivModelsCommand } from "./rpiv-models-command.js";
 import { registerSessionHooks } from "./session-hooks.js";
@@ -35,6 +36,9 @@ export default function (pi: ExtensionAPI) {
 	registerUpdateAgentsCommand(pi);
 	registerSetupCommand(pi);
 	registerRpivModelsCommand(pi); // /rpiv-models cascade picker
+	// Warn-on-miss: surface models.json record-key typos (skills.committ,
+	// presets.shipp) that pass schema validation but silently never apply.
+	registerModelsConfigValidation(pi);
 	// Stage model/effort override: the session_start hook captures modelRegistry +
 	// current model UNCONDITIONALLY (independent of rpiv-workflow), and the
 	// lifecycle listener registration degrades gracefully when the sibling is

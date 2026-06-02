@@ -77,6 +77,8 @@ beforeEach(async () => {
 	skillBracket.__resetSkillBracketState();
 	const modelsConfigModule = await import("../packages/rpiv-pi/extensions/rpiv-core/models-config.js");
 	modelsConfigModule.__resetModelsConfigCache();
+	const modelsConfigValidate = await import("../packages/rpiv-pi/extensions/rpiv-core/models-config-validate.js");
+	modelsConfigValidate.__resetModelsConfigValidation();
 
 	const titleSpinner = await import("../packages/rpiv-warp/title-spinner.js");
 	titleSpinner.__resetState();

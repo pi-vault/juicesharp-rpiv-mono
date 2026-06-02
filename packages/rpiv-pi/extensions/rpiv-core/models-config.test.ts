@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	__resetModelsConfigCache,
+	findUnknownModelKeys,
 	getAgentModelConfig,
 	loadModelsConfig,
 	type ModelsConfig,
@@ -384,6 +385,59 @@ describe("models-config", () => {
 			// Standalone bracket passes only `skill`; preset + stage are undefined.
 			expect(resolveStageModel(config, { skill: "commit" })).toEqual({ model: "zai/glm-4-7" });
 			expect(resolveStageModel(config, { skill: "unknown" })).toEqual({ model: "anthropic/opus" });
+		});
+	});
+
+	describe("findUnknownModelKeys", () => {
+		const known = {
+			agents: ["codebase-analyzer", "codebase-locator"],
+			stages: ["research", "plan"],
+			skills: ["commit", "design"],
+			workflows: ["ship"],
+			stagesByWorkflow: { ship: ["research", "plan"] },
+		};
+
+		it("returns [] when every key matches", () => {
+			const config: ModelsConfig = {
+				agents: { "codebase-analyzer": { model: "a/b" } },
+				stages: { research: { model: "a/b" } },
+				skills: { commit: { model: "a/b" } },
+				presets: { ship: { stages: { plan: { model: "a/b" } } } },
+			};
+			expect(findUnknownModelKeys(config, known)).toEqual([]);
+		});
+
+		it("flags typo'd keys across every axis as dotted paths", () => {
+			const config: ModelsConfig = {
+				agents: { "codebase-analzyer": { model: "a/b" } },
+				stages: { reserch: { model: "a/b" } },
+				skills: { committ: { model: "a/b" } },
+				presets: { ship: { stages: { plann: { model: "a/b" } } } },
+			};
+			expect(findUnknownModelKeys(config, known).sort()).toEqual(
+				["agents.codebase-analzyer", "presets.ship.stages.plann", "skills.committ", "stages.reserch"].sort(),
+			);
+		});
+
+		it("flags an unknown preset workflow and does not descend into its stages", () => {
+			const config: ModelsConfig = {
+				presets: { shipp: { stages: { plann: { model: "a/b" } } } },
+			};
+			expect(findUnknownModelKeys(config, known)).toEqual(["presets.shipp"]);
+		});
+
+		it("skips an axis whose known-list is undefined (universe unknown)", () => {
+			const config: ModelsConfig = {
+				stages: { anything: { model: "a/b" } },
+				presets: { whatever: { stages: { x: { model: "a/b" } } } },
+			};
+			// No `stages`/`workflows` provided → those axes are not validated.
+			expect(findUnknownModelKeys(config, { agents: ["codebase-analyzer"], skills: ["commit"] })).toEqual([]);
+		});
+
+		it("ignores defaults (no key to validate)", () => {
+			const config: ModelsConfig = { defaults: { model: "a/b" } };
+			expect(findUnknownModelKeys(config, known)).toEqual([]);
 		});
 	});
 });
