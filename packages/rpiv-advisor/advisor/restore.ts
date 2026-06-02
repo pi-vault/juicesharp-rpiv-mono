@@ -5,7 +5,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { parseModelKey } from "@juicesharp/rpiv-config";
+import { modelKey, parseModelKey } from "@juicesharp/rpiv-config";
 import { loadAdvisorConfig, validateDisabledForModels } from "./config.js";
 import { ADVISOR_TOOL_NAME, errModelUnavailable, msgAdvisorRestored, msgAdvisorRestoredInactive } from "./messages.js";
 import { isExecutorBlocked, setDisabledForModels } from "./policy.js";
@@ -55,7 +55,7 @@ export function restoreAdvisorState(ctx: ExtensionContext, pi: ExtensionAPI): vo
 	}
 
 	if (isExecutorBlocked(ctx, pi.getThinkingLevel())) {
-		const advisorLabel = `${model.provider}:${model.id}`;
+		const advisorLabel = modelKey(model);
 		notifyOnce(msgAdvisorRestoredInactive(advisorLabel, config.effort), "info");
 		return;
 	}
@@ -65,7 +65,7 @@ export function restoreAdvisorState(ctx: ExtensionContext, pi: ExtensionAPI): vo
 		pi.setActiveTools([...active, ADVISOR_TOOL_NAME]);
 	}
 
-	notifyOnce(msgAdvisorRestored(`${model.provider}:${model.id}`, config.effort), "info");
+	notifyOnce(msgAdvisorRestored(modelKey(model), config.effort), "info");
 }
 
 export function registerAdvisorSessionStart(pi: ExtensionAPI): void {

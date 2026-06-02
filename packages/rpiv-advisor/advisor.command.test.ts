@@ -106,7 +106,7 @@ describe("/advisor — selection not found", () => {
 
 describe("/advisor — non-reasoning model", () => {
 	it("sets model, adds tool, notifies enabled (no effort suffix)", async () => {
-		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic:opus");
+		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic/opus");
 		const { pi, captured } = register();
 		const ctx = createMockCtx({ hasUI: true, models: [modelA] });
 		await captured.commands.get("advisor")?.handler("", ctx as never);
@@ -114,14 +114,14 @@ describe("/advisor — non-reasoning model", () => {
 		expect(getAdvisorEffort()).toBeUndefined();
 		expect(pi.setActiveTools).toHaveBeenCalledWith(expect.arrayContaining([ADVISOR_TOOL_NAME]));
 		const [msg] = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls.at(-1) ?? [];
-		expect(msg).toBe("Advisor: anthropic:opus");
+		expect(msg).toBe("Advisor: anthropic/opus");
 		expect(showEffortPicker).not.toHaveBeenCalled();
 	});
 });
 
 describe("/advisor — reasoning model", () => {
 	it("returns early when effort picker is cancelled", async () => {
-		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic:opus-thinking");
+		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic/opus-thinking");
 		vi.mocked(showEffortPicker).mockResolvedValueOnce(null);
 		const { captured } = register();
 		const ctx = createMockCtx({ hasUI: true, models: [modelR] });
@@ -131,7 +131,7 @@ describe("/advisor — reasoning model", () => {
 	});
 
 	it("OFF_VALUE yields effort=undefined", async () => {
-		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic:opus-thinking");
+		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic/opus-thinking");
 		vi.mocked(showEffortPicker).mockResolvedValueOnce("__off__");
 		const { captured } = register();
 		const ctx = createMockCtx({ hasUI: true, models: [modelR] });
@@ -139,11 +139,11 @@ describe("/advisor — reasoning model", () => {
 		expect(getAdvisorModel()).toBe(modelR);
 		expect(getAdvisorEffort()).toBeUndefined();
 		const [msg] = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls.at(-1) ?? [];
-		expect(msg).toBe("Advisor: anthropic:opus-thinking");
+		expect(msg).toBe("Advisor: anthropic/opus-thinking");
 	});
 
 	it("explicit level persists effort + shows it in enabled notification", async () => {
-		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic:opus-thinking");
+		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic/opus-thinking");
 		vi.mocked(showEffortPicker).mockResolvedValueOnce("medium");
 		const { pi, captured } = register();
 		pi.setActiveTools([ADVISOR_TOOL_NAME]);
@@ -152,7 +152,7 @@ describe("/advisor — reasoning model", () => {
 		expect(getAdvisorModel()).toBe(modelR);
 		expect(getAdvisorEffort()).toBe("medium");
 		const [msg] = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls.at(-1) ?? [];
-		expect(msg).toBe("Advisor: anthropic:opus-thinking, medium");
+		expect(msg).toBe("Advisor: anthropic/opus-thinking, medium");
 	});
 });
 
@@ -197,7 +197,7 @@ describe("/advisor — save failure (persist-first ordering, review I2)", () => 
 		mkdirSync(dirname(configPath), { recursive: true });
 		mkdirSync(configPath, { recursive: true });
 		try {
-			vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic:opus");
+			vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic/opus");
 			const { pi, captured } = register();
 			const ctx = createMockCtx({ hasUI: true, models: [modelA] });
 
@@ -207,7 +207,7 @@ describe("/advisor — save failure (persist-first ordering, review I2)", () => 
 				expect.stringContaining("Failed to save advisor selection"),
 				"error",
 			);
-			expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Advisor: anthropic:opus"), "info");
+			expect(ctx.ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("Advisor: anthropic/opus"), "info");
 			// Persist-first: in-memory model must NOT be set; tool must NOT be added.
 			expect(getAdvisorModel()).toBeUndefined();
 			expect(pi.setActiveTools).not.toHaveBeenCalledWith(expect.arrayContaining([ADVISOR_TOOL_NAME]));
@@ -394,7 +394,7 @@ describe("registerModelSelectHandler — blocklist", () => {
 
 describe("/advisor — blocked executor notification", () => {
 	it("shows inactive notification and does NOT activate the tool when executor is blocked", async () => {
-		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic:opus");
+		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic/opus");
 		setDisabledForModels(["anthropic:sonnet"]);
 		const { pi, captured } = register();
 		vi.mocked(pi.setActiveTools).mockClear();
@@ -408,7 +408,7 @@ describe("/advisor — blocked executor notification", () => {
 	});
 
 	it("strips advisor from active tools when /advisor runs with executor blocked and tool already active", async () => {
-		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic:opus");
+		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic/opus");
 		setDisabledForModels(["anthropic:sonnet"]);
 		const { pi, captured } = register();
 		pi.setActiveTools([ADVISOR_TOOL_NAME, "other"]);
@@ -420,17 +420,17 @@ describe("/advisor — blocked executor notification", () => {
 	});
 
 	it("shows enabled notification without inactive qualifier when executor is not blocked", async () => {
-		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic:opus");
+		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic/opus");
 		const { captured } = register();
 		const ctx = createMockCtx({ hasUI: true, models: [modelA], model: modelA });
 		await captured.commands.get("advisor")?.handler("", ctx as never);
 		const [msg, severity] = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls.at(-1) ?? [];
-		expect(msg).toBe("Advisor: anthropic:opus");
+		expect(msg).toBe("Advisor: anthropic/opus");
 		expect(severity).toBe("info");
 	});
 
 	it("shows inactive notification when executor blocked by effort-aware entry at threshold", async () => {
-		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic:opus");
+		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic/opus");
 		setDisabledForModels([{ model: "anthropic:sonnet", minEffort: "high" }]);
 		const { pi, captured } = register();
 		vi.mocked(pi.getThinkingLevel).mockReturnValue("high");
@@ -445,13 +445,13 @@ describe("/advisor — blocked executor notification", () => {
 	});
 
 	it("shows enabled notification when executor effort below threshold for effort-aware entry", async () => {
-		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic:opus");
+		vi.mocked(showAdvisorPicker).mockResolvedValueOnce("anthropic/opus");
 		setDisabledForModels([{ model: "anthropic:sonnet", minEffort: "high" }]);
 		const { captured } = register();
 		const ctx = createMockCtx({ hasUI: true, models: [modelA], model: modelBlocked });
 		await captured.commands.get("advisor")?.handler("", ctx as never);
 		const [msg, severity] = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls.at(-1) ?? [];
-		expect(msg).toBe("Advisor: anthropic:opus");
+		expect(msg).toBe("Advisor: anthropic/opus");
 		expect(severity).toBe("info");
 	});
 });

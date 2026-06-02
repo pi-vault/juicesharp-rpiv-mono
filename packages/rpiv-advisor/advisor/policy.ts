@@ -5,7 +5,7 @@
 
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { modelKey } from "@juicesharp/rpiv-config";
+import { modelKey, parseModelKey } from "@juicesharp/rpiv-config";
 import type { DisabledForModelsEntry } from "./config.js";
 import { EFFORT_ORDINAL } from "./messages.js";
 
@@ -15,14 +15,26 @@ export function setDisabledForModels(models: DisabledForModelsEntry[]): void {
 	disabledForModelsCache = models;
 }
 
+/**
+ * Normalise a stored blocklist entry's model key to the canonical slash form.
+ * Tolerates legacy colon-form persisted lists so `disabledForModels:
+ * ["anthropic:sonnet"]` keeps blocking post-slash-canonical-migration without
+ * requiring a re-save. Pass-through for already-canonical (slash) values and
+ * for malformed input.
+ */
+function canonicalKey(entry: string): string {
+	const parsed = parseModelKey(entry);
+	return parsed ? `${parsed.provider}/${parsed.modelId}` : entry;
+}
+
 export function isModelBlocked(model: Model<Api> | undefined, thinkingLevel?: string): boolean {
 	if (!model) return false;
 	const key = modelKey(model);
 	for (const entry of disabledForModelsCache) {
 		if (typeof entry === "string") {
-			if (entry === key) return true;
+			if (canonicalKey(entry) === key) return true;
 		} else {
-			if (entry.model !== key) continue;
+			if (canonicalKey(entry.model) !== key) continue;
 			if (entry.minEffort === undefined) return true;
 			const thresholdOrdinal = EFFORT_ORDINAL.indexOf(entry.minEffort);
 			const executorOrdinal = EFFORT_ORDINAL.indexOf(thinkingLevel as ThinkingLevel);
