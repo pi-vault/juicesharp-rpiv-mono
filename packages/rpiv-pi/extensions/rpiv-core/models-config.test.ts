@@ -4,9 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	__resetModelsConfigCache,
 	getAgentModelConfig,
-	getStageModelConfig,
 	loadModelsConfig,
 	type ModelsConfig,
+	resolveStageModel,
 } from "./models-config.js";
 
 const TEST_HOME = process.env.HOME!;
@@ -114,6 +114,105 @@ describe("models-config", () => {
 			});
 		});
 
+		it("cascades defaults into skills entries (per-field)", () => {
+			writeFileSync(
+				configFilePath,
+				JSON.stringify({
+					defaults: "anthropic/opus",
+					skills: {
+						commit: { thinking: "minimal" },
+					},
+				}),
+				"utf-8",
+			);
+			const config = loadModelsConfig();
+			expect(config.skills!.commit).toEqual({
+				model: "anthropic/opus", // from defaults
+				thinking: "minimal",
+			});
+		});
+
+		it("cascades defaults into preset-stage entries (per-field)", () => {
+			writeFileSync(
+				configFilePath,
+				JSON.stringify({
+					defaults: "anthropic/opus",
+					presets: { ship: { stages: { plan: { thinking: "high" } } } },
+				}),
+				"utf-8",
+			);
+			const config = loadModelsConfig();
+			expect(config.presets!.ship.stages!.plan).toEqual({
+				model: "anthropic/opus", // from defaults
+				thinking: "high",
+			});
+		});
+
+		it("loads skills + presets alongside agents + stages", () => {
+			writeFileSync(
+				configFilePath,
+				JSON.stringify({
+					defaults: "anthropic/opus",
+					skills: {
+						commit: "zai/glm-4-7",
+						research: { model: "openai/gpt-5.5", thinking: "high" },
+					},
+					presets: {
+						ship: {
+							stages: {
+								plan: "openai/gpt-5.5",
+								design: { model: "openai/gpt-5.5", thinking: "high" },
+							},
+						},
+					},
+				}),
+				"utf-8",
+			);
+			const config = loadModelsConfig();
+			expect(config.skills!.commit).toEqual({ model: "zai/glm-4-7" });
+			expect(config.skills!.research).toEqual({
+				model: "openai/gpt-5.5",
+				thinking: "high",
+			});
+			expect(config.presets!.ship.stages!.plan).toEqual({ model: "openai/gpt-5.5" });
+			expect(config.presets!.ship.stages!.design).toEqual({
+				model: "openai/gpt-5.5",
+				thinking: "high",
+			});
+		});
+
+		it("rejects per-preset `agents` / `defaults` blocks via additionalProperties:false", () => {
+			writeFileSync(
+				configFilePath,
+				JSON.stringify({
+					presets: {
+						ship: {
+							agents: { "codebase-locator": "openai/gpt-5.5" }, // stripped
+							defaults: "openai/gpt-5.5", // stripped
+							stages: { plan: "openai/gpt-5.5" },
+						},
+					},
+				}),
+				"utf-8",
+			);
+			const config = loadModelsConfig();
+			expect(config.presets!.ship.stages!.plan).toEqual({ model: "openai/gpt-5.5" });
+			expect(config.presets!.ship as Record<string, unknown>).not.toHaveProperty("agents");
+			expect(config.presets!.ship as Record<string, unknown>).not.toHaveProperty("defaults");
+		});
+
+		it("treats empty `skills: {}` identically to absent `skills` (no-bleed)", () => {
+			writeFileSync(configFilePath, JSON.stringify({ defaults: "anthropic/opus", skills: {} }), "utf-8");
+			const config = loadModelsConfig();
+			expect(config.skills).toBeUndefined();
+		});
+
+		it("treats empty `presets: { ship: {} }` identically to absent preset (no-bleed)", () => {
+			writeFileSync(configFilePath, JSON.stringify({ defaults: "anthropic/opus", presets: { ship: {} } }), "utf-8");
+			const config = loadModelsConfig();
+			expect(config.presets).toBeUndefined();
+		});
+
 		it("strips unknown keys with additionalProperties: false", () => {
 			writeFileSync(
 				configFilePath,
@@ -212,36 +311,79 @@ describe("models-config", () => {
 		});
 	});
 
-	describe("getStageModelConfig", () => {
-		it("returns stage-specific config when present", () => {
-			// Cascade is applied at load time (resolvedEntryWithCascade), so by the
-			// time a present stage entry reaches the getter it already carries the
-			// cascaded model. The getter itself returns the entry verbatim — it does
-			// NOT re-cascade — so a present entry shadows `defaults` entirely.
+	describe("resolveStageModel", () => {
+		it("preset-stage hit wins over flat stage", () => {
 			const config: ModelsConfig = {
-				defaults: { model: "anthropic:claude-sonnet-4-20250514" },
-				stages: {
-					research: { model: "anthropic:claude-sonnet-4-20250514", thinking: "xhigh" },
+				stages: { plan: { model: "anthropic/opus" } },
+				presets: {
+					ship: { stages: { plan: { model: "openai/gpt-5.5" } } },
 				},
 			};
-			expect(getStageModelConfig(config, "research")).toEqual({
-				model: "anthropic:claude-sonnet-4-20250514",
-				thinking: "xhigh",
+			expect(resolveStageModel(config, { workflow: "ship", stage: "plan" })).toEqual({
+				model: "openai/gpt-5.5",
 			});
 		});
 
-		it("falls back to defaults when stage not configured", () => {
+		it("falls through preset-miss to flat stage", () => {
 			const config: ModelsConfig = {
-				defaults: { model: "anthropic:claude-sonnet-4-20250514" },
+				stages: { plan: { model: "anthropic/opus" } },
+				presets: {
+					ship: { stages: { research: { model: "openai/gpt-5.5" } } },
+				},
 			};
-			expect(getStageModelConfig(config, "implement")).toEqual({
-				model: "anthropic:claude-sonnet-4-20250514",
+			expect(resolveStageModel(config, { workflow: "ship", stage: "plan" })).toEqual({
+				model: "anthropic/opus",
 			});
 		});
 
-		it("returns undefined when neither stage nor defaults configured", () => {
-			const config: ModelsConfig = {};
-			expect(getStageModelConfig(config, "implement")).toBeUndefined();
+		it("falls through preset + stage miss to skills[skill]", () => {
+			const config: ModelsConfig = {
+				skills: { research: { model: "zai/glm-4-7", thinking: "minimal" } },
+			};
+			expect(resolveStageModel(config, { workflow: "ship", stage: "research", skill: "research" })).toEqual({
+				model: "zai/glm-4-7",
+				thinking: "minimal",
+			});
+		});
+
+		it("falls through everything to defaults", () => {
+			const config: ModelsConfig = { defaults: { model: "anthropic/opus" } };
+			expect(resolveStageModel(config, { workflow: "ship", stage: "plan", skill: "plan" })).toEqual({
+				model: "anthropic/opus",
+			});
+		});
+
+		it("returns undefined when everything is missing", () => {
+			expect(resolveStageModel({}, { workflow: "ship", stage: "plan", skill: "plan" })).toBeUndefined();
+		});
+
+		it("skips the skill rung when `skill` is undefined (script stages)", () => {
+			const config: ModelsConfig = { skills: { plan: { model: "zai/glm-4-7" } } };
+			// No skill arg → skill rung must NOT match even though `skills.plan` exists.
+			expect(resolveStageModel(config, { stage: "plan" })).toBeUndefined();
+		});
+
+		it("skips the preset rung when `workflow` is undefined (standalone bracket)", () => {
+			const config: ModelsConfig = {
+				stages: { plan: { model: "anthropic/opus" } },
+				presets: {
+					ship: { stages: { plan: { model: "openai/gpt-5.5" } } },
+				},
+			};
+			// No workflow arg → preset rung skipped; falls through to flat stages.
+			expect(resolveStageModel(config, { stage: "plan", skill: "plan" })).toEqual({
+				model: "anthropic/opus",
+			});
+		});
+
+		it("standalone bracket call shape: skill-only lookup", () => {
+			const config: ModelsConfig = {
+				defaults: { model: "anthropic/opus" },
+				skills: { commit: { model: "zai/glm-4-7" } },
+			};
+			// Standalone bracket passes only `skill`; preset + stage are undefined.
+			expect(resolveStageModel(config, { skill: "commit" })).toEqual({ model: "zai/glm-4-7" });
+			expect(resolveStageModel(config, { skill: "unknown" })).toEqual({ model: "anthropic/opus" });
 		});
 	});
 });

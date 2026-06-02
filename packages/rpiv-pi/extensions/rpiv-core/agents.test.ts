@@ -937,16 +937,16 @@ describe("agent frontmatter injection", () => {
 	// --- Direct unit tests on the pure transform (the load-bearing invariants) ---
 
 	const cfg: ModelsConfig = {
-		agents: { "test-agent": { model: "anthropic:claude-sonnet-4-20250514", thinking: "high" } },
+		agents: { "test-agent": { model: "anthropic/claude-sonnet-4-20250514", thinking: "high" } },
 	};
 
-	it("injects model (slash-converted) and thinking before the closing ---", () => {
+	it("injects model and thinking before the closing ---", () => {
 		const out = injectModelFrontmatter(agentContent, "test-agent.md", cfg);
-		// D9: colon form in models.json → slash form in agent frontmatter
+		// Post-slash-canonical migration: models.json value passes through to
+		// frontmatter byte-for-byte. No translation step.
 		expect(out).toContain("model: anthropic/claude-sonnet-4-20250514");
-		expect(out).not.toContain("model: anthropic:claude-sonnet-4-20250514");
 		expect(out).toContain("thinking: high");
-		// injected keys land inside the frontmatter block, before the body
+		// Injected keys land inside the frontmatter block, before the body.
 		const fmEnd = out.indexOf("\n---", 3);
 		expect(out.indexOf("model:")).toBeLessThan(fmEnd);
 		expect(out.indexOf("You are a test agent.")).toBeGreaterThan(fmEnd);
@@ -956,6 +956,14 @@ describe("agent frontmatter injection", () => {
 		const once = injectModelFrontmatter(agentContent, "test-agent.md", cfg);
 		const twice = injectModelFrontmatter(once, "test-agent.md", cfg);
 		expect(twice).toBe(once);
+	});
+
+	it("emits the models.json model value byte-for-byte (strengthened idempotency)", () => {
+		const out = injectModelFrontmatter(agentContent, "test-agent.md", cfg);
+		const fmModelLine = out.split("\n").find((l) => l.startsWith("model: "));
+		// Post-slash-canonical: the frontmatter `model:` value equals the
+		// models.json `model` field char-for-char — no translation layer.
+		expect(fmModelLine).toBe(`model: ${cfg.agents!["test-agent"].model}`);
 	});
 
 	it("returns content unchanged when no override is configured", () => {
@@ -972,8 +980,8 @@ describe("agent frontmatter injection", () => {
 
 	it("cascades a defaults model into an otherwise-unconfigured agent", () => {
 		const defaultsCfg: ModelsConfig = {
-			defaults: { model: "openai:o3-pro" },
-			agents: { "other-agent": { model: "openai:o3-pro" } },
+			defaults: { model: "openai/o3-pro" },
+			agents: { "other-agent": { model: "openai/o3-pro" } },
 		};
 		const out = injectModelFrontmatter(agentContent, "test-agent.md", defaultsCfg);
 		expect(out).toContain("model: openai/o3-pro");
@@ -990,7 +998,7 @@ describe("agent frontmatter injection", () => {
 	const destContent = (name: string) => readFileSync(join(homedir(), ".pi", "agent", "agents", name), "utf-8");
 
 	it("injects model and thinking into the synced agent .md file", () => {
-		writeModels({ agents: { "codebase-analyzer": { model: "openai:o3-pro", thinking: "high" } } });
+		writeModels({ agents: { "codebase-analyzer": { model: "openai/o3-pro", thinking: "high" } } });
 
 		const result = syncBundledAgents(true);
 		expect([...result.added, ...result.updated, ...result.unchanged]).toContain(REAL_AGENT);
@@ -1001,7 +1009,7 @@ describe("agent frontmatter injection", () => {
 	});
 
 	it("produces no false pendingUpdate when re-synced (idempotent on disk)", () => {
-		writeModels({ agents: { "codebase-analyzer": { model: "openai:o3-pro", thinking: "high" } } });
+		writeModels({ agents: { "codebase-analyzer": { model: "openai/o3-pro", thinking: "high" } } });
 
 		syncBundledAgents(true);
 		const result2 = syncBundledAgents(false);

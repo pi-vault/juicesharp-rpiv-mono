@@ -73,6 +73,8 @@ beforeEach(async () => {
 	sessionHooks.__resetSessionHooksAnnounced();
 	const modelOverride = await import("../packages/rpiv-pi/extensions/rpiv-core/model-override.js");
 	modelOverride.__resetModelOverrideState();
+	const skillBracket = await import("../packages/rpiv-pi/extensions/rpiv-core/skill-bracket.js");
+	skillBracket.__resetSkillBracketState();
 	const modelsConfigModule = await import("../packages/rpiv-pi/extensions/rpiv-core/models-config.js");
 	modelsConfigModule.__resetModelsConfigCache();
 

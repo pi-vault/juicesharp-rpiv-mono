@@ -14,7 +14,12 @@ vi.mock("./agents.js", () => ({
 	cleanupPerCwdAgents: vi.fn(),
 }));
 
+vi.mock("./models-config.js", () => ({
+	__resetModelsConfigCache: vi.fn(),
+}));
+
 import { cleanupPerCwdAgents, SYNC_OP, syncBundledAgents } from "./agents.js";
+import { __resetModelsConfigCache } from "./models-config.js";
 import { registerUpdateAgentsCommand } from "./update-agents-command.js";
 
 const emptyCleanup = () => ({ cleanedUp: [], skipped: [], errors: [] });
@@ -22,6 +27,7 @@ const emptyCleanup = () => ({ cleanedUp: [], skipped: [], errors: [] });
 beforeEach(() => {
 	vi.mocked(syncBundledAgents).mockReset();
 	vi.mocked(cleanupPerCwdAgents).mockReset();
+	vi.mocked(__resetModelsConfigCache).mockReset();
 	vi.mocked(cleanupPerCwdAgents).mockReturnValue(emptyCleanup());
 });
 
@@ -74,6 +80,19 @@ describe("/rpiv-update-agents", () => {
 		await captured.commands.get("rpiv-update-agents")?.handler("", ctx as never);
 		const [, severity] = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls[0];
 		expect(severity).toBe("warning");
+	});
+
+	it("resets the models.json cache before syncing so mid-session edits are re-read", async () => {
+		vi.mocked(syncBundledAgents).mockReturnValue(empty());
+		const { pi, captured } = createMockPi();
+		registerUpdateAgentsCommand(pi);
+		const ctx = createMockCtx({ hasUI: true });
+		await captured.commands.get("rpiv-update-agents")?.handler("", ctx as never);
+		expect(__resetModelsConfigCache).toHaveBeenCalledTimes(1);
+		// Reset must precede sync — sync re-reads config and injects frontmatter.
+		expect(vi.mocked(__resetModelsConfigCache).mock.invocationCallOrder[0]).toBeLessThan(
+			vi.mocked(syncBundledAgents).mock.invocationCallOrder[0],
+		);
 	});
 
 	it("stays silent when !hasUI", async () => {

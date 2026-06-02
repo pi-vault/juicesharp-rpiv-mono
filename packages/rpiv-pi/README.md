@@ -212,11 +212,67 @@ Pi Agent discovers extensions via `"extensions": ["./extensions"]` and skills vi
 
 - **Web search** - run `/web-search-config` to pick a provider (Brave, Tavily, Serper, Exa, Jina, or Firecrawl) and set its API key; the per-provider env var (e.g. `BRAVE_SEARCH_API_KEY`, `EXA_API_KEY`) also works and takes precedence
 - **Advisor** - run `/advisor` to select a reviewer model and reasoning effort
+- **Models & reasoning effort** - run `/rpiv-models` to pick a model and reasoning level for the global default, a specific bundled agent, a workflow stage, a skill, or a per-preset stage; the picker writes `~/.config/rpiv-pi/models.json`. See **Model configuration** below for the cascade ladder and worked examples.
 - **Side questions** _(opt-in: `pi install npm:@juicesharp/rpiv-btw`)_ - type `/btw <question>` anytime (even mid-stream) to ask the primary model a one-off question; answer appears in a borderless bottom overlay and never enters the main conversation
 - **UI language** - run `/languages` to pick the locale for rpiv-* TUI strings, or pass `pi --locale <code>` at startup. Detection priority: flag → `~/.config/rpiv-i18n/locale.json` → `LANG` / `LC_ALL` → English. LLM-facing copy stays English by design
 - **Agent concurrency** - open the `/agents` overlay and tune `Settings → Max concurrency` to match your provider's rate limits. `@tintinweb/pi-subagents` owns this setting; rpiv-pi does not seed it.
 - **Agent profiles** - synced to `~/.pi/agent/agents/` from bundled defaults; refresh with `/rpiv-update-agents` (overwrites rpiv-managed files, preserves your custom agents).
 - **Non-default agent directory** - if you set `PI_CODING_AGENT_DIR` (e.g. `~/.config/pi/agent` for an XDG-style layout), rpiv-pi reads and writes the same `settings.json` Pi does — sibling detection, `/rpiv-setup`, and `/rpiv-update-agents` all follow the env var. Leading `~` is expanded.
+
+### Model configuration (models.json)
+
+`rpiv-pi` reads `~/.config/rpiv-pi/models.json` to apply per-agent, per-stage, per-skill, and per-preset model + reasoning-effort overrides. The file is optional — missing or malformed JSON degrades to no overrides. Run `/rpiv-models` to edit it via cascade pickers, or hand-edit.
+
+**Cascade ladder** (most specific first; each layer composes per-field against `defaults`):
+
+1. `presets[workflow].stages[stage]` — per-workflow per-stage override (e.g. `ship.plan`).
+2. `stages[stage]` — flat per-stage override (applies across every workflow that has it).
+3. `skills[skill]` — per-skill override; applies to **both** `/wf` workflow stages AND user-typed standalone `/skill:<name>` invocations.
+4. `defaults` — global fallback.
+
+The standalone `/skill:` bracket has one exception: it arms ONLY on an explicit `skills[<name>]` entry. `defaults` does NOT trigger arming for user-typed `/skill:` invocations — your current session model stays sovereign.
+
+**Worked example A — per-skill overrides for everyday short turns**:
+
+```json
+{
+  "defaults": "anthropic/claude-opus-4-7",
+  "skills": {
+    "commit": "zai/glm-4-7",
+    "changelog": "zai/glm-4-7",
+    "research": { "model": "openai/gpt-5.5", "thinking": "high" }
+  }
+}
+```
+
+With this file, your default is Opus; `/skill:commit` and `/skill:changelog` use the cheaper GLM-4.7; `/skill:research` uses GPT-5.5 at high reasoning effort. Workflow-dispatched runs of the same skills get the same overrides (via the cascade's skill rung).
+
+**Worked example B — per-workflow stage overrides for full pipelines**:
+
+```json
+{
+  "defaults": "anthropic/claude-opus-4-7",
+  "presets": {
+    "ship": {
+      "stages": {
+        "plan":   "openai/gpt-5.5",
+        "design": { "model": "openai/gpt-5.5", "thinking": "high" }
+      }
+    },
+    "polish": {
+      "stages": {
+        "plan": "zai/glm-4-7"
+      }
+    }
+  }
+}
+```
+
+With this file, `/wf ship plan` and `/wf ship design` use GPT-5.5; `/wf polish plan` uses GLM-4.7; everything else falls through to Opus. Per-workflow overrides take precedence over the flat `stages` block when both define the same stage.
+
+**Model key form** — canonical is `provider/modelId` (slash-separated). The legacy `provider:modelId` (colon) form still parses for back-compatibility with persisted advisor configs; new saves emit slash form, and legacy values auto-migrate on the next save.
+
+**Reasoning levels** — five values accepted in the `thinking` field: `minimal`, `low`, `medium`, `high`, `xhigh`. The literal `off` is rejected with a warning (use absence of the field instead).
 
 ## Uninstall
 

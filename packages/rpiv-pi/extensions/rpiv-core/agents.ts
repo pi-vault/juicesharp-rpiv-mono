@@ -27,7 +27,6 @@ import {
 } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { parseModelKey } from "@juicesharp/rpiv-config";
 import { parseFrontmatterBounds } from "./frontmatter.js";
 import { getAgentModelConfig, loadModelsConfig, type ModelsConfig } from "./models-config.js";
 import { BUNDLED_AGENTS_DIR } from "./paths.js";
@@ -330,18 +329,6 @@ function enumerateSourceFiles(result: SyncResult): string[] | null {
 }
 
 /**
- * Convert a models.json model string ("provider:modelId", colon) into the
- * slash form ("provider/modelId") that @tintinweb/pi-subagents expects in
- * agent frontmatter (agent-runner.js:141 parses on the first "/"). If the
- * string isn't a valid provider:modelId, pass it through unchanged and let
- * pi-subagents emit its own warning.
- */
-function toAgentFrontmatterModel(model: string): string {
-	const parsed = parseModelKey(model);
-	return parsed ? `${parsed.provider}/${parsed.modelId}` : model;
-}
-
-/**
  * Apply key-value updates to frontmatter lines.
  *
  * For each key in `keysToSet`, replaces the existing line if present
@@ -403,9 +390,12 @@ export function injectModelFrontmatter(content: string, agentName: string, confi
 	if (!bounds) return content;
 
 	const keysToSet: { key: string; value: string }[] = [];
-	// D9: agent frontmatter requires slash-delimited provider/modelId, NOT the
-	// colon form stored in models.json. The stage-override path keeps the colon.
-	if (override.model !== undefined) keysToSet.push({ key: "model", value: toAgentFrontmatterModel(override.model) });
+	// D9 (post-slash-canonical migration): models.json values are byte-equal to
+	// the agent frontmatter form (both `provider/modelId`). No translation step
+	// — re-injecting produces identical bytes by construction; the idempotency
+	// invariant at injectModelFrontmatter's JSDoc strengthens from "deterministic
+	// translation" to "byte pass-through".
+	if (override.model !== undefined) keysToSet.push({ key: "model", value: override.model });
 	if (override.thinking !== undefined) keysToSet.push({ key: "thinking", value: override.thinking });
 
 	const updated = applyKeyUpdates(lines, bounds, keysToSet);

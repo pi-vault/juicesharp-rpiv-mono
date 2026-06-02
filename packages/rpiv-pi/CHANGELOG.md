@@ -8,12 +8,22 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Per-agent and per-stage model/effort configuration via `~/.config/rpiv-pi/models.json`. Configured agents have `model`/`thinking` frontmatter injected at sync time; workflow stages have `setModel`/`setThinkingLevel` applied via lifecycle listeners. Supports `defaults` cascade into both agents and stages. 5-value ThinkingLevel vocabulary (`minimal|low|medium|high|xhigh`); "off" is rejected with a warning.
+- Per-workflow per-stage overrides via `presets.<workflow>.stages.<stage>` — resolves before flat `stages[stage]`. Same five-value `thinking` vocabulary; per-field cascade against `defaults`.
+- Per-skill overrides via top-level `skills.<name>` — applies to **both** workflow-dispatched skill stages (via the existing `onStageStart` lifecycle listener) AND user-typed standalone `/skill:<name>` invocations (via a new `input → agent_end` bracket). The standalone bracket arms only on explicit `skills[<name>]` entries (not on `defaults`) so your current session model stays sovereign when no per-skill override is configured.
+- New `/rpiv-models` slash command — cascade pickers (scope → key → model → effort → save) for `~/.config/rpiv-pi/models.json`. Persists via `saveJsonConfig` and invalidates the in-process cache after every successful write. Skill picker source is live (`pi.getCommands()` filtered by `source === "skill"`) so third-party + user skills are pickable.
 
-- Per-agent and per-stage model/effort configuration via `~/.config/rpiv-pi/models.json`.
-  Configured agents have `model`/`thinking` frontmatter injected at sync time;
-  workflow stages have `setModel`/`setThinkingLevel` applied via lifecycle listeners.
-  Supports `defaults` cascade into both agents and stages. 5-value ThinkingLevel
-  vocabulary (`minimal|low|medium|high|xhigh`); "off" is rejected with a warning.
+### Changed
+- Canonical model-key form is now `provider/modelId` (slash-separated). Legacy `provider:modelId` (colon) form is still accepted on read for back-compatibility; new saves emit slash form. Persisted advisor configs auto-migrate on the next `/advisor` save; persisted `disabledForModels` arrays stay colon-form on disk and are normalised at compare time. **Rollback caveat**: rolling back across this release without first re-running `/advisor` on the older version silently disables the advisor (the older `parseModelKey` is colon-strict).
+
+### Fixed
+- `/rpiv-update-agents` now re-reads `models.json` before syncing, so mid-session edits to per-agent `model`/`thinking` overrides are injected into the agent frontmatter on disk. Previously the command reused the config cached at session start and silently re-injected stale overrides.
+- The workflow model-override lifecycle now resets its baseline state before attempting restore at `onWorkflowEnd`, so a genuine (non-stale) failure while restoring the baseline model can no longer leave the override "armed" and poison subsequent workflows. Matches the clear-before-restore ordering already used by the standalone `/skill:` bracket.
+- Stale extension context after auto-compaction no longer causes warnings or errors from guidance injection, git-context injection, or model-override lifecycle listeners.
+- Startup no longer crashes with a barrel-initialization race when loading `rpiv-workflow`.
+
+### Performance
+- `blueprint` / `design`: slice overlap detection now uses deterministic file-and-symbol partitioning, further reducing verification time on large plans.
 
 ## [1.17.1] - 2026-06-01
 

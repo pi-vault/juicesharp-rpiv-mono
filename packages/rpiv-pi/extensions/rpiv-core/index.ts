@@ -16,8 +16,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { FLAG_DEBUG } from "./constants.js";
 import { registerModelOverrideLifecycle, registerModelOverrideSessionStart } from "./model-override.js";
 import { registerBuiltInWorkflows } from "./register-built-in-workflows.js";
+import { registerRpivModelsCommand } from "./rpiv-models-command.js";
 import { registerSessionHooks } from "./session-hooks.js";
 import { registerSetupCommand } from "./setup-command.js";
+import { registerSkillBracket } from "./skill-bracket.js";
 import { registerUpdateAgentsCommand } from "./update-agents-command.js";
 
 export default function (pi: ExtensionAPI) {
@@ -32,11 +34,18 @@ export default function (pi: ExtensionAPI) {
 	registerSessionHooks(pi);
 	registerUpdateAgentsCommand(pi);
 	registerSetupCommand(pi);
+	registerRpivModelsCommand(pi); // /rpiv-models cascade picker
 	// Stage model/effort override: the session_start hook captures modelRegistry +
 	// current model UNCONDITIONALLY (independent of rpiv-workflow), and the
 	// lifecycle listener registration degrades gracefully when the sibling is
 	// absent (isModuleNotFound guard inside registerModelOverrideLifecycle).
 	registerModelOverrideSessionStart(pi);
+	// Standalone /skill: model/effort override bracket. MUST register AFTER
+	// registerModelOverrideSessionStart so the bracket's `getCapturedModel()`
+	// read at input-arm time sees the populated baseline. The bracket's
+	// `input` + `agent_end` handlers are independent of rpiv-workflow's
+	// presence — they read models.json directly.
+	registerSkillBracket(pi);
 	// Both registerModelOverrideLifecycle and registerBuiltInWorkflows dynamically
 	// `import("@juicesharp/rpiv-workflow")`. Firing them concurrently makes jiti
 	// (Pi's dev loader) hand the second caller a half-initialized barrel namespace

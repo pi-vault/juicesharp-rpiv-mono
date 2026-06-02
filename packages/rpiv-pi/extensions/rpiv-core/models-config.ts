@@ -35,15 +35,20 @@ const ThinkingLevelSchema = Type.Union(
 );
 
 /**
- * Model config leaf: either a bare model string ("provider:modelId")
- * or an object with optional thinking level.
+ * Model config leaf: either a bare model string ("provider/modelId")
+ * or an object with optional thinking level. Slash is canonical; legacy
+ * colon-form ("provider:modelId") is still accepted on read by parseModelKey.
  */
 const ModelEntrySchema = Type.Union(
 	[
-		Type.String({ description: 'Model shorthand: "provider:modelId"' }),
+		Type.String({ description: 'Model shorthand: "provider/modelId" (colon-form accepted for back-compat)' }),
 		Type.Object(
 			{
-				model: Type.Optional(Type.String({ description: "Model in provider:modelId format" })),
+				model: Type.Optional(
+					Type.String({
+						description: 'Model in "provider/modelId" format (colon-form accepted for back-compat)',
+					}),
+				),
 				thinking: Type.Optional(ThinkingLevelSchema),
 			},
 			{ additionalProperties: false },
@@ -53,17 +58,41 @@ const ModelEntrySchema = Type.Union(
 );
 
 /**
+ * Per-preset block: stages-only. Per Decision 4, per-preset agent overrides are
+ * a non-goal — the agent-sync seam at `agents.ts:processSourceEntries` has no
+ * workflow context at frontmatter-injection time. `additionalProperties: false`
+ * rejects per-preset `defaults` or `agents` blocks at validation.
+ */
+const PresetSchema = Type.Object(
+	{
+		stages: Type.Optional(Type.Record(Type.String(), ModelEntrySchema)),
+	},
+	{ additionalProperties: false },
+);
+
+/**
  * Top-level models.json schema.
  *
- * `defaults` cascades into both unconfigured agents and stages.
+ * `defaults` cascades into agents, stages, skills, and preset-stage entries.
  * `agents` keys match bundled-agent filenames (sans .md).
  * `stages` keys match workflow stage names (the graph key, not skill).
+ * `skills` keys match the post-alias skill name (StageRef.skill on the
+ * workflow path; the parsed name on the standalone-skill bracket path).
+ * `presets` keys match workflow names; inner `stages` keys match stage
+ * names within that workflow.
+ *
+ * `Type.Record(Type.String(), …)` wrappers are structurally dynamic and cannot
+ * stamp `additionalProperties: false` — record-key typos (`presets.shipp`,
+ * `skills.committ`) pass schema validation by design and fall through to the
+ * defaults cascade at lookup. Runtime warn-on-miss is a deferred safety net.
  */
 const ModelsConfigSchema = Type.Object(
 	{
 		defaults: Type.Optional(ModelEntrySchema),
 		agents: Type.Optional(Type.Record(Type.String(), ModelEntrySchema)),
 		stages: Type.Optional(Type.Record(Type.String(), ModelEntrySchema)),
+		skills: Type.Optional(Type.Record(Type.String(), ModelEntrySchema)),
+		presets: Type.Optional(Type.Record(Type.String(), PresetSchema)),
 	},
 	{ additionalProperties: false },
 );
@@ -85,6 +114,8 @@ export interface ModelsConfig {
 	defaults?: ResolvedModelConfig;
 	agents?: Record<string, ResolvedModelConfig>;
 	stages?: Record<string, ResolvedModelConfig>;
+	skills?: Record<string, ResolvedModelConfig>;
+	presets?: Record<string, { stages?: Record<string, ResolvedModelConfig> }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +166,8 @@ export function loadModelsConfig(): ModelsConfig {
 	const defaults = resolvedEntry(validated.defaults);
 	const agents: Record<string, ResolvedModelConfig> = {};
 	const stages: Record<string, ResolvedModelConfig> = {};
+	const skills: Record<string, ResolvedModelConfig> = {};
+	const presets: Record<string, { stages?: Record<string, ResolvedModelConfig> }> = {};
 
 	if (validated.agents && typeof validated.agents === "object") {
 		for (const [name, entry] of Object.entries(validated.agents)) {
@@ -148,10 +181,33 @@ export function loadModelsConfig(): ModelsConfig {
 		}
 	}
 
+	if (validated.skills && typeof validated.skills === "object") {
+		for (const [name, entry] of Object.entries(validated.skills)) {
+			skills[name] = resolvedEntryWithCascade(entry, defaults);
+		}
+	}
+
+	if (validated.presets && typeof validated.presets === "object") {
+		for (const [wf, presetBlock] of Object.entries(validated.presets)) {
+			if (!presetBlock || typeof presetBlock !== "object") continue;
+			const presetStages: Record<string, ResolvedModelConfig> = {};
+			if (presetBlock.stages && typeof presetBlock.stages === "object") {
+				for (const [stageName, entry] of Object.entries(presetBlock.stages)) {
+					presetStages[stageName] = resolvedEntryWithCascade(entry, defaults);
+				}
+			}
+			if (Object.keys(presetStages).length > 0) {
+				presets[wf] = { stages: presetStages };
+			}
+		}
+	}
+
 	const result: ModelsConfig = {
 		defaults,
 		agents: Object.keys(agents).length > 0 ? agents : undefined,
 		stages: Object.keys(stages).length > 0 ? stages : undefined,
+		skills: Object.keys(skills).length > 0 ? skills : undefined,
+		presets: Object.keys(presets).length > 0 ? presets : undefined,
 	};
 	modelsConfigCache = result;
 	return result;
@@ -188,7 +244,45 @@ export function getAgentModelConfig(config: ModelsConfig, agentName: string): Re
 	return config.agents?.[agentName] ?? config.defaults;
 }
 
-/** Look up a per-stage override, falling back to defaults. */
-export function getStageModelConfig(config: ModelsConfig, stageName: string): ResolvedModelConfig | undefined {
-	return config.stages?.[stageName] ?? config.defaults;
+/**
+ * Per-stage cascade lookup, used by the workflow lifecycle path (Slice 3) and
+ * the standalone-skill bracket (Slice 4). Object-arg shape supersedes
+ * positional widening as new axes land (positional
+ * `(config, stage, workflow?, skill?)` doesn't scale).
+ *
+ * Cascade (most-specific first):
+ *   1. presets[workflow].stages[stage]   — preset-stage authored
+ *   2. stages[stage]                     — per-stage
+ *   3. skills[skill]                     — per-skill (post-alias target)
+ *   4. defaults                          — fallback
+ *
+ * Each layer was already composed against `defaults` at load time
+ * (`resolvedEntryWithCascade`), so falling through layers never loses a field.
+ * Two configured layers do NOT per-field merge with each other — whole-entry
+ * replace at lookup (same asymmetry as today, documented at
+ * models-config.test.ts:226-230).
+ *
+ * Pass `workflow: undefined` to skip the preset rung (e.g. standalone-skill
+ * bracket, agent-sync path); pass `skill: undefined` to skip the skill rung
+ * (e.g. script stages with no skill); pass `stage: undefined` to skip the
+ * stage rung. All missing → returns `config.defaults`.
+ */
+export function resolveStageModel(
+	config: ModelsConfig,
+	args: { workflow?: string; stage?: string; skill?: string },
+): ResolvedModelConfig | undefined {
+	const { workflow, stage, skill } = args;
+	if (workflow && stage) {
+		const presetStage = config.presets?.[workflow]?.stages?.[stage];
+		if (presetStage) return presetStage;
+	}
+	if (stage) {
+		const flatStage = config.stages?.[stage];
+		if (flatStage) return flatStage;
+	}
+	if (skill) {
+		const perSkill = config.skills?.[skill];
+		if (perSkill) return perSkill;
+	}
+	return config.defaults;
 }
