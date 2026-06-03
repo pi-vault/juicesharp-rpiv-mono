@@ -23,14 +23,15 @@ The chain proper starts at `/skill:research`. How you get there depends on what 
 
 ## Hand-drive, or hand it to `/wf`
 
-The recipes below run the same skills in the same order whether you invoke them yourself or hand them to the workflow runner. `rpiv-workflow` ships four bundled workflows:
+The recipes below run the same skills in the same order whether you invoke them yourself or hand them to the workflow runner. `rpiv-workflow` ships five bundled workflows:
 
 - **`/wf ship`** — `blueprint → implement → validate → commit`. Fast path with no research and no review. Suits small+ through midsize features where the approach is already obvious and you don't need a codebase research pass.
 - **`/wf build`** — `research → blueprint → implement → validate → code-review → (revise → implement → loop) → commit`. Research-backed, with a review-and-revise loop bounded by the runner's `maxBackwardJumps` (default 2, so at most 3 review iterations).
 - **`/wf arch`** — `research → design → plan → implement → validate → code-review → (back to design → loop) → commit`. Design-led. The loop returns to `design` directly — there's no `revise` stage in this chain.
 - **`/wf vet`** — `code-review → (blueprint → implement → validate → loop) → commit`. Orthogonal to scope: point it at an existing diff (yours or a teammate's) for a structured review with an optional fix cycle.
+- **`/wf polish`** — `architecture-review → blueprint → implement → validate → code-review → (blueprint loop) → commit`. Off the scope ladder: for a large architecture review whose phases are dependency-ordered, so `blueprint` *iterates* — one plan per review phase, each building on the last — rather than planning everything in one pass. Reach for it when the review itself surfaced the sequence. → [Compose skills as skills](/docs/guides/compose-skills-as-skills).
 
-The runner writes artifacts under `.rpiv/artifacts/` exactly as the hand-driven chain does, plus an audited JSONL trail per run under `.rpiv/workflows/runs/<run-id>.jsonl` you can resume from. Routing is typed — `code-review` declares an output schema (`blockers_count` for build/arch, `status` for vet) and the runner picks the next stage from the value, no eyeballing required. Both build and arch fan out `implement` into one Pi session per `## Phase N:` heading in the inherited plan.
+The runner writes artifacts under `.rpiv/artifacts/` exactly as the hand-driven chain does, plus an audited JSONL trail per run under `.rpiv/workflows/runs/<run-id>.jsonl` you can resume from with `/wf @<run-id>`. Routing is typed — `code-review` declares an output schema (`blockers_count` for build/arch, `status` for vet) and the runner picks the next stage from the value, no eyeballing required. Both build and arch fan out `implement` into one Pi session per `## Phase N:` heading in the inherited plan.
 
 Hand-drive when you want the pause between every artifact — for exploratory work, mid-flow pivots, or your first pass through a codebase. Use `/wf` once the chain's rhythm is muscle memory. → [Run a workflow](/docs/guides/run-a-workflow).
 

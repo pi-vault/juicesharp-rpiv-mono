@@ -11,15 +11,18 @@ Two reasons to reach for it. The chain is a graph, not a line, and the runner is
 
 `/wf` lives in `@juicesharp/rpiv-workflow`, installed alongside `rpiv-pi`. If `/rpiv-setup` ran cleanly, it's already there.
 
-## Three commands
+## Four commands
 
 ```
 /wf                  Preview every loaded workflow.
 /wf <name>           Preview one workflow's stage graph.
 /wf <name> <input>   Run a workflow, piping <input> to the start stage.
+/wf @<run-id>        Resume a run that died, from its last incomplete stage.
 ```
 
 Preview first. The graph view shows every stage, its skill, the edges out (linear, `stop`, or a predicate), and where the routing branches land. Run when the graph matches what you'd hand-drive.
+
+Resume last. `@<run-id>` is the resume sigil — pass the id of a run that failed or was cut off and the runner reads its JSONL trail back, rebuilds the accumulated state, and re-enters at the first stage that never finished. The id is the `<run-id>` slug in the run's filename (`.rpiv/workflows/runs/<run-id>.jsonl`), also surfaced as `runId` on the rows `listRuns` returns.
 
 ## The five bundled workflows
 
@@ -49,9 +52,9 @@ Architecture-review-driven polish for a review too large to plan in one pass. `a
 
 **Conditional routing with a bounded loop.** The hand-driven chain treats `code-review → commit` as the default and you eyeball the review to decide whether to `revise`. The workflow makes the routing explicit — a `gate(field, branches)` over `output.data`, or a `defineRoute(targets, fn)` for non-numeric discriminators (the path `vet` takes for its string `status`). Backward edges are first-class: a `revise → implement` jump or a `code-review → design` jump is just another edge target, with the runner counting backward jumps and halting at `maxBackwardJumps` (default 2) so a stuck loop can't burn through your tokens forever.
 
-**An audited trail.** Every run writes one JSONL file under `<cwd>/.rpiv/workflows/runs/<run-id>.jsonl`. The first line is a `WorkflowHeader` carrying the run id, workflow name, original input, timestamp, and trigger (`command`, `programmatic`, or `external` with a source string for webhooks and cron). Subsequent lines are one `WorkflowStage` row per executed stage plus routing-decision rows. `listRuns(cwd)` enumerates headers cheaply (first-line reads only); `readLastStage`, `readAllStages`, and `listArtifacts` open a specific run for inspection.
+**An audited trail.** Every run writes one JSONL file under `<cwd>/.rpiv/workflows/runs/<run-id>.jsonl`. The first line is a `WorkflowHeader` carrying the run id, workflow name, original input, timestamp, and trigger (`command`, `programmatic`, or `external` with a source string for webhooks and cron). Subsequent lines are one `WorkflowStage` row per executed stage plus routing-decision rows. `listRuns(cwd)` enumerates headers cheaply (first-line reads only); `readLastStage` and `listArtifacts` open a specific run for inspection. The same trail is what makes a run resumable: `/wf @<run-id>` (or `resumeWorkflowByRunId`) replays those rows to rebuild the accumulated state and re-enters at the first stage that never completed — including a stage that died *mid-`fanout`* or *mid-`iterate`*, where it re-pulls only the unfinished units. It guards the one boundary it can check: if a `FanoutFn`/`IterateFn` recomputes a different unit list than the run recorded, resume refuses rather than run the wrong unit, so a non-deterministic generator fails loudly instead of silently diverging.
 
-**Programmatic entry points.** `/wf` is one of three doors. `runWorkflow(ctx, { workflow, input, host, trigger?, lifecycle? })` lets a sibling extension, a cron job, or a webhook handler kick off the same chain — the JSONL header records which it was via `trigger`, so post-hoc readers know whether a run came from your terminal or a deploy hook. The return envelope (`{ runId, stagesCompleted, success, lastArtifact?, error? }`) is what calling code branches on.
+**Programmatic entry points.** `/wf` is one of three doors. `runWorkflow(ctx, { workflow, input, host, trigger?, lifecycle? })` lets a sibling extension, a cron job, or a webhook handler kick off the same chain — the JSONL header records which it was via `trigger`, so post-hoc readers know whether a run came from your terminal or a deploy hook. The return envelope (`{ runId, stagesCompleted, success, lastArtifact?, error? }`) is what calling code branches on. Two sugar helpers fold the common shapes into one call: `runWorkflowByName(ctx, name, input, opts?)` loads, finds, and runs by name, and `resumeWorkflowByRunId(ctx, runId, opts?)` is the door `/wf @<run-id>` walks through. Both return the same envelope and never throw on a bad name or unresolvable run-id — they hand back `{ success: false, error }`. Every options bag accepts an optional `signal: AbortSignal`; the runner checks it at each between-stage seam, records an `aborted` row for the stage about to run, and returns `{ success: false }` — cancellation lands at the next stage boundary, never mid-stream while Pi owns the live session.
 
 ## What the runtime lets you express
 
@@ -167,6 +170,8 @@ export default defineWorkflow({
   },
 });
 ```
+
+The `"stop"` literal marks a terminal edge; import `STOP` from the package for a typed equivalent (`commit: STOP`) if you prefer the edge table to fail at compile time on a typo'd target.
 
 Two file roles per layer. **Config files** (`config.ts`) are the one TypeScript file you hand-edit per project or per user, and the only place that can set `default` — the workflow `/wf <input>` runs without a name. **Pack files** (`packs/*.ts`) are installable bundles: drop them in, get new workflows, no risk of overwriting your default. This is what makes shared workflow packs safe.
 

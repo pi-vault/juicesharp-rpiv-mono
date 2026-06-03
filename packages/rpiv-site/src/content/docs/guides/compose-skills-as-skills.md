@@ -11,7 +11,7 @@ The idea behind `/wf` is small: compose skills as skills, on top of an existing 
 
 ## The graph is the program
 
-A workflow is a typed graph: a named entry point, a `stages` record, and an `edges` table that maps each stage to another stage name, the `"stop"` sentinel, or a predicate. Plain TypeScript, no build step.
+A workflow is a typed graph: a named entry point, a `stages` record, and an `edges` table that maps each stage to another stage name, the `"stop"` sentinel (or its typed twin `STOP`, importable from the package), or a predicate. Plain TypeScript, no build step.
 
 ```ts
 import {
@@ -173,7 +173,7 @@ produces({ outcome: rpivBucketOutcome("plans"), iterate: perPhase })
 | Count known up front | yes | no — generator-terminated |
 | Use when | units are independent | each unit builds on the last |
 
-`iterate` requires `kind: "produces"` and an `outcome` carrying a `name` — every unit publishes to the same named slot, so a name keeps the accumulation from splitting. It's mutually exclusive with `fanout` and with script `run`, and incompatible with `sessionPolicy: "continue"` (each unit needs its own isolated session). A first-call `null` is a zero-unit no-op (warns, advances); a run-wide `maxIterations` cap (default 32) backstops a generator that never terminates.
+`iterate` requires `kind: "produces"` and an `outcome` carrying a `name` — every unit publishes to the same named slot, so a name keeps the accumulation from splitting. It's mutually exclusive with `fanout` and with script `run`, and incompatible with `sessionPolicy: "continue"` (each unit needs its own isolated session). A first-call `null` is a zero-unit no-op (warns, advances); a run-wide `maxIterations` cap (default 32) backstops a generator that never terminates. One more contract, and resume enforces it: your `IterateFn` must be **deterministic with respect to its entry artifact** — on resume the runner recomputes the unit at the resume point and refuses with a terminal failure if it differs from what the run recorded, rather than risk running the wrong unit. (The same determinism rule has always applied to `FanoutFn`.)
 
 ## Reading `polish`: iterate and prompt together
 
