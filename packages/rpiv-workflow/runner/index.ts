@@ -5,4 +5,11 @@
  */
 
 export { type RunWorkflowByNameOptions, runWorkflowByName } from "./by-name.js";
-export { MAX_BACKWARD_JUMPS, type RunWorkflowOptions, type RunWorkflowResult, runWorkflow } from "./runner.js";
+export {
+	MAX_BACKWARD_JUMPS,
+	type ResumeWorkflowOptions,
+	type RunWorkflowOptions,
+	type RunWorkflowResult,
+	resumeWorkflow,
+	runWorkflow,
+} from "./runner.js";

@@ -181,6 +181,26 @@ export const MSG_SCRIPT_THREW = (stage: string, reason: string) =>
 export const ERR_SCRIPT_THREW = (stage: string, reason: string) => `${stage} script threw: ${reason}`;
 
 // ---------------------------------------------------------------------------
+// Resume-refusal messages — resumeWorkflow own-notify path
+// ---------------------------------------------------------------------------
+
+export const ERR_RESUME_NO_ROWS = (runId: string) => `rpiv: run ${runId} has no recorded stages — nothing to resume`;
+export const ERR_RESUME_STAGE_GONE = (stage: string, workflow: string) =>
+	`rpiv: cannot resume — stage "${stage}" from the run no longer exists in workflow "${workflow}" ` +
+	`(renamed/removed, or the run used fanout/iterate which resume does not support yet)`;
+export const ERR_RESUME_FANOUT_UNSUPPORTED = (stage: string) =>
+	`rpiv: cannot resume — stage "${stage}" uses fanout/iterate; resuming these is not supported yet`;
+
+// ---------------------------------------------------------------------------
+// Resume-refusal messages — command-level guards (before resumeWorkflow is called)
+// ---------------------------------------------------------------------------
+
+export const MSG_RESUME_USAGE = "rpiv: usage — /wf @<run-id>";
+export const MSG_RUN_NOT_FOUND = (ref: string) => `rpiv: no run found for "${ref}"`;
+export const MSG_RESUME_WORKFLOW_GONE = (workflow: string, ref: string) =>
+	`rpiv: run "${ref}" used workflow "${workflow}", which is no longer registered`;
+
+// ---------------------------------------------------------------------------
 // /wf command shell — notify-only (never lands in state.error; ERR_ reserved)
 // ---------------------------------------------------------------------------
 

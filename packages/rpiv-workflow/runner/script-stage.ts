@@ -27,10 +27,10 @@
  *   - `stage.sessionPolicy !== "continue"` (no session to continue).
  */
 
-import type { ScriptContext, StageDef } from "../api.js";
+import type { ScriptContext } from "../api.js";
 import { nowIso, recordStage, recordTerminalFailure } from "../audit.js";
 import type { Artifact } from "./../handle.js";
-import { resolvePublishName } from "../internal-utils.js";
+import { applyCompletedStage } from "../internal-utils.js";
 import { scriptStageRef } from "../lifecycle.js";
 import {
 	ERR_AUDIT_WRITE_FAILED,
@@ -185,40 +185,11 @@ function recordScriptSuccess(
 		state.termination.error = ERR_AUDIT_WRITE_FAILED(stage.name);
 		return false;
 	}
-	advancePrimaryForScript(state, stage.def, stage.name, output);
+	applyCompletedStage(state, stage.def, stage.name, output);
 	state.output = output;
 	state.stagesCompleted++;
 	curCtx.ui.notify(MSG_STAGE_COMPLETE(stage.name), "info");
 	return true;
-}
-
-/**
- * Mirror of `sessions/sessions.ts:maybeAdvancePrimary` for the script
- * path. Kept local instead of extracted to a shared helper: the rule
- * is small (eight lines), and the two call sites live in different
- * folders (`runner/` vs `sessions/`) — extracting would force a
- * runner-imports-sessions or sessions-imports-runner crossing for one
- * predicate.
- *
- *   - `kind: "produces"` → first artifact wins the rolling slot.
- *   - `inheritsArtifacts: false` (`terminal.script`) → clear the slot
- *     so downstream stages start without an inherited handle.
- *   - other `side-effect` → leave the slot untouched (a downstream
- *     stage still inherits whatever the upstream produces stage set).
- */
-function advancePrimaryForScript(state: RunState, def: StageDef, stageName: string, output: Output): void {
-	if (def.kind === "produces") {
-		const next = output.artifacts[0];
-		if (next) state.primaryArtifact = next;
-		const key = resolvePublishName(def, stageName);
-		const slot = state.named[key];
-		if (slot) slot.push(output);
-		else state.named[key] = [output];
-		return;
-	}
-	if (def.inheritsArtifacts === false) {
-		state.primaryArtifact = undefined;
-	}
 }
 
 /**

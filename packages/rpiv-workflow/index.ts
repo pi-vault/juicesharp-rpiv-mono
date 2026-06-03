@@ -209,9 +209,11 @@ export type {
 export { defineCollector, defineParser } from "./output-spec.js";
 export { eq, gt, gte, lt, lte, type Predicate } from "./predicates.js";
 export {
+	type ResumeWorkflowOptions,
 	type RunWorkflowByNameOptions,
 	type RunWorkflowOptions,
 	type RunWorkflowResult,
+	resumeWorkflow,
 	runWorkflow,
 	runWorkflowByName,
 } from "./runner/index.js";
@@ -221,6 +223,7 @@ export {
 	type RunSummary,
 	readHeader,
 	readLastStage,
+	resolveRun,
 	runsDir,
 	stateFilePath,
 	type WorkflowHeader,

@@ -24,7 +24,7 @@ import {
 	recordStopFailure,
 	recordTerminalFailure,
 } from "../audit.js";
-import { resolvePublishName } from "../internal-utils.js";
+import { applyCompletedStage } from "../internal-utils.js";
 import { buildLifecycleContext, skillStageRef } from "../lifecycle.js";
 import {
 	ERR_AUDIT_WRITE_FAILED,
@@ -158,32 +158,6 @@ function tryRecordStage(s: SessionContext, row: { stage: string; skill?: string;
 }
 
 /**
- * Update the rolling chain-input slot. Three cases:
- *   1. `produces` stages whose collector returned at least one artifact
- *      advance the primary (first artifact wins; `role` is user-facing
- *      metadata, not a framework gate).
- *   2. `side-effect` stages with `inheritsArtifacts: false` (authored via
- *      `terminal()`) CLEAR the slot — they explicitly break the chain
- *      so anything after also starts without an inherited artifact.
- *   3. Other `side-effect` stages (commit, implement) leave it in place
- *      so a stage after them inherits the upstream chain input.
- */
-function maybeAdvancePrimary(s: StageSession, output: Output): void {
-	if (s.stage.kind === "produces") {
-		const next = output.artifacts[0];
-		if (next) s.state.primaryArtifact = next;
-		const key = resolvePublishName(s.stage, s.stageName);
-		const slot = s.state.named[key];
-		if (slot) slot.push(output);
-		else s.state.named[key] = [output];
-		return;
-	}
-	if (s.stage.inheritsArtifacts === false) {
-		s.state.primaryArtifact = undefined;
-	}
-}
-
-/**
  * Returns true on successful write — caller gates `onSuccess` on this so the
  * chain advances only when the audit row landed. On failure, leaves
  * `state.output` / `state.primaryArtifact` at their prior values and sets
@@ -191,7 +165,7 @@ function maybeAdvancePrimary(s: StageSession, output: Output): void {
  */
 async function recordStageSuccess(ctx: WorkflowHostContext, s: StageSession, output: Output): Promise<boolean> {
 	if (tryRecordStage(s, { stage: s.stageName, skill: s.skill, output })) {
-		maybeAdvancePrimary(s, output);
+		applyCompletedStage(s.state, s.stage, s.stageName, output);
 		ctx.ui.notify(MSG_STAGE_COMPLETE(s.skill), "info");
 		await s.lifecycle.fire(
 			ctx,

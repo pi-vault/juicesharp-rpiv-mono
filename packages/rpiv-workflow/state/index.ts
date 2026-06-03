@@ -21,6 +21,7 @@ export {
 	readHeader,
 	readLastStage,
 	readRoutingDecisions,
+	resolveRun,
 	runsDir,
 	stateFilePath,
 	writeHeader,

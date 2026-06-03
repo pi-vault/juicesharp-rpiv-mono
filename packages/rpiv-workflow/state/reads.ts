@@ -150,6 +150,16 @@ export function readHeader(cwd: string, runId: string): WorkflowHeader | undefin
 }
 
 /**
+ * Resolve a run reference to its header. Today `ref === runId`; a future
+ * friendly-name index slots in HERE (name → runId → readHeader) without
+ * touching any caller. Fail-soft like every reader — returns undefined when
+ * the ref doesn't resolve.
+ */
+export function resolveRun(cwd: string, ref: string): WorkflowHeader | undefined {
+	return readHeader(cwd, ref);
+}
+
+/**
  * Enumerate every `<cwd>/.rpiv/workflows/runs/<run-id>.jsonl` and return its
  * header projected as a `RunSummary`. Empty array when the runs
  * directory doesn't exist (no runs yet). Files without a valid header

@@ -128,7 +128,7 @@ export async function runIterate(
 		onFailure: undefined,
 		onSuccess: (freshCtx) => {
 			// `tryRecordStage` set `state.output` to this unit's validated Output
-			// (and `maybeAdvancePrimary` already pushed it onto state.named) before
+			// (and `applyCompletedStage` already pushed it onto state.named) before
 			// onSuccess fired. Thread it into `accumulated` for the next pull.
 			const produced = run.state.output!;
 			return runIterate(

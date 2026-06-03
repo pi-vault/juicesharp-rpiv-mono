@@ -111,5 +111,6 @@ export {
 	readHeader,
 	readLastStage,
 	readRoutingDecisions,
+	resolveRun,
 } from "./reads.js";
 export { appendRoutingDecision, appendStage, writeHeader } from "./writes.js";

@@ -5,12 +5,15 @@
  * directory owns graph traversal, per-stage prerequisites, and routing.
  *
  * Modules:
- *  - runner.ts          — runWorkflow + countReachableStages +
+ *  - runner.ts          — runWorkflow + resumeWorkflow + executeRun (shared
+ *                         tail) + countReachableStages +
  *                         runStageOrRecordFailure + finalizeWorkflow.
  *  - stage-lifecycle.ts — runStage + StagePreflightError + preflight
  *                         pipeline + outcome.collector.snapshot hook.
  *  - chain-advance.ts   — advanceChain + routing audit + backward-jump
  *                         guard + halt-on-error.
+ *  - resume.ts          — reconstructState: pure RunState rebuild from a
+ *                         past run's JSONL trail (consumed by resumeWorkflow).
  *
  * Ctx lifecycle: every level only touches the ctx it was handed.
  * - `newSession({cancelled: false})` invalidates the outer ctx; all
@@ -30,10 +33,20 @@ import { handleToString } from "../handle.js";
 import type { WorkflowHost, WorkflowHostContext } from "../host.js";
 import { currentPrimaryArtifact } from "../internal-utils.js";
 import { buildLifecycleContext, LifecycleDispatcher, type LifecycleListeners } from "../lifecycle.js";
-import { MSG_STAGE_THREW, MSG_WORKFLOW_COMPLETE, STATUS_KEY } from "../messages.js";
+import {
+	ERR_RESUME_FANOUT_UNSUPPORTED,
+	ERR_RESUME_NO_ROWS,
+	ERR_RESUME_STAGE_GONE,
+	MSG_STAGE_THREW,
+	MSG_WORKFLOW_COMPLETE,
+	STATUS_KEY,
+} from "../messages.js";
 import { generateRunId, writeHeader } from "../state/index.js";
+import type { WorkflowHeader } from "../state/state.js";
 import { DEFAULT_TRIGGER, type RunTrigger } from "../triggers.js";
 import type { RunContext, RunState } from "../types.js";
+import { advanceChain } from "./chain-advance.js";
+import { type ReconstructResult, reconstructState } from "./resume.js";
 import { runStage, StagePreflightError } from "./stage-lifecycle.js";
 
 // ---------------------------------------------------------------------------
@@ -124,6 +137,44 @@ export interface RunWorkflowResult {
 }
 
 // ---------------------------------------------------------------------------
+// Shared tail — executeRun
+// ---------------------------------------------------------------------------
+
+/**
+ * Shared tail: fire `onWorkflowStart`, kick the chain via `entry`,
+ * assemble the result envelope, fire `onWorkflowEnd`. Used by both
+ * `runWorkflow` (new runs) and `resumeWorkflow` (resumed runs) so
+ * lifecycle events, result assembly, and error propagation stay in lockstep.
+ */
+async function executeRun(
+	ctx: WorkflowHostContext,
+	run: RunContext,
+	entry: () => Promise<void>,
+): Promise<RunWorkflowResult> {
+	await run.lifecycle.fire(ctx, "onWorkflowStart", lifecycleCtxFor(run));
+
+	await entry();
+
+	const { state } = run;
+	const result: RunWorkflowResult = {
+		runId: run.runId,
+		stagesCompleted: state.stagesCompleted,
+		success: state.termination.success,
+		lastArtifact: (() => {
+			const a = currentPrimaryArtifact(state);
+			return a ? handleToString(a.handle) : undefined;
+		})(),
+		error: state.termination.error,
+		...(state.telemetry.droppedRoutingRows.length > 0
+			? { droppedRoutingRows: state.telemetry.droppedRoutingRows }
+			: {}),
+	};
+
+	await run.lifecycle.fire(ctx, "onWorkflowEnd", result, lifecycleCtxFor(run));
+	return result;
+}
+
+// ---------------------------------------------------------------------------
 // runWorkflow — workflow entry point
 // ---------------------------------------------------------------------------
 
@@ -210,31 +261,95 @@ export async function runWorkflow(ctx: WorkflowHostContext, options: RunWorkflow
 		lifecycle,
 	};
 
-	await lifecycle.fire(ctx, "onWorkflowStart", lifecycleCtxFor(run));
+	return executeRun(ctx, run, () => runStageOrRecordFailure(ctx, workflow.start, 0, run));
+}
 
-	// runStageOrRecordFailure (not bare runStage) so a throw out of the start stage —
-	// notably enforceSessionInvariants violations — records a JSONL failure
-	// row keyed on the failing stage rather than leaving a header-only file
-	// that every shape-filtered reader skips. Same wrapper used by
-	// advanceChain for downstream stages.
-	await runStageOrRecordFailure(ctx, workflow.start, 0, run);
+export interface ResumeWorkflowOptions {
+	/** Workflow whose run is being resumed — caller resolves by name from `LoadedWorkflows`. */
+	workflow: Workflow;
+	/** Header of the run to resume — caller resolves via `resolveRun`. */
+	header: WorkflowHeader;
+	/** Required for "continue"-policy stages (host.sendUserMessage). */
+	host?: WorkflowHost;
+	/** Defaults to MAX_BACKWARD_JUMPS. */
+	maxBackwardJumps?: number;
+	/** Run-wide safety cap on iterate-stage units. Defaults to MAX_ITERATIONS. */
+	maxIterations?: number;
+	/** The user's `@<ref>` — surfaced in trigger.meta + refusal messages. */
+	ref: string;
+	/** Per-call lifecycle listener bundle. */
+	lifecycle?: LifecycleListeners;
+}
 
-	const result: RunWorkflowResult = {
-		runId,
-		stagesCompleted: state.stagesCompleted,
-		success: state.termination.success,
-		lastArtifact: (() => {
-			const a = currentPrimaryArtifact(state);
-			return a ? handleToString(a.handle) : undefined;
-		})(),
-		error: state.termination.error,
-		...(state.telemetry.droppedRoutingRows.length > 0
-			? { droppedRoutingRows: state.telemetry.droppedRoutingRows }
-			: {}),
+/**
+ * Resume a failed (or cut-off) workflow run by rebuilding `RunState` from
+ * the run's JSONL audit trail and re-entering the chain machinery at the
+ * right seam — re-running the failed stage, or routing onward from the
+ * last completed one.
+ *
+ * New rows **append to the same JSONL file** so the trail reads as one
+ * story: *ran → failed → resumed → continued*.
+ */
+export async function resumeWorkflow(
+	ctx: WorkflowHostContext,
+	options: ResumeWorkflowOptions,
+): Promise<RunWorkflowResult> {
+	const { workflow, header } = options;
+	const cwd = ctx.cwd;
+
+	const recon = reconstructState(cwd, workflow, header);
+	if (!recon.ok) {
+		const error = resumeRefusalError(recon, header.workflow);
+		ctx.ui.notify(error, "error"); // refusal writes no JSONL → command won't double-notify
+		return { stagesCompleted: 0, success: false, error };
+	}
+
+	// Same continue-policy guard as runWorkflow.
+	if (options.host === undefined && Object.values(workflow.stages).some((s) => s.sessionPolicy === "continue")) {
+		return {
+			stagesCompleted: 0,
+			success: false,
+			error: "workflow contains continue-policy stages which require a workflow host",
+		};
+	}
+
+	const trigger: RunTrigger = { kind: "command", name: "wf", meta: { resumedFrom: options.ref } };
+	const registeredSkills = options.host ? snapshotRegisteredSkills(options.host) : undefined;
+
+	const run: RunContext = {
+		cwd,
+		runId: header.runId, // SAME run — new rows append to the same file
+		workflow,
+		totalStages: countReachableStages(workflow),
+		state: recon.state,
+		visited: recon.visited,
+		registeredSkills,
+		continueHost: options.host,
+		maxBackwardJumps: options.maxBackwardJumps ?? MAX_BACKWARD_JUMPS,
+		maxIterations: options.maxIterations ?? MAX_ITERATIONS,
+		trigger,
+		lifecycle: new LifecycleDispatcher(options.lifecycle),
 	};
 
-	await lifecycle.fire(ctx, "onWorkflowEnd", result, lifecycleCtxFor(run));
-	return result;
+	const last = recon.rows[recon.rows.length - 1]!;
+	const idx = last.stageNumber - 1; // status-line / routing index; JSONL number comes from the allocator
+	const entry =
+		last.status === "completed"
+			? () => advanceChain(ctx, last.stage, idx, run) // route onward; finished run ⇒ hits stop ⇒ no-op
+			: () => runStageOrRecordFailure(ctx, last.stage, idx, run); // re-run the failed/aborted stage
+
+	return executeRun(ctx, run, entry);
+}
+
+function resumeRefusalError(recon: Extract<ReconstructResult, { ok: false }>, workflow: string): string {
+	switch (recon.reason) {
+		case "no-rows":
+			return ERR_RESUME_NO_ROWS(recon.detail);
+		case "stage-gone":
+			return ERR_RESUME_STAGE_GONE(recon.detail, workflow);
+		case "fanout-unsupported":
+			return ERR_RESUME_FANOUT_UNSUPPORTED(recon.detail);
+	}
 }
 
 /** Build a `LifecycleContext` from the current `RunContext`. Captured per fire so listeners always see the latest `state` snapshot. */

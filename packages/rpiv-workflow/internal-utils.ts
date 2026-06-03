@@ -9,6 +9,7 @@
 import { isAbsolute, join } from "node:path";
 import type { StageDef } from "./api.js";
 import type { Artifact } from "./handle.js";
+import type { Output } from "./output.js";
 import type { RunState } from "./types.js";
 
 /** Exhaustiveness guard for discriminated-union switches. */
@@ -55,6 +56,40 @@ export async function withTimeout<T>(promise: Promise<T>, ms: number, message: s
 		return await Promise.race([promise, timeout]);
 	} finally {
 		if (timer !== undefined) clearTimeout(timer);
+	}
+}
+
+/**
+ * The single authority for "a completed produces stage mutates the rolling
+ * artifact state." Called by the live skill path (sessions/sessions.ts), the
+ * live script path (runner/script-stage.ts), and state reconstruction
+ * (runner/resume.ts) — keeping all three in lockstep (parity-tested).
+ *
+ * Scope: primary slot + named-publish registry ONLY. `state.output` and
+ * `state.stagesCompleted` stay at call sites — `state.output` lives in the
+ * shared, gated `tryRecordStage` (also serving fanout, which never advances
+ * the primary), so folding it here would couple fanout to the produces rule.
+ *
+ *   - kind "produces"            → first artifact wins the rolling slot; the
+ *                                  full Output appends onto state.named[key].
+ *   - inheritsArtifacts === false → clear the slot (terminal()).
+ *   - other side-effect          → leave the slot untouched.
+ */
+export function applyCompletedStage(state: RunState, def: StageDef, stageName: string, output: Output): void {
+	if (def.kind === "produces") {
+		const next = output.artifacts[0];
+		if (next) state.primaryArtifact = next;
+		const key = resolvePublishName(def, stageName);
+		let slot = state.named[key];
+		if (!slot) {
+			slot = [];
+			state.named[key] = slot;
+		}
+		slot.push(output);
+		return;
+	}
+	if (def.inheritsArtifacts === false) {
+		state.primaryArtifact = undefined;
 	}
 }
 
