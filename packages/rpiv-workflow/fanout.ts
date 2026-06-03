@@ -11,6 +11,7 @@
  */
 
 import type { FanoutUnit } from "./api.js";
+import { runIdentityOf } from "./audit.js";
 import { buildLifecycleContext, skillStageRef } from "./lifecycle.js";
 import { MSG_STAGE_COMPLETE, STATUS_FANOUT_UNIT, STATUS_KEY } from "./messages.js";
 import type { FanoutSession, RunContext, WorkflowHostContext } from "./types.js";
@@ -91,7 +92,7 @@ export async function runFanout(
 		stageName: currentName,
 		skill,
 		lifecycle: run.lifecycle,
-		runIdentity: { workflow: run.workflow.name, totalStages: run.totalStages, trigger: run.trigger },
+		runIdentity: runIdentityOf(run),
 		unitIndex: p,
 		label: unit.label,
 		id: unit.id,

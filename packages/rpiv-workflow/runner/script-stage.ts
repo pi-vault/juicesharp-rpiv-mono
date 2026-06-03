@@ -28,7 +28,7 @@
  */
 
 import type { ScriptContext } from "../api.js";
-import { nowIso, recordStage, recordTerminalFailure } from "../audit.js";
+import { auditCtxFor, nowIso, recordStage, recordTerminalFailure } from "../audit.js";
 import type { Artifact } from "./../handle.js";
 import { applyCompletedStage } from "../internal-utils.js";
 import { scriptStageRef } from "../lifecycle.js";
@@ -199,18 +199,9 @@ function recordScriptSuccess(
  * attribution aligned with the success row's `stage` identity.
  */
 function scriptAuditCtx(run: RunContext, stage: ResolvedStage) {
-	return {
-		cwd: run.cwd,
-		runId: run.runId,
-		state: run.state,
-		stageName: stage.name,
-		// `skill` doubles as the notify-message subject (`MSG_VALIDATION_EXHAUSTED`,
-		// `MSG_STAGE_FAILED`); set to the stage name so the user sees the stage
-		// identity. `isScript: true` ensures the JSONL row drops the field and
-		// `onStageError` fires with `scriptStageRef` (no `skill` payload).
-		skill: stage.name,
-		lifecycle: run.lifecycle,
-		runIdentity: { workflow: run.workflow.name, totalStages: run.totalStages, trigger: run.trigger },
-		isScript: true,
-	};
+	// `skill` doubles as the notify-message subject (`MSG_VALIDATION_EXHAUSTED`,
+	// `MSG_STAGE_FAILED`); set to the stage name so the user sees the stage
+	// identity. `isScript: true` ensures the JSONL row drops the field and
+	// `onStageError` fires with `scriptStageRef` (no `skill` payload).
+	return auditCtxFor(run, stage.name, stage.name, { isScript: true });
 }

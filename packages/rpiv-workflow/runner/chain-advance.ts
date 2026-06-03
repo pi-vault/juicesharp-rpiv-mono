@@ -8,7 +8,7 @@
  * downstream-stage throws.
  */
 
-import { nowIso, recordTerminalFailure } from "../audit.js";
+import { auditCtxFor, nowIso, recordTerminalFailure } from "../audit.js";
 import { skillStageRef } from "../lifecycle.js";
 import {
 	ERR_BACKWARD_JUMP_EXHAUSTED,
@@ -136,24 +136,12 @@ async function checkBackwardJumpGuard(
 	}
 	state.telemetry.backwardJumps++;
 	if (state.telemetry.backwardJumps <= run.maxBackwardJumps) return true;
-	await recordTerminalFailure(
-		curCtx,
-		{
-			cwd: run.cwd,
-			runId: run.runId,
-			state,
-			stageName: nextName,
-			skill: nextName,
-			lifecycle: run.lifecycle,
-			runIdentity: { workflow: run.workflow.name, totalStages: run.totalStages, trigger: run.trigger },
-		},
-		{
-			status: "failed",
-			notifyMsg: MSG_BACKWARD_JUMP_EXHAUSTED(state.telemetry.backwardJumps, run.maxBackwardJumps),
-			notifyLevel: "error",
-			errMsg: ERR_BACKWARD_JUMP_EXHAUSTED(state.telemetry.backwardJumps, run.maxBackwardJumps),
-		},
-	);
+	await recordTerminalFailure(curCtx, auditCtxFor(run, nextName, nextName), {
+		status: "failed",
+		notifyMsg: MSG_BACKWARD_JUMP_EXHAUSTED(state.telemetry.backwardJumps, run.maxBackwardJumps),
+		notifyLevel: "error",
+		errMsg: ERR_BACKWARD_JUMP_EXHAUSTED(state.telemetry.backwardJumps, run.maxBackwardJumps),
+	});
 	return false;
 }
 
@@ -168,22 +156,10 @@ async function haltOnRoutingError(
 	currentName: string,
 	reason: string,
 ): Promise<void> {
-	await recordTerminalFailure(
-		curCtx,
-		{
-			cwd: run.cwd,
-			runId: run.runId,
-			state: run.state,
-			stageName: currentName,
-			skill: currentName,
-			lifecycle: run.lifecycle,
-			runIdentity: { workflow: run.workflow.name, totalStages: run.totalStages, trigger: run.trigger },
-		},
-		{
-			status: "failed",
-			notifyMsg: MSG_CHAIN_ADVANCE_FAILED(currentName, reason),
-			notifyLevel: "error",
-			errMsg: reason,
-		},
-	);
+	await recordTerminalFailure(curCtx, auditCtxFor(run, currentName, currentName), {
+		status: "failed",
+		notifyMsg: MSG_CHAIN_ADVANCE_FAILED(currentName, reason),
+		notifyLevel: "error",
+		errMsg: reason,
+	});
 }

@@ -28,13 +28,14 @@
  */
 
 import type { Workflow } from "../api.js";
-import { notifyPartialArtifacts, nowIso, recordTerminalFailure } from "../audit.js";
+import { auditCtxFor, notifyPartialArtifacts, nowIso, recordTerminalFailure } from "../audit.js";
+import type { FanoutDeps } from "../fanout.js";
 import { handleToString } from "../handle.js";
 import type { WorkflowHost, WorkflowHostContext } from "../host.js";
 import { currentPrimaryArtifact } from "../internal-utils.js";
 import { buildLifecycleContext, LifecycleDispatcher, type LifecycleListeners } from "../lifecycle.js";
 import {
-	ERR_RESUME_FANOUT_UNSUPPORTED,
+	ERR_RESUME_ITERATE_UNSUPPORTED,
 	ERR_RESUME_NO_ROWS,
 	ERR_RESUME_STAGE_GONE,
 	ERR_WORKFLOW_ABORTED,
@@ -43,12 +44,14 @@ import {
 	MSG_WORKFLOW_COMPLETE,
 	STATUS_KEY,
 } from "../messages.js";
+import { runFanoutSession } from "../sessions/index.js";
 import { generateRunId, writeHeader } from "../state/index.js";
 import type { WorkflowHeader } from "../state/state.js";
 import { DEFAULT_TRIGGER, type RunTrigger } from "../triggers.js";
 import type { RunContext, RunState } from "../types.js";
 import { advanceChain } from "./chain-advance.js";
-import { type ReconstructResult, reconstructState } from "./resume.js";
+import { fanoutStageNames, matchFanoutParent, type ReconstructResult, reconstructState } from "./resume.js";
+import { resumeFanoutStage } from "./resume-fanout.js";
 import { runStage, StagePreflightError } from "./stage-lifecycle.js";
 
 // ---------------------------------------------------------------------------
@@ -204,74 +207,21 @@ export async function runWorkflow(ctx: WorkflowHostContext, options: RunWorkflow
 		};
 	}
 
-	// Continue-policy stages thread the prior session via the host's
-	// sendUserMessage; if no host was passed, enforceSessionInvariants would
-	// throw at the first such stage.
-	// Reject at workflow entry so embedders get a clean envelope instead of a throw.
-	if (options.host === undefined && Object.values(workflow.stages).some((s) => s.sessionPolicy === "continue")) {
-		return {
-			stagesCompleted: 0,
-			success: false,
-			error: "workflow contains continue-policy stages which require a workflow host",
-		};
-	}
+	const continueGuard = hostMissingForContinueStages(workflow, options.host);
+	if (continueGuard) return { stagesCompleted: 0, success: false, error: continueGuard };
 
 	const cwd = ctx.cwd;
 	const runId = generateRunId();
-	const totalStages = countReachableStages(workflow);
 	const trigger = options.trigger ?? DEFAULT_TRIGGER;
 
-	writeHeader(cwd, {
+	writeHeader(cwd, { runId, workflow: workflow.name, input: options.input, ts: nowIso(), trigger });
+
+	const run = buildRunContext(cwd, workflow, options, {
 		runId,
-		workflow: workflow.name,
-		input: options.input,
-		ts: nowIso(),
+		state: freshRunState(options.input),
+		visited: new Set(),
 		trigger,
 	});
-
-	const state: RunState = {
-		originalInput: options.input,
-		primaryArtifact: undefined,
-		output: undefined,
-		named: {},
-		stagesCompleted: 0,
-		lastAllocatedStageNumber: 0,
-		telemetry: {
-			backwardJumps: 0,
-			droppedRoutingRows: [],
-		},
-		termination: {
-			success: false,
-			error: undefined,
-		},
-	};
-
-	const maxBackwardJumps = options.maxBackwardJumps ?? MAX_BACKWARD_JUMPS;
-	const maxIterations = options.maxIterations ?? MAX_ITERATIONS;
-	const lifecycle = new LifecycleDispatcher(options.lifecycle);
-
-	// Snapshot the skill registry BEFORE any stage opens a fresh session.
-	// Pi invalidates the `WorkflowHost` handle on the first `ctx.newSession()`,
-	// so this is the only safe moment to enumerate. After this point, the
-	// runner reads `run.registeredSkills`; `options.host` survives only on
-	// `run.continueHost` for the continue-policy session handler.
-	const registeredSkills = options.host ? snapshotRegisteredSkills(options.host) : undefined;
-
-	const run: RunContext = {
-		cwd,
-		runId,
-		workflow,
-		totalStages,
-		state,
-		visited: new Set(),
-		registeredSkills,
-		continueHost: options.host,
-		maxBackwardJumps,
-		maxIterations,
-		trigger,
-		lifecycle,
-		signal: options.signal,
-	};
 
 	return executeRun(ctx, run, () => runStageOrRecordFailure(ctx, workflow.start, 0, run));
 }
@@ -321,42 +271,127 @@ export async function resumeWorkflow(
 		return { stagesCompleted: 0, success: false, error: resumeRefusalError(recon, header.workflow) };
 	}
 
-	// Same continue-policy guard as runWorkflow.
-	if (options.host === undefined && Object.values(workflow.stages).some((s) => s.sessionPolicy === "continue")) {
-		return {
-			stagesCompleted: 0,
-			success: false,
-			error: "workflow contains continue-policy stages which require a workflow host",
-		};
-	}
+	const continueGuard = hostMissingForContinueStages(workflow, options.host);
+	if (continueGuard) return { stagesCompleted: 0, success: false, error: continueGuard };
 
-	const trigger: RunTrigger = { kind: "command", name: "wf", meta: { resumedFrom: options.ref } };
-	const registeredSkills = options.host ? snapshotRegisteredSkills(options.host) : undefined;
-
-	const run: RunContext = {
-		cwd,
+	const run = buildRunContext(cwd, workflow, options, {
 		runId: header.runId, // SAME run — new rows append to the same file
-		workflow,
-		totalStages: countReachableStages(workflow),
 		state: recon.state,
 		visited: recon.visited,
-		registeredSkills,
+		trigger: { kind: "command", name: "wf", meta: { resumedFrom: options.ref } },
+	});
+
+	return executeRun(ctx, run, selectResumeEntry(ctx, workflow, recon, run));
+}
+
+// ---------------------------------------------------------------------------
+// Run-construction helpers (shared by runWorkflow + resumeWorkflow)
+// ---------------------------------------------------------------------------
+
+/**
+ * Continue-policy stages thread the prior session via the host's
+ * `sendUserMessage`; with no host, `enforceSessionInvariants` would throw at
+ * the first such stage. Reject at workflow entry so embedders get a clean
+ * envelope instead of a throw. Returns the error message, or undefined if the
+ * workflow is safe to run.
+ */
+function hostMissingForContinueStages(workflow: Workflow, host: WorkflowHost | undefined): string | undefined {
+	if (host !== undefined) return undefined;
+	if (!Object.values(workflow.stages).some((s) => s.sessionPolicy === "continue")) return undefined;
+	return "workflow contains continue-policy stages which require a workflow host";
+}
+
+/** A pristine `RunState` for a brand-new run (resumes rebuild theirs via `reconstructState`). */
+function freshRunState(originalInput: string): RunState {
+	return {
+		originalInput,
+		primaryArtifact: undefined,
+		output: undefined,
+		named: {},
+		stagesCompleted: 0,
+		lastAllocatedStageNumber: 0,
+		telemetry: { backwardJumps: 0, droppedRoutingRows: [] },
+		termination: { success: false, error: undefined },
+	};
+}
+
+/**
+ * Assemble the `RunContext` shared by both entry points. `identity` carries the
+ * four fields that differ between a new run (fresh id/state/visited, caller
+ * trigger) and a resume (same run id, reconstructed state/visited, resume
+ * trigger); everything else derives identically from `options`.
+ *
+ * The skill-registry snapshot happens here, BEFORE any stage opens a fresh
+ * session — Pi invalidates the `WorkflowHost` handle on the first
+ * `ctx.newSession()`, so this is the only safe moment to enumerate. After this
+ * the runner reads `run.registeredSkills`; `options.host` survives only on
+ * `run.continueHost` for the continue-policy session handler.
+ */
+function buildRunContext(
+	cwd: string,
+	workflow: Workflow,
+	options: {
+		host?: WorkflowHost;
+		maxBackwardJumps?: number;
+		maxIterations?: number;
+		lifecycle?: LifecycleListeners;
+		signal?: AbortSignal;
+	},
+	identity: { runId: string; state: RunState; visited: Set<string>; trigger: RunTrigger },
+): RunContext {
+	return {
+		cwd,
+		runId: identity.runId,
+		workflow,
+		totalStages: countReachableStages(workflow),
+		state: identity.state,
+		visited: identity.visited,
+		registeredSkills: options.host ? snapshotRegisteredSkills(options.host) : undefined,
 		continueHost: options.host,
 		maxBackwardJumps: options.maxBackwardJumps ?? MAX_BACKWARD_JUMPS,
 		maxIterations: options.maxIterations ?? MAX_ITERATIONS,
-		trigger,
+		trigger: identity.trigger,
 		lifecycle: new LifecycleDispatcher(options.lifecycle),
 		signal: options.signal,
 	};
+}
 
+/**
+ * Pick the chain re-entry thunk for a resumed run from its trail trailer:
+ *   - decorated fanout-unit trailer → resume the fanout from the next unit
+ *     (`resumeFanoutStage`);
+ *   - completed normal trailer → route onward (a finished run hits stop ⇒ no-op);
+ *   - failed/aborted trailer → re-run that stage.
+ *
+ * A decorated fanout-unit row has a `stage` key absent from `workflow.stages`
+ * that matches a fanout parent — meaning the run died inside a fanout. A normal
+ * trailer after a fully-completed fanout falls through to the binary arms.
+ */
+function selectResumeEntry(
+	ctx: WorkflowHostContext,
+	workflow: Workflow,
+	recon: Extract<ReconstructResult, { ok: true }>,
+	run: RunContext,
+): () => Promise<void> {
 	const last = recon.rows[recon.rows.length - 1]!;
 	const idx = last.stageNumber - 1; // status-line / routing index; JSONL number comes from the allocator
-	const entry =
-		last.status === "completed"
-			? () => advanceChain(ctx, last.stage, idx, run) // route onward; finished run ⇒ hits stop ⇒ no-op
-			: () => runStageOrRecordFailure(ctx, last.stage, idx, run); // re-run the failed/aborted stage
 
-	return executeRun(ctx, run, entry);
+	const trailerFanoutParent = workflow.stages[last.stage]
+		? undefined
+		: matchFanoutParent(last.stage, fanoutStageNames(workflow));
+
+	if (trailerFanoutParent) {
+		const fanoutDeps: FanoutDeps = {
+			runFanoutSession,
+			advanceAfter: (freshCtx, name, completedIdx, r) => advanceChain(freshCtx, name, completedIdx, r),
+		};
+		const completed = recon.fanoutProgress.get(trailerFanoutParent) ?? [];
+		return () => resumeFanoutStage(ctx, trailerFanoutParent, idx, completed, run, fanoutDeps);
+	}
+	if (last.status === "completed") {
+		return () => advanceChain(ctx, last.stage, idx, run); // route onward; finished run ⇒ hits stop ⇒ no-op
+	}
+	return () => runStageOrRecordFailure(ctx, last.stage, idx, run); // re-run the failed/aborted stage
 }
 
 function resumeRefusalError(recon: Extract<ReconstructResult, { ok: false }>, workflow: string): string {
@@ -365,8 +400,8 @@ function resumeRefusalError(recon: Extract<ReconstructResult, { ok: false }>, wo
 			return ERR_RESUME_NO_ROWS(recon.detail);
 		case "stage-gone":
 			return ERR_RESUME_STAGE_GONE(recon.detail, workflow);
-		case "fanout-unsupported":
-			return ERR_RESUME_FANOUT_UNSUPPORTED(recon.detail);
+		case "iterate-unsupported":
+			return ERR_RESUME_ITERATE_UNSUPPORTED(recon.detail);
 	}
 }
 
@@ -471,19 +506,6 @@ export async function runStageOrRecordFailure(
 			errMsg: reason,
 		});
 	}
-}
-
-/** Build an AuditCtx for a stage failure that escaped a session (preflight halts, downstream throws). */
-function auditCtxFor(run: RunContext, stageName: string, skill: string) {
-	return {
-		cwd: run.cwd,
-		runId: run.runId,
-		state: run.state,
-		stageName,
-		skill,
-		lifecycle: run.lifecycle,
-		runIdentity: { workflow: run.workflow.name, totalStages: run.totalStages, trigger: run.trigger },
-	};
 }
 
 export function finalizeWorkflow(curCtx: WorkflowHostContext, run: RunContext): void {

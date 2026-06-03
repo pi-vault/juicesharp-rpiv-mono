@@ -18,7 +18,7 @@
  */
 
 import type { StageDef } from "./api.js";
-import { iterateRowStage } from "./audit.js";
+import { iterateRowStage, runIdentityOf } from "./audit.js";
 import type { Artifact } from "./handle.js";
 import { MSG_ITERATE_ZERO_UNITS, MSG_STAGE_COMPLETE, STATUS_ITERATE_UNIT, STATUS_KEY } from "./messages.js";
 import type { Output } from "./output.js";
@@ -120,7 +120,7 @@ export async function runIterate(
 		stageName: iterateRowStage(currentName, unit.id ?? unit.label),
 		skill,
 		lifecycle: run.lifecycle,
-		runIdentity: { workflow: run.workflow.name, totalStages: run.totalStages, trigger: run.trigger },
+		runIdentity: runIdentityOf(run),
 		stage: def,
 		stageIndex: stageIdx,
 		snapshot,

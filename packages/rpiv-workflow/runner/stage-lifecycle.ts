@@ -10,7 +10,7 @@
  */
 
 import type { PromptFn, StageDef } from "../api.js";
-import { notifyPartialArtifacts, recordTerminalFailure } from "../audit.js";
+import { auditCtxFor, notifyPartialArtifacts, recordTerminalFailure, runIdentityOf } from "../audit.js";
 import { runFanout } from "../fanout.js";
 import { handleToString } from "../handle.js";
 import { currentPrimaryArtifact, withTimeout } from "../internal-utils.js";
@@ -243,7 +243,7 @@ export async function runStage(
 		stageName: stage.name,
 		skill: stage.skill,
 		lifecycle: run.lifecycle,
-		runIdentity: { workflow: run.workflow.name, totalStages: run.totalStages, trigger: run.trigger },
+		runIdentity: runIdentityOf(run),
 		stage: stage.def,
 		stageIndex: idx,
 		snapshot,
@@ -362,24 +362,12 @@ async function haltIterations(
 	stageName: string,
 	count: number,
 ): Promise<void> {
-	await recordTerminalFailure(
-		curCtx,
-		{
-			cwd: run.cwd,
-			runId: run.runId,
-			state: run.state,
-			stageName,
-			skill: stageName,
-			lifecycle: run.lifecycle,
-			runIdentity: { workflow: run.workflow.name, totalStages: run.totalStages, trigger: run.trigger },
-		},
-		{
-			status: "failed",
-			notifyMsg: MSG_ITERATIONS_EXHAUSTED(count, run.maxIterations),
-			notifyLevel: "error",
-			errMsg: ERR_ITERATIONS_EXHAUSTED(count, run.maxIterations),
-		},
-	);
+	await recordTerminalFailure(curCtx, auditCtxFor(run, stageName, stageName), {
+		status: "failed",
+		notifyMsg: MSG_ITERATIONS_EXHAUSTED(count, run.maxIterations),
+		notifyLevel: "error",
+		errMsg: ERR_ITERATIONS_EXHAUSTED(count, run.maxIterations),
+	});
 }
 
 /**

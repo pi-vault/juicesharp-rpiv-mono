@@ -10,7 +10,8 @@
  *      visited + lastStageNumber include it)
  *   5. Empty file → no-rows refusal
  *   6. Stage gone from workflow → stage-gone refusal
- *   7. Fanout/iterate stage → fanout-unsupported refusal
+ *   7. Decorated fanout unit rows → counters-only fold + fanoutProgress;
+ *      decorated iterate unit row → iterate-unsupported refusal
  *   8. Named-slot append-order (array history preserved across repeated calls)
  */
 
@@ -92,42 +93,6 @@ const terminalWorkflow: Workflow = {
 		cleanup: "stop",
 	},
 };
-
-/** Workflow with a fanout stage. */
-const fanoutWorkflow: Workflow = {
-	name: "test-wf",
-	start: "plan",
-	stages: {
-		plan: { kind: "produces", sessionPolicy: "fresh" },
-		build: {
-			kind: "produces",
-			sessionPolicy: "fresh",
-			fanout: () => [],
-		},
-	},
-	edges: {
-		plan: "build",
-		build: "stop",
-	},
-} as Workflow;
-
-/** Workflow with an iterate stage. */
-const iterateWorkflow: Workflow = {
-	name: "test-wf",
-	start: "plan",
-	stages: {
-		plan: { kind: "produces", sessionPolicy: "fresh" },
-		refine: {
-			kind: "produces",
-			sessionPolicy: "fresh",
-			iterate: () => null,
-		},
-	},
-	edges: {
-		plan: "refine",
-		refine: "stop",
-	},
-} as Workflow;
 
 const baseHeader: WorkflowHeader = {
 	runId: "2026-06-03_07-30-00-ab12",
@@ -361,56 +326,99 @@ describe("reconstructState", () => {
 		expect(result.detail).toBe("renamed-away");
 	});
 
-	it("fanout stage: returns fanout-unsupported refusal", () => {
+	it("decorated fanout unit rows: folds counters-only, tracks fanoutProgress, no primary mutation", () => {
+		const planArt = fakeArtifact("plans/p1.md");
+		const planOut = fakeOutput([planArt]);
+		// Workflow: plan (produces) -> build (fanout). Build units are decorated rows.
+		const wf: Workflow = {
+			name: "test-wf",
+			start: "plan",
+			stages: {
+				plan: { kind: "produces", sessionPolicy: "fresh" },
+				build: { kind: "produces", sessionPolicy: "fresh", fanout: () => [] },
+			},
+			edges: { plan: "build", build: "stop" },
+		} as Workflow;
+
 		writeRunStages([
-			{
-				stageNumber: 1,
-				stage: "plan",
-				skill: "plan",
-				status: "completed",
-				ts: "2026-06-03T07:31:00Z",
-			},
-			{
-				stageNumber: 2,
-				stage: "build",
-				skill: "build",
-				status: "completed",
-				ts: "2026-06-03T07:35:00Z",
-			},
+			{ stageNumber: 1, stage: "plan", skill: "plan", status: "completed", ts: "t1", output: planOut },
+			{ stageNumber: 2, stage: "build (phase 1/2)", skill: "build", status: "completed", ts: "t2" },
+			{ stageNumber: 3, stage: "build (phase 2/2)", skill: "build", status: "completed", ts: "t3" },
 		]);
 
-		const result = reconstructState(tmpDir, fanoutWorkflow, baseHeader);
+		const result = reconstructState(tmpDir, wf, baseHeader);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
 
-		expect(result.ok).toBe(false);
-		if (result.ok) return;
-		expect(result.reason).toBe("fanout-unsupported");
-		expect(result.detail).toBe("build");
+		// Counters advanced for every completed row (1 plan + 2 units)...
+		expect(result.state.stagesCompleted).toBe(3);
+		// ...but the fanout units left the primary on the pre-fanout artifact.
+		expect(result.state.primaryArtifact).toStrictEqual(planArt);
+		// Parent is visited; the decorated keys are not.
+		expect(result.visited).toEqual(new Set(["plan", "build"]));
+		// fanoutProgress carries the completed decorated strings in order.
+		expect(result.fanoutProgress.get("build")).toEqual(["build (phase 1/2)", "build (phase 2/2)"]);
 	});
 
-	it("iterate stage: returns fanout-unsupported refusal", () => {
+	it("failed fanout unit is excluded from fanoutProgress (the k+1 resume point)", () => {
+		const wf: Workflow = {
+			name: "test-wf",
+			start: "build",
+			stages: { build: { kind: "produces", sessionPolicy: "fresh", fanout: () => [] } },
+			edges: { build: "stop" },
+		} as Workflow;
 		writeRunStages([
-			{
-				stageNumber: 1,
-				stage: "plan",
-				skill: "plan",
-				status: "completed",
-				ts: "2026-06-03T07:31:00Z",
-			},
-			{
-				stageNumber: 2,
-				stage: "refine",
-				skill: "refine",
-				status: "completed",
-				ts: "2026-06-03T07:35:00Z",
-			},
+			{ stageNumber: 1, stage: "build (phase 1/3)", skill: "build", status: "completed", ts: "t1" },
+			{ stageNumber: 2, stage: "build (phase 2/3)", skill: "build", status: "failed", ts: "t2", errMsg: "boom" },
 		]);
+		const result = reconstructState(tmpDir, wf, baseHeader);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.state.stagesCompleted).toBe(1);
+		expect(result.fanoutProgress.get("build")).toEqual(["build (phase 1/3)"]);
+		expect(result.visited).toEqual(new Set(["build"]));
+	});
 
-		const result = reconstructState(tmpDir, iterateWorkflow, baseHeader);
-
+	it("decorated iterate unit row: returns iterate-unsupported refusal", () => {
+		const wf: Workflow = {
+			name: "test-wf",
+			start: "plan",
+			stages: {
+				plan: { kind: "produces", sessionPolicy: "fresh" },
+				refine: { kind: "produces", sessionPolicy: "fresh", iterate: () => null },
+			},
+			edges: { plan: "refine", refine: "stop" },
+		} as Workflow;
+		writeRunStages([
+			{ stageNumber: 1, stage: "plan", skill: "plan", status: "completed", ts: "t1" },
+			{ stageNumber: 2, stage: "refine (phase-1)", skill: "refine", status: "completed", ts: "t2" },
+		]);
+		const result = reconstructState(tmpDir, wf, baseHeader);
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
-		expect(result.reason).toBe("fanout-unsupported");
+		expect(result.reason).toBe("iterate-unsupported");
 		expect(result.detail).toBe("refine");
+	});
+
+	it("prefix-name collision: 'build (x)' matches build, not 'build-extra'", () => {
+		const wf: Workflow = {
+			name: "test-wf",
+			start: "build",
+			stages: {
+				build: { kind: "produces", sessionPolicy: "fresh", fanout: () => [] },
+				"build-extra": { kind: "produces", sessionPolicy: "fresh", fanout: () => [] },
+			},
+			edges: { build: "build-extra", "build-extra": "stop" },
+		} as Workflow;
+		writeRunStages([
+			{ stageNumber: 1, stage: "build (phase 1/1)", skill: "build", status: "completed", ts: "t1" },
+			{ stageNumber: 2, stage: "build-extra (phase 1/1)", skill: "build-extra", status: "completed", ts: "t2" },
+		]);
+		const result = reconstructState(tmpDir, wf, baseHeader);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.fanoutProgress.get("build")).toEqual(["build (phase 1/1)"]);
+		expect(result.fanoutProgress.get("build-extra")).toEqual(["build-extra (phase 1/1)"]);
 	});
 
 	it("named slot accumulates across completed rows for the same key (append order)", () => {
@@ -805,51 +813,6 @@ describe("resumeWorkflow", () => {
 		expect(result.runId).toBeUndefined();
 
 		const errorNotifies = chain.notifications.filter((n) => n.level === "error" && /no longer exists/.test(n.msg));
-		expect(errorNotifies).toHaveLength(0);
-	});
-
-	it("fanout-unsupported refusal: returns error envelope, no self-notify", async () => {
-		const fanoutWf: Workflow = {
-			name: "fanout-wf",
-			start: "plan",
-			stages: {
-				plan: { kind: "produces", sessionPolicy: "fresh" },
-				build: { kind: "produces", sessionPolicy: "fresh", fanout: () => [] },
-			},
-			edges: { plan: "build", build: "stop" },
-		} as Workflow;
-
-		writeRun(resumeHeader, [
-			{
-				stageNumber: 1,
-				stage: "plan",
-				skill: "plan",
-				status: "completed",
-				ts: "2026-06-03T07:31:00Z",
-			},
-			{
-				stageNumber: 2,
-				stage: "build",
-				skill: "build",
-				status: "failed",
-				ts: "2026-06-03T07:35:00Z",
-				errMsg: "fail",
-			},
-		]);
-
-		const chain = createMockSessionChain({ cwd: tmpDir, steps: [] });
-
-		const result = await resumeWorkflow(chain.ctx, {
-			workflow: fanoutWf,
-			header: resumeHeader,
-			ref: "@2026-06-03_07-30-00-ab12",
-		});
-
-		expect(result.success).toBe(false);
-		expect(result.error).toMatch(/fanout\/iterate/);
-		expect(result.runId).toBeUndefined();
-
-		const errorNotifies = chain.notifications.filter((n) => n.level === "error" && /fanout\/iterate/.test(n.msg));
 		expect(errorNotifies).toHaveLength(0);
 	});
 

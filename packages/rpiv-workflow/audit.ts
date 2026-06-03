@@ -23,7 +23,7 @@ import {
 } from "./messages.js";
 import { appendStage, listArtifacts, type WorkflowStage } from "./state/index.js";
 import type { StopSignal } from "./transcript.js";
-import type { FanoutSession, RunState, SessionContext, WorkflowHostContext } from "./types.js";
+import type { FanoutSession, RunContext, RunState, SessionContext, WorkflowHostContext } from "./types.js";
 
 /** Single source of ISO-8601 timestamps for audit rows + output meta. */
 export const nowIso = (): string => new Date().toISOString();
@@ -44,6 +44,41 @@ export type AuditCtx = Pick<
 > & {
 	isScript?: boolean;
 };
+
+/**
+ * The read-only run identity (`workflow` name + `totalStages` + `trigger`)
+ * threaded onto every `SessionContext` and `AuditCtx`. Single source for the
+ * `runIdentity` sub-literal that session/audit constructions across the runner
+ * would otherwise re-spell by hand.
+ */
+export function runIdentityOf(run: RunContext): SessionContext["runIdentity"] {
+	return { workflow: run.workflow.name, totalStages: run.totalStages, trigger: run.trigger };
+}
+
+/**
+ * Build the `AuditCtx` `recordTerminalFailure` needs for a stage failure that
+ * escaped a session (preflight halts, downstream throws, routing errors,
+ * resume-time refusals). One source for the shape so every halt path records
+ * a uniform row. `isScript: true` drops the `skill` field from the JSONL row
+ * and switches `onStageError` to `scriptStageRef`.
+ */
+export function auditCtxFor(
+	run: RunContext,
+	stageName: string,
+	skill: string,
+	opts?: { isScript?: boolean },
+): AuditCtx {
+	return {
+		cwd: run.cwd,
+		runId: run.runId,
+		state: run.state,
+		stageName,
+		skill,
+		lifecycle: run.lifecycle,
+		runIdentity: runIdentityOf(run),
+		...(opts?.isScript ? { isScript: true } : {}),
+	};
+}
 
 /**
  * JSONL `WorkflowStage.stage` value for fanout-unit rows — built from
