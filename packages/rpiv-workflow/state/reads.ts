@@ -133,6 +133,9 @@ export function listArtifacts(
  * shape.
  *
  * Fail-soft like every other reader — never throws.
+ *
+ * Takes a concrete `runId`. For a user-supplied reference that may later need
+ * symbolic resolution (`@latest`, relative), call `resolveRun` instead.
  */
 export function readHeader(cwd: string, runId: string): WorkflowHeader | undefined {
 	try {
@@ -150,10 +153,17 @@ export function readHeader(cwd: string, runId: string): WorkflowHeader | undefin
 }
 
 /**
- * Resolve a run reference to its header. Today `ref === runId`; a future
- * friendly-name index slots in HERE (name → runId → readHeader) without
- * touching any caller. Fail-soft like every reader — returns undefined when
- * the ref doesn't resolve.
+ * Resolve a run *reference* to its header — the ref-resolution seam.
+ *
+ * Which to call: reach for `resolveRun` when the ref is **user-supplied** (the
+ * `/wf @<ref>` token, a CLI arg); reach for `readHeader` when you already hold
+ * a concrete `runId` (e.g. straight off `RunSummary.runId`). The split is
+ * intent, not behaviour: **today `resolveRun` is an exact alias of
+ * `readHeader`** (`ref === runId`). It exists as the single place a future
+ * symbolic resolver — `@latest`, relative refs, a friendly-name index
+ * (name → runId → readHeader) — slots in without touching any caller.
+ *
+ * Fail-soft like every reader — returns undefined when the ref doesn't resolve.
  */
 export function resolveRun(cwd: string, ref: string): WorkflowHeader | undefined {
 	return readHeader(cwd, ref);

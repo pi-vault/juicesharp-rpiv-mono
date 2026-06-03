@@ -343,50 +343,50 @@ edges: { "code-review": gate("blockers_count", { revise: gt(0), commit: eq(0) })
 
 ## Conditional routing
 
-### gate
+A conditional edge is an **`EdgeFn`**: a `(ctx) => string` predicate carrying a `.targets` array of every stage it can return. `.targets` is required — the validator and reachability BFS enumerate it — so you wrap a TS predicate rather than dropping a bare arrow into `edges`. Two wrappers:
 
-Conditional routing keyed on a numeric field in `output.data`. Branches evaluated against `Number(output.data[field])` in declaration order; first matching predicate wins. Last declared branch is the fallback when no predicate matches.
+- **`defineRoute(targets, fn)`** — general. Arbitrary TS body, explicit `targets`. Use for strings, enums, multiple fields, ranges — anything.
+- **`gate(field, branches)`** — terse convenience for one **numeric** field with threshold predicates; derives `.targets` from the branch keys. Not more powerful than `defineRoute`, just shorter for the numeric case.
+
+### gate (numeric field)
+
+Branches evaluated against `Number(output.data[field])` in declaration order; first match wins, last branch is the fallback. Helpers (`gt`/`gte`/`lt`/`lte`/`eq`) take a `number` — non-numeric fields route with `defineRoute` instead.
 
 ```typescript
 import { gate, gt, eq } from "@juicesharp/rpiv-workflow";
 
 edges: {
   "code-review": gate("blockers_count", {
-    revise: gt(0),   // value > 0 → "revise"
-    commit: eq(0),    // value = 0 → "commit"
+    revise: gt(0),   // > 0 → "revise"
+    commit: eq(0),   // = 0 → "commit"; missing/NaN/< 0 falls to last
   })
 }
-// value < 0  → "commit" (no match, falls to last)
-// missing/NaN → "commit" (no match, falls to last)
 ```
 
-### defineRoute
+### defineRoute (strings, enums, multi-field)
 
-Hand-rolled multi-branch routing. Returns an `EdgeFn` with `.targets` metadata for graph introspection. Auto-marks the route as reading `output.data` — pass `{ readsData: false }` for state-only routes.
+The body is plain TS, so there is no separate string/enum helper — compare the field directly. Every value the body can return must appear in `targets`, or the validator flags the edge. Auto-marks the route as reading `output.data` (the source stage needs an `outputSchema`); pass `{ readsData: false }` for a state-only route.
 
 ```typescript
 import { defineRoute } from "@juicesharp/rpiv-workflow";
 
 edges: {
-  "decide": defineRoute(
-    ["fast-path", "slow-path"],           // All possible returns (required)
-    ({ output }) => {
-      const data = output?.data as { complexity: string };
-      return data?.complexity === "high" ? "slow-path" : "fast-path";
-    },
-  )
+  review: defineRoute(["commit", "revise", "escalate"], ({ output }) => {
+    const verdict = (output?.data as { verdict?: string })?.verdict;
+    if (verdict === "approve") return "commit";
+    if (verdict === "reject") return "escalate";
+    return "revise";
+  }),
 }
 ```
 
-### Predicate helpers
+### Predicate helpers (numeric — for `gate`)
 
-| Helper | Returns true when |
-|--------|-------------------|
-| `gt(n)` | value > n |
-| `gte(n)` | value >= n |
-| `lt(n)` | value < n |
-| `lte(n)` | value <= n |
-| `eq(n)` | value === n |
+| Helper | Returns true when | | Helper | Returns true when |
+|--------|---|---|--------|---|
+| `gt(n)` | value > n | | `lte(n)` | value <= n |
+| `gte(n)` | value >= n | | `eq(n)` | value === n |
+| `lt(n)` | value < n | | | |
 
 ## Outcomes
 
